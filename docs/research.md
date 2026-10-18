@@ -172,7 +172,8 @@ SF3 is SF2 with Ogg Vorbis-compressed samples (from MuseScore).
 | Option | Notes |
 |---|---|
 | **FluidSynth** (C, LGPL-2.1-or-later) | The reference SoundFont synth, current release 2.5.x (Dec 2025). SF3 needs a build with libsndfile + Vorbis. From 2.5 it builds with C++11 and an OS layer replacing GLib (GLib support deprecated). https://github.com/FluidSynth/fluidsynth/wiki/ChangeLog |
-| **rustysynth** (pure Rust, MIT, 1.3.6, Aug 2025) | Port of MeltySynth. Only SF2 is documented; SF3 support is unconfirmed. https://github.com/sinshu/rustysynth |
+| **rustysynth** (pure Rust, MIT, 1.3.6, Aug 2025) | Port of MeltySynth. **Rejects SF3** (`UnsupportedSampleFormat`) and discards SF2 modulators (S6). The `rustysynth-ext` fork adds SF3 but still drops modulators. https://github.com/sinshu/rustysynth |
+| **oxisynth** (pure Rust, LGPL-2.1, 0.1.0) | Port of FluidSynth: SF2 modulators, SF3 via `lewton`, sounds like FluidSynth, ~340× realtime. One allocation per note-on (fixable). **Chosen** (S6). https://github.com/PolyMeilex/oxisynth |
 | `fluidlite` crate | Bindings to FluidLite, with an optional `with-sf3` feature. https://docs.rs/fluidlite |
 | `soundfont` crate (OxiSynth author) | Reader only; SF3 marked as in progress. |
 

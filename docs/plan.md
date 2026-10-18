@@ -52,7 +52,7 @@
 | # | Decision | Choice | Why |
 |---|---|---|---|
 | D1 | Language | **Rust** (2024 edition, stable) | Memory safety around heavy FFI and good real-time tooling. CLAP hosting via `clack`, MIT VST3 bindings via `vst3`. Go is ruled out: garbage-collection pauses and cgo callbacks on the audio thread. |
-| D2 | Licence | **GPL-3.0-or-later** ✅ decided | Lets us use the VeSTige/FST headers for VST2 later, bundle and patch yabridge (GPL-3), and use FluidSynth (LGPL-2.1+) and Ableton Link (GPLv2+). |
+| D2 | Licence | **GPL-3.0-or-later** ✅ decided | Lets us use the VeSTige/FST headers for VST2 later, bundle and patch yabridge (GPL-3), and use oxisynth (LGPL-2.1) and Ableton Link (GPLv2+). |
 | D3 | Audio backend | **JACK API** via the `jack` crate, preferring PipeWire's libjack automatically. `cpal` as a fallback later. | Standard pro-audio API that runs unchanged on PipeWire and JACK2. Sample-accurate JACK MIDI. |
 | D4 | MIDI | **JACK MIDI** for playing. **ALSA sequencer** for device listing, hotplug and controller SysEx. | PipeWire exposes hardware MIDI as JACK ports. SysEx and Device Inquiry are easier over ALSA seq. |
 | D5 | Plugin formats | **CLAP + VST3** in v1, **built-in SoundFont** in Phase 2, **VST2 + LV2** at the end | Covers almost every modern plugin plus Windows plugins (as VST3/CLAP via yabridge) early. |
@@ -276,14 +276,24 @@ Because the whole app is an X11 client, we can create **child windows inside our
 - **The rack unit shows a preset picker** (bank/program) and a small native panel: volume envelope offsets, filter cutoff/resonance, reverb/chorus send to the slot's own FX, polyphony, tuning. MIDI Program Change on the slot's input switches presets.
 - **Loading:** samples load on a worker thread (with a progress indicator) and are shared when several slots use the same file. Memory use is shown.
 
-**Engine choice (decided by spike S6):**
+**Engine: oxisynth** ✅ decided (spike S6, see [spikes/README.md](../spikes/README.md)).
 
-| Option | Pros | Cons |
-|---|---|---|
-| **A. FluidSynth** (C, LGPL-2.1+, via FFI) | The reference SoundFont synth. SF2 *and* SF3 (when built with libsndfile + Vorbis). Mature voice handling, modulators, real-time-safe render path. | A C dependency to build or bundle. Its global settings model needs wrapping (one `fluid_synth` per slot, built-in reverb/chorus off). |
-| **B. rustysynth** (pure Rust, MIT) | Simple build, easy to make real-time-safe. | Documents only SF2. SF3 would need our own loader that decodes Ogg Vorbis samples (`lewton`/`symphonia`) into memory first. Less battle-tested on edge-case files. |
-
-Leaning **A** for correctness on real-world SoundFonts, with B as the fallback if the build or real-time behaviour is a problem.
+[oxisynth](https://github.com/PolyMeilex/oxisynth) is a pure-Rust port of FluidSynth
+(LGPL-2.1, fine under our GPLv3). It sounds like FluidSynth, handles SF2 modulators and SF3
+(Ogg Vorbis via `lewton`), renders at ~340× realtime, and needs no C dependency. It is
+already proven on MuseScore_General.sf3 in a sibling project (musepractice). Notes for
+the implementation:
+- **Patch one allocation:** `inner_noteon` collects a 64-entry `Vec` on every note-on.
+  Replace it with a stack array and upstream the fix; carry it via `[patch.crates-io]`
+  until released. Keep an RTSan test (`just s6-rtsan`) in CI.
+- **SF3 load** decodes all samples up front (~2.4 s and ~230 MiB for MuseScore General):
+  load on a worker thread, share decoded fonts between slots, consider caching decoded PCM.
+- **No public preset list:** add an accessor in the same upstream patch (the spike probes
+  program changes instead).
+- **Gain** defaults to FluidSynth's 0.2; set per slot and level-match against plugins.
+- Rejected: FluidSynth itself (mutexes on every call, OpenMP in distro builds, C
+  dependency) and rustysynth/rustysynth-ext (discard SF2 modulators, so many SoundFonts
+  sound wrong; upstream rustysynth cannot read SF3).
 
 **Later:** SFZ through the same mechanism with `sfizz` (BSD-2), since SFZ libraries are common for free pianos and orchestral sounds.
 
@@ -380,7 +390,7 @@ The dock can be collapsed, or **maximised** (rack shrinks to a strip) for large 
 | S3 VST3 | Minimal Rust VST3 host on the `vst3` crate: Surge XT (VST3), embedded the same way | Process + embedded editor (IRunLoop) + state. **Timeboxed to 1 week.** If it bogs down, Plan B is a C++ shim over the official SDK hosting classes (MIT). |
 | S4 Wine | yabridge from a pinned `master` commit, with Wine 11.20 Staging and a portable Wine build. A Windows VST3 freebie, embedded. | Editor embeds with correct mouse coordinates (no cursor offset) and HiDPI. Load time measured. First compatibility matrix. |
 | S5 UI | egui on our own winit loop, forced X11: rack with 8 units + editor dock + keyboard map, fd-poller wakeups | Idle CPU under ~2% with an embedded editor open. Dock overlap rules work. |
-| S6 SoundFont | FluidSynth FFI vs rustysynth: render GeneralUser GS (SF2) and MuseScore_General.sf3 (SF3) | Correct playback of both. Allocation-free render path. Build or bundle story clear. |
+| S6 SoundFont ✅ | FluidSynth FFI vs rustysynth (+ oxisynth): render GeneralUser GS (SF2) and MuseScore_General.sf3 (SF3) | Correct playback of both. Allocation-free render path. Build or bundle story clear. |
 
 **Exit:** go/no-go on Rust-only VST3, embedding approach confirmed for CLAP, VST3 and Wine, Wine + yabridge pair chosen, SoundFont engine chosen.
 
@@ -520,7 +530,7 @@ The dock can be collapsed, or **maximised** (rack shrinks to a strip) for large 
 | Phase order | Novation before setlists/planned tracks ✅ |
 | Platform | x86_64 only ✅ |
 | VST2 + LV2 | At the end ✅ |
-| SoundFont engine (FluidSynth vs rustysynth) | Open, decided by spike S6 |
+| SoundFont engine | **oxisynth** ✅ decided (S6) |
 | Name "Merlin" | Open |
 
 ## 10. Immediate next steps

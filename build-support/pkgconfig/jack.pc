@@ -1,0 +1,8 @@
+# Stub so jack-sys builds without libjack-dev. We never link libjack: the jack
+# crate dlopens it at runtime (feature "dynamic_loading") and we preload
+# PipeWire's copy first. See spikes/s1-audio.
+Name: jack
+Description: JACK (runtime-loaded, no link flags)
+Version: 1.9.22
+Libs:
+Cflags:
