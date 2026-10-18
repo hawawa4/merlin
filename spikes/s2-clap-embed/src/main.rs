@@ -150,6 +150,7 @@ impl App {
             &host_info,
         )?;
         let mut log = vec![format!("loaded {plugin_name} in {:?}", t.elapsed())];
+        println!("{}", log[0]);
 
         let (notes, notes_rx) = rtrb::RingBuffer::new(256);
         let audio = audio::start(&mut instance, notes_rx)?;
@@ -200,6 +201,13 @@ impl App {
 }
 
 impl Running {
+    /// Log to the on-screen panel and stdout (scripted test runs sync on stdout).
+    fn say(&mut self, line: impl Into<String>) {
+        let line = line.into();
+        println!("{line}");
+        self.log.push(line);
+    }
+
     fn ask_redraw(&mut self) {
         self.requested = true;
         self.window.request_redraw();
@@ -231,7 +239,7 @@ impl Running {
         unsafe { gui.set_parent(&handle, ClapWindow::from_x11_handle(self.dock.window as _))? };
         let _ = gui.show(&handle);
         self.editor.open = true;
-        self.log.push(format!(
+        self.say(format!(
             "editor embedded in {:?}: {}x{}, resizable {}",
             t.elapsed(),
             self.editor.size.width,
@@ -419,13 +427,11 @@ impl Running {
                 Ok(())
             }
             UiAction::SaveState => self.save_state().map(|s| {
-                self.log.push(format!("state saved: {} bytes", s.len()));
+                self.say(format!("state saved: {} bytes", s.len()));
                 self.saved_state = Some(s);
             }),
             UiAction::LoadState => match self.saved_state.clone() {
-                Some(s) => self
-                    .load_state(&s)
-                    .map(|_| self.log.push("state restored".into())),
+                Some(s) => self.load_state(&s).map(|_| self.say("state restored")),
                 None => Err(anyhow!("nothing saved yet")),
             },
             UiAction::FocusPlugin => self.dock.focus_plugin(),
@@ -447,7 +453,7 @@ impl Running {
             }
         };
         if let Err(e) = result {
-            self.log.push(format!("error: {e:#}"));
+            self.say(format!("error: {e:#}"));
         }
     }
 
@@ -595,7 +601,7 @@ impl ApplicationHandler<UserEvent> for App {
                 run.editor.resize_requests += 1;
                 run.ask_redraw();
             }
-            UserEvent::GuiClosed => run.log.push("plugin closed its GUI".into()),
+            UserEvent::GuiClosed => run.say("plugin closed its GUI"),
         }
         run.service_plugin();
     }

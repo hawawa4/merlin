@@ -12,8 +12,8 @@ rtsan_lib := "/usr/lib/llvm-21/lib/clang/21/lib/linux/libclang_rt.rtsan-x86_64.a
 default:
     @just --list --unsorted
 
-# This round's test: listen to FluidSynth vs oxisynth vs rustysynth-ext (loudness-matched)
-dev: listen
+# This round's test: the Windows build of Surge XT via yabridge + Wine, embedded (S4)
+dev: s4-setup s4
 
 # Download test plugins and SoundFonts into test-assets/ (skips what's already there)
 setup:
@@ -29,6 +29,35 @@ setup:
 # Build yabridge at the pinned commit in Docker (S4); output in runtime/
 yabridge-build commit="b580a9f7":
     tools/build-yabridge.sh {{commit}}
+
+yabridge_dir := justfile_directory() / "runtime/yabridge-b580a9f7"
+wine_loader := "/opt/wine-staging/bin/wine"
+wine_prefix := justfile_directory() / assets / "wine/prefix"
+bridges := assets / "bridges"
+
+# S4 setup: Wine prefix, Surge XT (Windows) inside it, and a yabridge CLAP bridge for it
+s4-setup: yabridge-build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export WINEPREFIX="{{wine_prefix}}" WINEDEBUG=-all
+    [ -d "$WINEPREFIX/drive_c" ] || { echo "creating Wine prefix…"; {{wine_loader}}boot -u >/dev/null 2>&1; }
+    if [ ! -d "{{assets}}/dl/surge-win" ]; then
+        curl -fL -o {{assets}}/dl/surge-win.zip             https://github.com/surge-synthesizer/releases-xt/releases/download/1.3.4/surge-xt-win64-1.3.4-pluginsonly.zip
+        mkdir -p {{assets}}/dl/surge-win && (cd {{assets}}/dl/surge-win && unzip -oq ../surge-win.zip)
+    fi
+    clapdir="$WINEPREFIX/drive_c/Program Files/Common Files/CLAP"
+    mkdir -p "$clapdir" {{bridges}}/clap
+    cp -f "{{assets}}/dl/surge-win/Surge XT.clap" "$clapdir/"
+    # The bridge: yabridge's chainloader named like the plugin, plus a .clap-win link to the
+    # Windows plugin. yabridge finds the prefix by walking up from the Windows file.
+    cp -f "{{yabridge_dir}}/libyabridge-chainloader-clap.so" "{{bridges}}/clap/Surge XT.clap"
+    ln -sf "$clapdir/Surge XT.clap" "{{bridges}}/clap/Surge XT.clap-win"
+    ls -la {{bridges}}/clap
+
+# S4: Windows Surge XT (CLAP) through yabridge + Wine 11, editor embedded like S2
+s4 plugin=(bridges / "clap/Surge XT.clap"):
+    PATH="{{yabridge_dir}}:$PATH" WINELOADER={{wine_loader}} \
+        cargo run -p s2-clap-embed --release -- "{{plugin}}"
 
 # Format, lint and test: run before committing
 check: fmt-check clippy test

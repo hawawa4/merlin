@@ -12,7 +12,7 @@ Rust 1.99. Test assets (plugins, SoundFonts) go in `test-assets/` (gitignored).
 | S1 audio | ✅ passes in code; ⚠️ machine has no realtime scheduling; round-trip measurement pending a loopback cable |
 | S2 CLAP + embed | ✅ embedding, clip/scroll, fit, reopen, state save/load, idle CPU; ⏳ mouse/keyboard input needs a manual test |
 | S3 VST3 | not started |
-| S4 Wine | not started |
+| S4 Wine | ✅ Windows Surge XT (CLAP) embedded via yabridge master + Wine 11.20; ⏳ mouse after scroll/move needs a manual test |
 | S5 UI | partly answered by S2: idle CPU 1.3% with an embedded editor open |
 | S6 SoundFont | ✅ **decided: oxisynth** (needs a one-line note-on allocation fix) |
 
@@ -115,6 +115,37 @@ should show it. To confirm: switch Surge's mouse behaviour to "Exact" (Surge men
 Mouse Behavior), or try the same plugin in another X11 host (Carla, REAPER) on this desktop.
 Long-term fix is the native-Wayland path (nested compositor, plan §4.6), where we can honour
 warps for embedded editors.
+
+## S4: Windows plugins via Wine + yabridge (`just s4-setup`, `just s4`)
+
+- **yabridge** built from master `b580a9f7` (2026-08-02, 57 commits after 5.1.1: Wine 10/11
+  embedding rework, cursor-offset fixes) in its upstream CI image
+  `robbert/docker-yabridge:focal` (`tools/build-yabridge.sh`, `just yabridge-build`). No host
+  build dependencies; the system Wine has no headers, and we need a reproducible build to
+  ship anyway. Output in `runtime/yabridge-<commit>/` (gitignored).
+- **Wine:** 11.20 Staging from `/opt/wine-staging`, pinned with `WINELOADER`. Test prefix in
+  `test-assets/wine/prefix`; **first `wineboot` takes ~25 s** (the app needs a progress
+  step for this).
+- **No global install needed.** A bridge is two files in a folder we own:
+  `Surge XT.clap` (a copy of `libyabridge-chainloader-clap.so`) and `Surge XT.clap-win`
+  (link to the Windows plugin inside the prefix; yabridge finds the prefix by walking up
+  from it). The chainloader finds `libyabridge-clap.so` and the host next to
+  `yabridge-host.exe` on `PATH`. So the app sets `PATH` and `WINELOADER` for itself and keeps
+  its bridges in its own folder: nothing in `~/.clap`, no yabridgectl.
+- **Result (Surge XT 1.3.4 win64 CLAP, through the unchanged S2 host):**
+  - Loads in **3.5–3.6 s** (Wine start-up), editor embeds in 556–644 ms, **reopen 76 ms**.
+  - Window tree: our dock → yabridge wrapper → Wine window "yabridge plugin". Renders
+    correctly at the same size and HiDPI scale as the Linux build (1427×889 at 1.25).
+  - Fit to dock (1335×833), close/reopen and scrolling (moving the wrapper) all work.
+  - State save/restore works (51,869 bytes, same as the Linux build).
+  - 0 xruns at 128 frames; idle CPU **2.9%** of one core including Wine (wineserver ~1.8%).
+- **yabridge warnings:** `realtime: no` and a memlock limit of 8 MiB (it wants to lock its
+  shared audio buffers). Both go away with the same fix as S1 (the `pipewire` group grants
+  rtprio 95 and 4 GiB memlock), so the app's performance check must cover memlock too.
+- **Manual test still needed:** click and drag the Windows Surge's controls (does the
+  pointer land where you click?), then scroll the dock and move the main window and click
+  again (the cursor-offset bugs reported for Wine 10+ show up after moving the window),
+  open its menus, and type in its patch-name field.
 
 ## S6: SoundFont engines (`spikes/s6-soundfont`)
 
