@@ -2,3 +2,4 @@
 *.wav
 /spikes/*/out/
 /test-assets/
+/runtime/

@@ -26,6 +26,10 @@ setup:
         tar -xzf {{assets}}/dl/surge-linux.tar.gz -C {{assets}}/dl/surge-linux; }
     @echo "test assets ready in {{assets}}/"
 
+# Build yabridge at the pinned commit in Docker (S4); output in runtime/
+yabridge-build commit="b580a9f7":
+    tools/build-yabridge.sh {{commit}}
+
 # Format, lint and test: run before committing
 check: fmt-check clippy test
 
