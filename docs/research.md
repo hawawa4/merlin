@@ -165,6 +165,19 @@ Target: Cantabile's live model, MainStage's polish, **no routing UI and no track
 - **Out-of-process hosting in Rust:** Maolan does it with shared memory, one process per plugin.
 - **Costs:** a context switch per process hop each audio block, passing realtime priority to the helper processes, and extra jitter at 32–64-frame buffers. It also complicates editor embedding.
 
+### 3.6 SoundFonts (SF2/SF3)
+
+SF3 is SF2 with Ogg Vorbis-compressed samples (from MuseScore).
+
+| Option | Notes |
+|---|---|
+| **FluidSynth** (C, LGPL-2.1-or-later) | The reference SoundFont synth, current release 2.5.x (Dec 2025). SF3 needs a build with libsndfile + Vorbis. From 2.5 it builds with C++11 and an OS layer replacing GLib (GLib support deprecated). https://github.com/FluidSynth/fluidsynth/wiki/ChangeLog |
+| **rustysynth** (pure Rust, MIT, 1.3.6, Aug 2025) | Port of MeltySynth. Only SF2 is documented; SF3 support is unconfirmed. https://github.com/sinshu/rustysynth |
+| `fluidlite` crate | Bindings to FluidLite, with an optional `with-sf3` feature. https://docs.rs/fluidlite |
+| `soundfont` crate (OxiSynth author) | Reader only; SF3 marked as in progress. |
+
+No format conversion is needed: the host plays SoundFonts with a built-in instrument.
+
 ## 4. Implementation stack
 
 ### 4.1 Language
