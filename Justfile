@@ -12,8 +12,9 @@ rtsan_lib := "/usr/lib/llvm-21/lib/clang/21/lib/linux/libclang_rt.rtsan-x86_64.a
 default:
     @just --list --unsorted
 
-# This round's test: the Windows build of Surge XT via yabridge + Wine, embedded (S4)
-dev: s4-setup s4
+# This round's test: Windows plugins with DXVK (fixes frozen JUCE editors). Try:
+#   just dev                      Surge XT      just dev "Six Sines"      just dev TyrellN6
+dev name="Surge XT": (s4 (assets / "bridges-dxvk/clap" / name + ".clap"))
 
 # Download test plugins and SoundFonts into test-assets/ (skips what's already there)
 setup:
