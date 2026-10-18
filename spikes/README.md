@@ -107,7 +107,9 @@ change again, Restore state.
 
 **Round 2 (manual test): mouse.** Dragging Surge's knobs works and menus pop up in the
 right place; no pointer offset. But after a knob drag the cursor ends up farther away than
-the knob moved (~2×). Likely cause: Surge hides the cursor while dragging and warps it back
+the knob moved (~2×). **Update (round 3): fixed by the two-level dock** (S4 fix below).
+JUCE also learns its screen position from `ConfigureNotify`, so its warp-back after a drag
+went to the wrong place. The explanation below is wrong, kept for the record. Likely cause: Surge hides the cursor while dragging and warps it back
 onto the knob on release (JUCE `setMousePosition` → `XWarpPointer`). XWayland/KWin ignores
 pointer warps from X11 clients, so the cursor stays where the physical mouse went, and
 Surge's drag sensitivity is not 1:1. Not an embedding bug: any X11 host on Wayland
@@ -157,6 +159,40 @@ warps for embedded editors.
   scroll by moving the canvas, and set `WM_WINDOW_ROLE` on our top-level. Debug log now
   shows `Translated coords … +170+100`, following scrolls (`+170+70`) and fits; host window
   = our top-level. Native Surge unaffected.
+- **Round 3 (manual test): still "completely broken".** Wine's event trace
+  (`WINEDEBUG=+event,+cursor`) showed the user's real clicks and drags arriving at the right
+  coordinates and Surge reacting (`request_flush` after a drag). Input worked; the **editor
+  never redrew after its first frame**. Proven with Surge's voice counter: native shows
+  "3 / 16" during a chord, the Windows build stays at "0 / 16" (also on the real screen via
+  Spectacle). Same on Wine 9.21 + yabridge 5.1.1 and with both wined3d renderers.
+- **Compatibility matrix** (`just s4-matrix`, `tools/s4-matrix.sh`): loads each bridge,
+  screenshots the plugin window, sets a parameter from the host and plays a chord,
+  screenshots again; a live editor changes pixels. Control: native Surge `yes(756)`.
+
+  | Plugin (Windows CLAP) | GUI framework | Plain Wine 11.20 | + DXVK 3.1.1 |
+  |---|---|---|---|
+  | TyrellN6 3.0 beta | u-he | ✅ redraws | ✅ redraws |
+  | Surge XT 1.3.4 | JUCE | ❌ frozen | ✅ redraws |
+  | Six Sines (nightly) | JUCE | ❌ frozen | ✅ redraws |
+  | OB-Xf (nightly) | JUCE | ❌ frozen | ❌ white, never draws |
+  | CardinalSynth 26.02 | DPF/OpenGL | 💥 Wine stack overflow in `set_parent` | not tried |
+  | Podolski 1.2.3 | u-he | VST3 only, needs S3 | |
+
+  Load 1.5 s warm (3.5 s cold), embed 0.1–1.1 s.
+- **Root cause of the frozen JUCE editors: Wine stubs `IDXGIOutput::WaitForVBlank`.**
+  Wine master `dlls/dxgi/output.c` returns `E_NOTIMPL` (the log shows
+  `dxgi_output_WaitForVBlank stub!`). Modern JUCE (`juce_VBlank_windows.cpp`) drives *all*
+  repaints from a per-monitor thread that loops on `WaitForVBlank() == S_OK`; on failure
+  it just `sleep(1)`s forever, so `onVBlank` never fires and nothing repaints. DXVK ships its
+  own `dxgi.dll` with a working `WaitForVBlank`, which is why it fixes Surge and Six Sines.
+  JUCE is the most common plugin framework, so this affects a large share of plugins.
+- **Fix options:** (1) **patch our bundled Wine** to implement `WaitForVBlank` (wait for the
+  next refresh via `D3DKMTWaitForVerticalBlankEvent`, or emulate with a refresh-rate timer),
+  ~15 lines, and upstream it: fixes JUCE without DXVK side effects; (2) DXVK, which helps
+  but broke OB-Xf (white editor), so it can't be the blanket answer; per-plugin quirks are
+  possible as a fallback.
+- **First-run dialogs:** a fresh prefix offers to install Wine Mono (and Gecko). The app must
+  set `WINEDLLOVERRIDES="mscoree,mshtml="` when creating prefixes, or ship Mono preinstalled.
 - **Manual test still needed:** click and drag the Windows Surge's controls (does the
   pointer land where you click?), then scroll the dock and move the main window and click
   again (the cursor-offset bugs reported for Wine 10+ show up after moving the window),

@@ -59,6 +59,10 @@ s4 plugin=(bridges / "clap/Surge XT.clap"):
     PATH="{{yabridge_dir}}:$PATH" WINELOADER={{wine_loader}} \
         cargo run -p s2-clap-embed --release -- "{{plugin}}"
 
+# S4 compatibility matrix: every bridged plugin, load/embed time and live-redraw check
+s4-matrix *bridges:
+    tools/s4-matrix.sh {{bridges}}
+
 # Format, lint and test: run before committing
 check: fmt-check clippy test
 

@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use anyhow::{Context, Result};
 use clack_extensions::audio_ports::{AudioPortInfoBuffer, PluginAudioPorts};
-use clack_host::events::event_types::{MidiEvent, NoteOffEvent, NoteOnEvent};
+use clack_host::events::event_types::{MidiEvent, NoteOffEvent, NoteOnEvent, ParamValueEvent};
 use clack_host::events::{EventFlags, Match};
 use clack_host::prelude::*;
 use jack::{
@@ -17,7 +17,12 @@ use crate::host::S2Host;
 const MAX_FRAMES: usize = 4096;
 
 /// Note events from the UI (on-screen keys), as raw MIDI.
-pub type UiNote = [u8; 3];
+#[derive(Clone, Copy)]
+pub enum UiNote {
+    Midi([u8; 3]),
+    /// Parameter id and plain value, sent as a CLAP param-value event.
+    Param(u32, f64),
+}
 
 /// Same trick as S1: make the jack crate pick up PipeWire's libjack.
 pub fn preload_pipewire_jack() {
@@ -92,8 +97,16 @@ impl jack::ProcessHandler for Processor {
         for ev in self.midi_in.iter(ps) {
             push_midi(&mut self.events, ev.time, ev.bytes);
         }
-        while let Ok(note) = self.ui_notes.pop() {
-            push_midi(&mut self.events, 0, &note);
+        while let Ok(ev) = self.ui_notes.pop() {
+            match ev {
+                UiNote::Midi(bytes) => push_midi(&mut self.events, 0, &bytes),
+                UiNote::Param(id, value) => self.events.push(&ParamValueEvent::new(
+                    0,
+                    ClapId::new(id),
+                    Pckn::match_all(),
+                    value,
+                )),
+            }
         }
 
         for b in &mut self.in_bufs {

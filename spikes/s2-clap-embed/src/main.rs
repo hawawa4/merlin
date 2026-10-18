@@ -246,6 +246,9 @@ impl Running {
         self.dock.scroll_to(0, 0)?;
         self.dock.set_canvas_size(w, h)?;
         self.dock.announce()?;
+        if let Some(w) = self.dock.plugin_window() {
+            println!("plugin_window: {w}");
+        }
         self.editor.open = true;
         self.say(format!(
             "editor embedded in {:?}: {}x{}, resizable {}",
@@ -306,8 +309,47 @@ impl Running {
         Ok(())
     }
 
+    fn set_param(&mut self, n: u32, norm: f64) -> Result<()> {
+        use clack_extensions::params::{ParamInfoBuffer, ParamInfoFlags, PluginParams};
+        let handle = self.instance.plugin_handle();
+        let ext = handle
+            .get_extension::<PluginParams>()
+            .context("no params extension")?;
+        let mut buf = ParamInfoBuffer::new();
+        let info = (0..ext.count(&handle))
+            .filter_map(|i| {
+                ext.get_info(&handle, i, &mut buf).map(|p| {
+                    (
+                        p.id,
+                        p.flags,
+                        p.min_value,
+                        p.max_value,
+                        String::from_utf8_lossy(p.name).into_owned(),
+                    )
+                })
+            })
+            .filter(|(_, f, ..)| {
+                f.contains(ParamInfoFlags::IS_AUTOMATABLE)
+                    && !f.intersects(
+                        ParamInfoFlags::IS_HIDDEN
+                            | ParamInfoFlags::IS_READONLY
+                            | ParamInfoFlags::IS_BYPASS,
+                    )
+            })
+            .nth(n as usize)
+            .context("no such parameter")?;
+        let (id, _, min, max, name) = info;
+        let value = min + (max - min) * norm;
+        let _ = self.notes.push(UiNote::Param(id.get(), value));
+        self.say(format!(
+            "param #{n} '{name}' (id {}) -> {value:.3}",
+            id.get()
+        ));
+        Ok(())
+    }
+
     fn send_note(&mut self, bytes: [u8; 3]) {
-        let _ = self.notes.push(bytes);
+        let _ = self.notes.push(UiNote::Midi(bytes));
     }
 
     /// Main-thread housekeeping after any wakeup: timers and fd-set changes.
@@ -456,6 +498,7 @@ impl Running {
                 self.send_note([0x80, n, 0]);
                 Ok(())
             }
+            UiAction::Param(n, norm) => self.set_param(n, norm),
             UiAction::Quit => {
                 self.quit = true;
                 Ok(())
@@ -580,6 +623,8 @@ enum UiAction {
     Scroll(u32, u32),
     NoteOn(u8),
     NoteOff(u8),
+    /// Set the n-th visible automatable parameter to a normalised value (0..1).
+    Param(u32, f64),
     Quit,
 }
 
@@ -724,6 +769,9 @@ fn parse_script() -> Vec<(Duration, UiAction)> {
                 }
                 "on" => UiAction::NoteOn(words.next()?.parse().ok()?),
                 "off" => UiAction::NoteOff(words.next()?.parse().ok()?),
+                "param" => {
+                    UiAction::Param(words.next()?.parse().ok()?, words.next()?.parse().ok()?)
+                }
                 _ => return None,
             };
             Some((at, action))
