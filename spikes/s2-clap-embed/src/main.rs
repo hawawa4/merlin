@@ -238,6 +238,14 @@ impl Running {
         // SAFETY: the dock window outlives the editor (destroyed in close_editor/drop).
         unsafe { gui.set_parent(&handle, ClapWindow::from_x11_handle(self.dock.window as _))? };
         let _ = gui.show(&handle);
+        // Size the canvas *after* set_parent: the resulting ConfigureNotify is how a bridged
+        // (yabridge/Wine) editor learns where it is on screen. Without it Wine maps every
+        // click to the wrong place.
+        let (w, h) = (self.editor.size.width, self.editor.size.height);
+        self.editor.scroll = (0, 0);
+        self.dock.scroll_to(0, 0)?;
+        self.dock.set_canvas_size(w, h)?;
+        self.dock.announce()?;
         self.editor.open = true;
         self.say(format!(
             "editor embedded in {:?}: {}x{}, resizable {}",
@@ -269,6 +277,7 @@ impl Running {
         let size = gui.adjust_size(&handle, want).unwrap_or(want);
         if gui.set_size(&handle, size).is_ok() {
             self.editor.size = size;
+            let _ = self.dock.set_canvas_size(size.width, size.height);
         }
         // A fitted editor needs no scrolling; drop any old offset or its top stays hidden.
         self.editor.scroll = (0, 0);
@@ -598,6 +607,7 @@ impl ApplicationHandler<UserEvent> for App {
                 // with an unadjusted size makes JUCE log HOST_MISBEHAVING). The dock clips,
                 // and scrolling covers anything larger.
                 run.editor.size = size;
+                let _ = run.dock.set_canvas_size(size.width, size.height);
                 run.editor.resize_requests += 1;
                 run.ask_redraw();
             }

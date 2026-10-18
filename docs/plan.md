@@ -223,6 +223,16 @@ Because the whole app is an X11 client, we can create **child windows inside our
 
 **Native Wayland (future, not needed now):** if we ever drop XWayland, we would run an embedded nested compositor (e.g. Smithay) that hosts plugin Wayland subsurfaces (VST3 3.8 preview / CLAP draft) and an Xwayland for X11 plugins. Bitwig reportedly does this. It's a large project, deferred until plugins actually ship Wayland GUIs.
 
+**Rules learned in spikes S2/S4** (bridged Windows editors get no input without them):
+- Hand the plugin a **canvas** window inside a **clip** window. Scroll by moving the
+  canvas, never the plugin's own window.
+- After `set_parent`, and whenever our layout moves the dock, make the canvas emit a real
+  `ConfigureNotify` (resize it, or nudge it by a pixel and back). yabridge only tells Wine
+  its screen position on those events; without them Wine maps every click elsewhere.
+- Set `WM_WINDOW_ROLE` on our top-level window: yabridge picks the topmost ancestor with a
+  role as the window whose moves it tracks.
+- Accept `request_resize` without calling `set_size` with an unadjusted size (JUCE flags it).
+
 ### 4.7 Scanning and the sound database
 
 **`merlin-scan`** loads one plugin in a child process with a timeout. A crash or hang puts it in **quarantine**, with a retry button.

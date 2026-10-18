@@ -142,6 +142,21 @@ warps for embedded editors.
 - **yabridge warnings:** `realtime: no` and a memlock limit of 8 MiB (it wants to lock its
   shared audio buffers). Both go away with the same fix as S1 (the `pipewire` group grants
   rtprio 95 and 4 GiB memlock), so the app's performance check must cover memlock too.
+- **Round 2 (manual test): no input at all reached the Windows editor.** It rendered and
+  played, but knobs and buttons ignored the mouse. Root cause (yabridge editor debug log,
+  `YABRIDGE_DEBUG_LEVEL=1+editor`): Wine learns its window's screen position only from the
+  synthetic `ConfigureNotify` that yabridge sends when *our* parent window (or the window
+  it believes is our top-level) gets a `ConfigureNotify`. Our dock was placed before
+  `set_parent` and never configured again, so Wine got **zero** position updates and mapped
+  every click elsewhere. Two more traps found on the way:
+  - Scrolling by moving the plugin's window would desync Wine by the scroll amount.
+  - yabridge picks the "host window" as the topmost ancestor with `WM_WINDOW_ROLE`, else the
+    direct parent; winit sets no role, so window moves would be missed.
+  **Fix (in `dock.rs`):** clip window + canvas window (the plugin's parent); size the canvas
+  after `set_parent`, nudge it (+1 px and back) after embedding and whenever the clip moves,
+  scroll by moving the canvas, and set `WM_WINDOW_ROLE` on our top-level. Debug log now
+  shows `Translated coords … +170+100`, following scrolls (`+170+70`) and fits; host window
+  = our top-level. Native Surge unaffected.
 - **Manual test still needed:** click and drag the Windows Surge's controls (does the
   pointer land where you click?), then scroll the dock and move the main window and click
   again (the cursor-offset bugs reported for Wine 10+ show up after moving the window),
