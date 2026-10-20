@@ -12,9 +12,13 @@ rtsan_lib := "/usr/lib/llvm-21/lib/clang/21/lib/linux/libclang_rt.rtsan-x86_64.a
 default:
     @just --list --unsorted
 
-# This round's test: Windows plugins with DXVK (fixes frozen JUCE editors). Try:
-#   just dev                      Surge XT      just dev "Six Sines"      just dev TyrellN6
-dev name="Surge XT": (s4 (assets / "bridges-dxvk/clap" / name + ".clap"))
+# This round's test: Surge XT as a VST3 in our own VST3 host (S3), editor embedded. Try:
+#   just dev                      Surge XT      just dev "Surge XT Effects"
+dev name="Surge XT": (s3 (assets / "dl/surge-linux" / name + ".vst3"))
+
+# S4 with DXVK (fixes frozen JUCE editors under Wine, but blanks OB-Xf). Try:
+#   just s4-dxvk                  Surge XT      just s4-dxvk "Six Sines"
+s4-dxvk name="Surge XT": (s4 (assets / "bridges-dxvk/clap" / name + ".clap"))
 
 # Download test plugins and SoundFonts into test-assets/ (skips what's already there)
 setup:
@@ -106,6 +110,15 @@ s2 plugin=surge_clap:
 s2-script plugin=surge_clap:
     S2_SCRIPT="3:save; 5:scroll 0 200; 7:load; 9:fit; 11:toggle; 13:toggle; 15:on 60; 16:off 60; 18:quit" \
         cargo run -p s2-clap-embed --release -- "{{plugin}}"
+
+# S3: Surge XT as a VST3 in our minimal Rust VST3 host, editor embedded like S2
+s3 plugin=(assets / "dl/surge-linux/Surge XT.vst3"):
+    cargo run -p s3-vst3-embed --release -- "{{plugin}}"
+
+# S3 scripted run: sound, parameter edit, save, change, restore, close/reopen, fit
+s3-script plugin=(assets / "dl/surge-linux/Surge XT.vst3"):
+    S3_SCRIPT="2:peak; 3:on 60; 4:peak; 5:off 60; 6:param 237 0.5; 7:save; 8:param 237 0.2; 9:load; 11:toggle; 12:toggle; 13:fit; 15:quit" \
+        cargo run -p s3-vst3-embed --release -- "{{plugin}}"
 
 # S6: render the SoundFont test pattern with all engines to spikes/s6-soundfont/out/
 s6 *files=(sf2 + " " + sf3):

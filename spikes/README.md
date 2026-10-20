@@ -11,7 +11,7 @@ Rust 1.99. Test assets (plugins, SoundFonts) go in `test-assets/` (gitignored).
 |---|---|
 | S1 audio | ✅ passes in code; ⚠️ machine has no realtime scheduling; round-trip measurement pending a loopback cable |
 | S2 CLAP + embed | ✅ embedding, clip/scroll, fit, reopen, state save/load, idle CPU; ⏳ mouse/keyboard input needs a manual test |
-| S3 VST3 | not started |
+| S3 VST3 | ✅ Rust-only hosting works (`vst3` crate, no C++ shim): sound, embedded editor, run loop, state; ⏳ editor→host edits and keyboard need a manual test |
 | S4 Wine | ✅ Windows Surge XT (CLAP) embedded via yabridge master + Wine 11.20; ⏳ mouse after scroll/move needs a manual test |
 | S5 UI | partly answered by S2: idle CPU 1.3% with an embedded editor open |
 | S6 SoundFont | ✅ **decided: oxisynth** (needs a one-line note-on allocation fix) |
@@ -117,6 +117,60 @@ should show it. To confirm: switch Surge's mouse behaviour to "Exact" (Surge men
 Mouse Behavior), or try the same plugin in another X11 host (Carla, REAPER) on this desktop.
 Long-term fix is the native-Wayland path (nested compositor, plan §4.6), where we can honour
 warps for embedded editors.
+
+## S3: VST3 hosting (`spikes/s3-vst3-embed`)
+
+`just dev` (or `just s3 [plugin.vst3]`; `just s3-script` for a scripted run). The S2 shell with a
+minimal VST3 host written on the `vst3` 0.3 crate (MIT/Apache, raw bindings plus COM helpers).
+**Decision: go for Rust-only VST3; Plan B (C++ shim) not needed.** About 1,200 lines, built in
+one session.
+
+**Result (Surge XT 1.3.4 and Surge XT Effects, Linux VST3):**
+
+- Loads in 37–59 ms, editor embeds in 130 ms (reopen 61 ms), idle CPU ~2% of one core,
+  0 xruns at 128 frames, clean shutdown.
+- Sound: output peak 0.27 on a held note, 0 otherwise. Effects plugin (two input buses, no
+  event input) loads and processes too.
+- State: `component.getState` gives 51,900 bytes (Surge's patch XML); restoring brings the
+  processor back **byte-identically** (re-saved blob equals the saved one) and the editor
+  follows (verified by screenshots of the Volume slider: 0.2 → 1.0 → restored 0.2).
+
+**Findings**
+
+1. **Editor embedding:** `createView("editor")` → `setContentScaleFactor` → `setFrame` →
+   `getSize` → `attached(dock window, "X11EmbedWindowID")`, then size the dock canvas (same
+   two-level dock and `ConfigureNotify` trick as S4). Fit: `checkSizeConstraint` then `onSize`.
+   Plugin-initiated resize arrives in `IPlugFrame::resizeView`; the host must answer with
+   `onSize`, and must ignore the echo of its own `onSize` or it loops.
+2. **`IRunLoop` lives on the frame object** (`IPlugFrame` + `IRunLoop` in one class). Surge
+   registers 2 fds (JUCE message queue) and no timers; we service them from the winit loop like
+   S2's CLAP timers/fds.
+3. **The host must carry parameters between controller and processor.**
+   - `IComponentHandler::performEdit` (editor edits) → input `IParameterChanges` on the next
+     `process()`.
+   - Processor `outputParameterChanges` → `controller.setParamNormalized` on the main thread.
+     Without this the controller's values are stale (all 0.000 at start).
+   - Call `controller.setComponentState(component state)` once after activation.
+4. **Surge's controller cache lags after `setState`:** `getParamNormalized` keeps the old
+   value although the editor and processor are restored. Don't use it as proof of a restore.
+   `setComponentState` itself triggers `restartComponent(kParamValuesChanged)`, so re-syncing
+   on that flag recurses forever (seen).
+5. **Audio thread:** event list, parameter changes and their queues are preallocated COM
+   objects (`ComWrapper` + `UnsafeCell`); no allocation in `process()`. VST3 has no raw MIDI:
+   notes are note events, CC/aftertouch/pitch bend go through `IMidiMapping` → parameters.
+6. **Known gaps (the long tail):** `IHostApplication::createInstance` returns "false" (no
+   `IMessage`/`IAttributeList`), so plugins that message component↔controller will fail;
+   no `IUnitInfo`/programs, no multi-bus (only the first audio bus is activated and played),
+   no sample-accurate param ramps, no `IProcessContextRequirements`. The main thread is not
+   woken for processor-reported parameter changes (spike polls on any wakeup).
+7. **API notes:** `Class::Interfaces` tuples give `queryInterface` for free
+   (`(IPlugFrame, IRunLoop)`); `ComPtr::from_raw` takes ownership, so retain plugin-passed
+   handlers via `ComRef::to_com_ptr`. Call `ModuleEntry(dlopen handle)` and `ModuleExit` after
+   all objects are released.
+
+**Manual test still needed:** drag a knob in the embedded editor and check the sound changes
+(exercises `performEdit` → processor), type a patch name (keyboard focus), and play from a
+MIDI keyboard.
 
 ## S4: Windows plugins via Wine + yabridge (`just s4-setup`, `just s4`)
 

@@ -1,0 +1,21 @@
+[package]
+name = "s3-vst3-embed"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+jack.workspace = true
+rtrb.workspace = true
+libc = "0.2"
+libloading.workspace = true
+vst3 = "0.3"
+egui = { version = "0.37", features = ["default_fonts"] }
+egui-winit = { version = "0.37", default-features = false, features = ["x11"] }
+egui-wgpu = { version = "0.37", default-features = false, features = ["winit"] }
+winit = { version = "0.30", default-features = false, features = ["x11", "rwh_06"] }
+wgpu = { version = "*", default-features = false, features = ["vulkan", "wgsl"] }
+x11rb = { version = "0.13", features = ["allow-unsafe-code"] }
+pollster = "0.4"
