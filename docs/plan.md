@@ -408,6 +408,21 @@ The dock can be collapsed, or **maximised** (rack shrinks to a strip) for large 
 
 **Exit:** go/no-go on Rust-only VST3, embedding approach confirmed for CLAP, VST3 and Wine, Wine + yabridge pair chosen, SoundFont engine chosen.
 
+**Phase 0 result: GO** (all six spikes done, details in `spikes/README.md`; remaining items are manual input checks, not open questions):
+
+| Question | Answer |
+|---|---|
+| Rust-only VST3? | **Yes.** About 1,200 lines on the `vst3` crate hosted Surge XT with editor, run loop and state (S3). No C++ shim. Known gaps listed in the spike (IMessage, multi-bus, units/programs). |
+| Embedding for CLAP, VST3, Wine? | **Confirmed.** One two-level scheme (clip window + one canvas per slot) serves all three. Rules in §4.6 (ConfigureNotify announce, `WM_WINDOW_ROLE`, no destroy-in-the-same-turn for bridged editors). Six editors alive, switching in microseconds (S5). |
+| Wine + yabridge pair? | **yabridge `b580a9f7` + Wine Staging 11.20 built by us with a one-file `WaitForVBlank` patch** (S4). Surge XT, Six Sines and u-he plugins work. Known gaps: JUCE 8 Direct2D plugins (OB-Xf: Wine lacks `CreateSwapChainForComposition`) and DPF/OpenGL (Cardinal: stack overflow). Bridged plugins cost real CPU: about 2–7% of a core each at idle. |
+| Audio backend? | **JACK API on PipeWire** with the libjack preload (S1). 128 frames, 0 xruns. This machine has no realtime scheduling, so the performance check is a v1 feature. |
+| UI? | **egui on our own winit loop, X11.** Rack + dock + keyboard map idle at about 0.5% UI thread; the dock-hides-for-popups rule works (S5). |
+| SoundFont engine? | **oxisynth** (S6). |
+
+**Carried into Phase 1:** no code from the spikes is reused as is. Take from them: the dock and
+canvas logic (S2/S5), `FdPoller` (S2), the VST3 host objects (S3), the JACK port setup and
+libjack preload (S1), `build-wine.sh` and the patch set (S4).
+
 ### Phase 1: MVP, a playable rack (9–12 weeks)
 
 1. Workspace, `model`, `engine` with the dummy backend and offline render tests.
@@ -545,11 +560,11 @@ The dock can be collapsed, or **maximised** (rack shrinks to a strip) for large 
 | Platform | x86_64 only ✅ |
 | VST2 + LV2 | At the end ✅ |
 | SoundFont engine | **oxisynth** ✅ decided (S6) |
+| Phase 0 spikes | ✅ GO (S1–S6) |
 | Name "Merlin" | Open |
 
 ## 10. Immediate next steps
 
-1. Add `LICENSE` (GPLv3 text), a README, the Cargo workspace skeleton (crate stubs from §4.2), `.gitignore`, and CI (fmt, clippy, tests).
-2. Run spikes S1–S6 in `spikes/` (throwaway code). Write the results back into this plan.
-3. Install the test plugins and sounds: Surge XT, Vital (CLAP/VST3), GeneralUser GS (SF2), MuseScore_General (SF3), and one Windows freebie in a test prefix.
-4. Revisit D3, D7, D8 and the SoundFont engine with the spike data, then start Phase 1.
+Phase 0 is done (see §6). Phase 1 starts with its item 1: the workspace skeleton, `model`,
+`engine` with the dummy backend, and offline render tests. Then JACK, router, CLAP, VST3, `embed`,
+in the order of §6 Phase 1.
