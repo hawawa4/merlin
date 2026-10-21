@@ -13,9 +13,10 @@ use merlin_engine::{Command, EngineHandle, Filter};
 use merlin_hosting::clap::ClapLibrary;
 use merlin_hosting::{EditorSize, HostEvent, MidiEvent, PluginHandle, Waker};
 use merlin_model::{Format, MAX_SLOTS, PluginRef, Rig, SelectMode, Slot};
-use merlin_scanner::Found;
+use merlin_scanner::{Found, Quarantine};
 use winit::event_loop::EventLoopProxy;
 
+use crate::guard::{self, Guard, HostInfo};
 use crate::settings::Settings;
 
 /// Slots shown in the rack.
@@ -74,7 +75,13 @@ pub struct Session {
     pub missing: Vec<Option<String>>,
     /// Slots that are keyboard targets, in selection order.
     pub targets: Vec<usize>,
+    /// The slot whose editor is on show (or would be, if it has none or it is not allowed).
+    pub viewing: Option<usize>,
+    /// What to tell the user instead of, or beside, a slot's editor (see `quirks`).
+    pub notes: Vec<Option<String>>,
     pub found: Vec<Found>,
+    pub quarantine: Quarantine,
+    guard: Arc<Guard>,
     pub engine: EngineHandle,
     backend: Option<JackBackend>,
     pub midi_sources: Vec<MidiSource>,
@@ -92,6 +99,7 @@ impl Session {
         proxy: EventLoopProxy<UserEvent>,
         settings: &Settings,
         found: Vec<Found>,
+        guard: Arc<Guard>,
     ) -> Result<Self> {
         let client = JackClient::open("merlin", Some(settings.frames))?;
         let sample_rate = client.sample_rate;
@@ -106,7 +114,11 @@ impl Session {
             plugins: (0..UI_SLOTS).map(|_| None).collect(),
             missing: vec![None; UI_SLOTS],
             targets: Vec::new(),
+            viewing: None,
+            notes: vec![None; UI_SLOTS],
             found,
+            quarantine: Quarantine::load(&crate::paths::quarantine_file()),
+            guard,
             engine: handle,
             backend: Some(backend),
             midi_sources,
@@ -162,7 +174,39 @@ impl Session {
         });
     }
 
-    fn create_plugin(&mut self, i: usize, path: &Path, id: &str) -> Result<Loaded> {
+    fn create_plugin(&mut self, i: usize, path: &Path, id: &str, windows: bool) -> Result<Loaded> {
+        // A bridged plugin starts a Wine host process: remember which one is ours, so the
+        // watchdog can tell a crash from a normal unload.
+        let before = if windows {
+            guard::host_children()
+        } else {
+            Default::default()
+        };
+        let loaded = self.create_plugin_inner(i, path, id)?;
+        if windows {
+            guard::install_socket_hook();
+            let name = self
+                .found
+                .iter()
+                .find(|f| f.info.id == id)
+                .map(|f| f.info.name.clone())
+                .unwrap_or_else(|| id.to_owned());
+            for pid in guard::host_children().difference(&before) {
+                self.guard.register(
+                    *pid,
+                    HostInfo {
+                        slot: i,
+                        path: path.to_owned(),
+                        id: id.to_owned(),
+                        name: name.clone(),
+                    },
+                );
+            }
+        }
+        Ok(loaded)
+    }
+
+    fn create_plugin_inner(&mut self, i: usize, path: &Path, id: &str) -> Result<Loaded> {
         let waker = Arc::new(SlotWaker {
             proxy: Mutex::new(self.proxy.clone()),
             slot: i,
@@ -188,9 +232,16 @@ impl Session {
 
     /// Loads a plugin chosen in the browser into a slot (replacing what is there).
     pub fn load(&mut self, i: usize, found: &Found) -> Result<()> {
+        if let Some(why) = crate::quirks::lookup(&found.info.id, found.windows).unsupported {
+            return Err(anyhow!("{} is not supported: {why}", found.info.name));
+        }
+        // Loading it by hand is the "retry": it comes off the quarantine list.
+        if self.quarantine.remove(&found.path, &found.info.id) {
+            let _ = self.quarantine.save(&crate::paths::quarantine_file());
+        }
         self.unload(i);
         let t = Instant::now();
-        let loaded = self.create_plugin(i, &found.path, &found.info.id)?;
+        let loaded = self.create_plugin(i, &found.path, &found.info.id, found.windows)?;
         self.install(i, loaded)?;
         let slot = &mut self.rig.slots[i];
         slot.instrument = Some(PluginRef {
@@ -216,6 +267,8 @@ impl Session {
         if self.targets.is_empty() {
             self.select(i, false);
         }
+        // Structural change: save now, so a crash right after restarts from this rig.
+        self.autosave(Duration::ZERO, true);
         Ok(())
     }
 
@@ -236,6 +289,10 @@ impl Session {
         self.missing[i] = None;
         self.targets.retain(|&t| t != i);
         self.rig.selected = self.targets.clone();
+        self.notes[i] = None;
+        if self.viewing == Some(i) {
+            self.viewing = None;
+        }
     }
 
     /// Removes the running plugin of a slot without touching the rig. Returns whether there was
@@ -244,6 +301,8 @@ impl Session {
         if self.plugins[i].is_none() {
             return false;
         }
+        self.guard.unregister_slot(i);
+        self.guard.begin_close();
         let _ = self.editors.forget(i, &mut Lookup(&mut self.plugins));
         let _ = self.engine.send(Command::ClearProcessor { slot: i });
         // The processor comes back through the retired queue; wait for it (the audio thread
@@ -260,6 +319,7 @@ impl Session {
         if let Some(mut l) = self.plugins[i].take() {
             l.plugin.deactivate();
         }
+        self.guard.end_close();
         true
     }
 
@@ -291,6 +351,13 @@ impl Session {
     }
 
     pub fn show_editor(&mut self, i: usize) {
+        self.viewing = Some(i);
+        // Known problems with this plugin's editor are shown beside it.
+        self.notes[i] = self.rig.slots[i]
+            .instrument
+            .as_ref()
+            .and_then(|r| crate::quirks::lookup(&r.id, r.windows).warning)
+            .map(str::to_owned);
         let result = self.editors.show(i, &mut Lookup(&mut self.plugins));
         match result {
             Ok(o) if o.created => self.say(format!("editor {} created in {:?}", i + 1, o.elapsed)),
@@ -450,7 +517,9 @@ impl Session {
         }
         let _ = self.editors.hide(&mut Lookup(&mut self.plugins));
         self.missing = vec![None; UI_SLOTS];
+        self.notes = vec![None; UI_SLOTS];
         self.targets.clear();
+        self.viewing = None;
     }
 
     pub fn open_rig(&mut self, path: &Path) -> Result<()> {
@@ -499,6 +568,9 @@ impl Session {
             .find(|f| f.info.id == r.id && f.windows == r.windows)
             .or_else(|| self.found.iter().find(|f| f.info.id == r.id))
             .cloned();
+        if let Some(why) = crate::quirks::lookup(&r.id, r.windows).unsupported {
+            return Err(anyhow!("not supported: {why}"));
+        }
         let path = match &found {
             Some(f) => f.path.clone(),
             None => r
@@ -507,7 +579,11 @@ impl Session {
                 .filter(|p| p.exists())
                 .context("plugin not found")?,
         };
-        let mut loaded = self.create_plugin(i, &path, &r.id)?;
+        if let Some(q) = self.quarantine.get(&path, &r.id) {
+            return Err(anyhow!("quarantined: {}", q.reason));
+        }
+        let windows = found.as_ref().map_or(r.windows, |f| f.windows);
+        let mut loaded = self.create_plugin(i, &path, &r.id, windows)?;
         if let Some(state) = state {
             loaded
                 .plugin
@@ -517,8 +593,34 @@ impl Session {
         self.install(i, loaded)
     }
 
+    /// Tries a missing or quarantined slot again from its saved plugin and state.
+    pub fn retry(&mut self, i: usize) -> Result<()> {
+        let r = self.rig.slots[i]
+            .instrument
+            .clone()
+            .context("nothing to retry in this slot")?;
+        if let Some(path) = r.path.clone().or_else(|| {
+            self.found
+                .iter()
+                .find(|f| f.info.id == r.id)
+                .map(|f| f.path.clone())
+        }) && self.quarantine.remove(&path, &r.id)
+        {
+            let _ = self.quarantine.save(&crate::paths::quarantine_file());
+        }
+        let state = self.rig.slots[i].state.clone();
+        self.restore_slot(i, &r, state.as_deref())?;
+        self.missing[i] = None;
+        self.say(format!("slot {}: {} loaded again", i + 1, r.name));
+        if self.targets.is_empty() {
+            self.select(i, false);
+        }
+        Ok(())
+    }
+
     /// Orderly shutdown: autosave, editors, engine, plugins.
     pub fn shutdown(&mut self) {
+        self.guard.disarm();
         self.autosave(Duration::ZERO, true);
         self.editors.shutdown(&mut Lookup(&mut self.plugins));
         if let Some(b) = self.backend.take() {

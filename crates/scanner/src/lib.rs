@@ -6,6 +6,10 @@
 //! timeouts and quarantine goes on top of the same cache (a file that crashed the scanner is
 //! recorded like a failed load).
 
+mod quarantine;
+
+pub use quarantine::{Quarantine, Quarantined};
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;

@@ -9,7 +9,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 OUT="${S4_OUT:-$ROOT/target/s4-matrix}"
 mkdir -p "$OUT"
-YAB="${YABRIDGE_DIR:-$ROOT/runtime/yabridge-b580a9f7}"
+YAB="${YABRIDGE_DIR:-$ROOT/runtime/yabridge-b580a9f7-patched}"
 WINE="${WINELOADER:-/opt/wine-staging/bin/wine}"
 BIN="$ROOT/target/release/s2-clap-embed"
 cargo build -q -p s2-clap-embed --release

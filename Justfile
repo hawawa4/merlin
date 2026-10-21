@@ -45,7 +45,7 @@ setup:
 yabridge-build commit="b580a9f7":
     tools/build-yabridge.sh {{commit}}
 
-yabridge_dir := justfile_directory() / "runtime/yabridge-b580a9f7"
+yabridge_dir := justfile_directory() / "runtime/yabridge-b580a9f7-patched"
 wine_loader := "/opt/wine-staging/bin/wine"
 wine_prefix := justfile_directory() / assets / "wine/prefix"
 bridges := assets / "bridges"

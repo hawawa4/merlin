@@ -15,6 +15,8 @@ pub enum Action {
     /// Load browser entry `k` into slot `i`.
     Load(usize, usize),
     Unload(usize),
+    /// Try a missing or quarantined slot again.
+    Retry(usize),
     Select(usize, bool),
     Mute(usize),
     Zone(usize, u8, u8),
@@ -89,10 +91,13 @@ pub fn draw(
     egui::Panel::top("dockbar").show(ui, |ui| dock_bar(ui, s, actions));
     egui::CentralPanel::default().show(ui, |ui| {
         *dock_rect = ui.available_rect_before_wrap();
-        let text = if s.editors.shown().is_none() {
+        let note = s.viewing.and_then(|i| s.notes[i].as_deref());
+        let text = if s.viewing.is_none() {
             "Load an instrument into a slot, then select it"
         } else if st.popup_open {
             "(editor hidden while a menu is open)"
+        } else if s.editors.shown() != s.viewing {
+            note.unwrap_or("This plugin has no editor")
         } else {
             ""
         };
@@ -177,7 +182,7 @@ fn header(ui: &mut egui::Ui, s: &mut Session, st: &UiState, actions: &mut Vec<Ac
 }
 
 fn unit(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, i: usize, actions: &mut Vec<Action>) {
-    let selected = s.editors.shown() == Some(i);
+    let selected = s.viewing == Some(i);
     let color = COLORS[i];
     let loaded = s.plugins[i].is_some();
     let saved = &s.rig.slots[i];
@@ -195,7 +200,18 @@ fn unit(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, i: usize, actions:
             r.name,
             if r.windows { "CLAP·WIN" } else { "CLAP" }
         ),
-        (Some(r), false) => format!("{}  (missing)", r.name),
+        (Some(r), false) => format!(
+            "{}  ({})",
+            r.name,
+            if missing
+                .as_deref()
+                .is_some_and(|m| m.starts_with("quarantined"))
+            {
+                "quarantined"
+            } else {
+                "missing"
+            }
+        ),
         (None, _) => "— empty —".to_string(),
     };
     let frame = egui::Frame::new()
@@ -281,12 +297,21 @@ fn unit(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, i: usize, actions:
                 .width(100.0)
                 .show_ui(ui, |ui| {
                     for (k, f) in s.found.iter().enumerate() {
-                        let label = if f.windows {
+                        let mut label = if f.windows {
                             format!("{} (Windows)", f.info.name)
                         } else {
                             f.info.name.clone()
                         };
-                        if ui.selectable_label(false, label).clicked() {
+                        let unsupported = crate::quirks::lookup(&f.info.id, f.windows).unsupported;
+                        if unsupported.is_some() {
+                            label.push_str("  (unsupported)");
+                        } else if s.quarantine.get(&f.path, &f.info.id).is_some() {
+                            label.push_str("  (crashed before)");
+                        }
+                        let r = ui.selectable_label(false, label);
+                        if let Some(why) = unsupported {
+                            r.on_hover_text(why);
+                        } else if r.clicked() {
                             actions.push(Action::Load(i, k));
                         }
                     }
@@ -298,6 +323,9 @@ fn unit(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, i: usize, actions:
                 // Test hook (script `menu`): open this slot's menu without a click.
                 st.force_menu = None;
                 egui::Popup::open_id(ui.ctx(), menu.response.id.with("popup"));
+            }
+            if missing.is_some() && ui.small_button("Retry").clicked() {
+                actions.push(Action::Retry(i));
             }
             if (loaded || saved.instrument.is_some()) && ui.small_button("x").clicked() {
                 actions.push(Action::Unload(i));
@@ -332,7 +360,7 @@ fn keys(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Acti
 
 fn dock_bar(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
     ui.horizontal(|ui| {
-        let Some(i) = s.editors.shown() else {
+        let Some(i) = s.viewing else {
             ui.label("EDITOR · nothing selected");
             return;
         };

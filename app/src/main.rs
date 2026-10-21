@@ -7,8 +7,10 @@
 //! `merlin [--plugin-dir DIR]... [--rig FILE] [--fresh]`
 //! Test hook: `MERLIN_SCRIPT="3:load 1 Surge XT; 5:on 60; 6:peak; 8:quit"`.
 
+mod guard;
 mod keyboard;
 mod paths;
+mod quirks;
 mod session;
 mod settings;
 mod ui;
@@ -35,6 +37,8 @@ struct Args {
     plugin_dirs: Vec<PathBuf>,
     rig: Option<PathBuf>,
     fresh: bool,
+    /// Started by the crash watchdog: restore the autosave.
+    recover: bool,
 }
 
 fn parse_args() -> Args {
@@ -42,6 +46,7 @@ fn parse_args() -> Args {
         plugin_dirs: Vec::new(),
         rig: None,
         fresh: false,
+        recover: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -49,6 +54,7 @@ fn parse_args() -> Args {
             "--plugin-dir" => a.plugin_dirs.extend(it.next().map(PathBuf::from)),
             "--rig" => a.rig = it.next().map(PathBuf::from),
             "--fresh" => a.fresh = true,
+            "--recover" => a.recover = true,
             other => eprintln!("ignoring unknown argument '{other}'"),
         }
     }
@@ -80,6 +86,7 @@ struct App {
     args: Args,
     settings: Settings,
     found: Vec<Found>,
+    guard: Arc<guard::Guard>,
     run: Option<Running>,
 }
 
@@ -177,16 +184,25 @@ impl App {
             self.proxy.clone(),
             &self.settings,
             self.found.clone(),
+            self.guard.clone(),
         )?;
 
         // Start from the rig asked for; after a crash, from the autosave.
         let marker = paths::state_dir().join("running");
         let crashed = marker.exists();
         let autosave = paths::autosave_file();
+        if let Ok(name) = std::env::var("MERLIN_RECOVERED") {
+            session.say(format!(
+                "{name} crashed and was quarantined; the app restarted from the autosave. \
+                 Use Retry on its slot to try it again."
+            ));
+        }
         let start_rig = match (&self.args.rig, self.args.fresh) {
             (Some(p), _) => Some(p.clone()),
-            (None, false) if crashed && autosave.exists() => {
-                session.say("the last session did not end cleanly: restoring the autosave");
+            (None, false) if (crashed || self.args.recover) && autosave.exists() => {
+                if !self.args.recover {
+                    session.say("the last session did not end cleanly: restoring the autosave");
+                }
                 Some(autosave)
             }
             _ => None,
@@ -326,6 +342,7 @@ impl Running {
                 s.unload(i);
                 Ok(())
             }
+            Action::Retry(i) => s.retry(i),
             Action::Select(i, layer) => {
                 s.select(i, layer);
                 Ok(())
@@ -673,6 +690,7 @@ fn main() -> Result<()> {
         }
     }
     merlin_audio_io::preload_pipewire_jack();
+    let guard = guard::Guard::new();
     let found = discover(&settings, &args.plugin_dirs);
 
     let event_loop = EventLoop::<UserEvent>::with_user_event()
@@ -683,8 +701,10 @@ fn main() -> Result<()> {
         args,
         settings,
         found,
+        guard,
         run: None,
     };
+    app.guard.spawn_watchdog();
     event_loop.run_app(&mut app)?;
     // Give plugin background threads (JUCE) a moment to wind down.
     std::thread::sleep(Duration::from_millis(100));

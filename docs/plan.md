@@ -236,6 +236,12 @@ Because the whole app is an X11 client, we can create **child windows inside our
 - Destroy surplus bridged editors from the main loop a few hundred ms after a switch, never in
   the same turn as showing another editor (Wine aborts the plugin host with `BadWindow`).
 - While an egui popup is open, unmap the dock (§4.6 rule 6, verified in S5).
+- **A crashing bridged plugin must not take the app down** (found in Phase 1 QA). When a Wine host
+  dies, the next call across yabridge either blocks forever or throws a C++ exception out of the
+  JACK callback, which aborts a Rust process. Our patched yabridge calls a host hook before the
+  exception propagates; the app's guard quarantines the plugin, kills the other hosts and
+  restarts itself from the autosave (`app/src/guard.rs`). Known-bad plugins are refused up front
+  (`app/src/quirks.rs`).
 
 ### 4.7 Scanning and the sound database
 

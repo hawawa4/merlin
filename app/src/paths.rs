@@ -39,6 +39,10 @@ pub fn plugin_cache_file() -> PathBuf {
     cache_dir().join("plugins.json")
 }
 
+pub fn quarantine_file() -> PathBuf {
+    cache_dir().join("quarantine.json")
+}
+
 pub fn autosave_file() -> PathBuf {
     state_dir().join("autosave.irig")
 }
