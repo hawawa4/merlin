@@ -118,7 +118,7 @@ impl JackClient {
         let (client, _) = Client::new(name, ClientOptions::NO_START_SERVER)
             .context("cannot connect to the JACK/PipeWire server")?;
         Ok(Self {
-            sample_rate: client.sample_rate() as u32,
+            sample_rate: client.sample_rate(),
             buffer_size: client.buffer_size(),
             client,
         })
