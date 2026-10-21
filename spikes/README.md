@@ -13,7 +13,7 @@ Rust 1.99. Test assets (plugins, SoundFonts) go in `test-assets/` (gitignored).
 | S2 CLAP + embed | ✅ embedding, clip/scroll, fit, reopen, state save/load, idle CPU; ⏳ mouse/keyboard input needs a manual test |
 | S3 VST3 | ✅ Rust-only hosting works (`vst3` crate, no C++ shim): sound, embedded editor, run loop, state; ⏳ editor→host edits and keyboard need a manual test |
 | S4 Wine | ✅ Windows Surge XT (CLAP) embedded via yabridge master + Wine 11.20; ⏳ mouse after scroll/move needs a manual test |
-| S5 UI | partly answered by S2: idle CPU 1.3% with an embedded editor open |
+| S5 UI | ✅ rack of 8 slots (Linux + Windows CLAP), one dock, keyboard map, editor cache, overlap rule; ⏳ clicking the rack and keyboard needs a manual test |
 | S6 SoundFont | ✅ **decided: oxisynth** (needs a one-line note-on allocation fix) |
 
 ## S1: audio (`spikes/s1-audio`)
@@ -268,6 +268,69 @@ MIDI keyboard.
   pointer land where you click?), then scroll the dock and move the main window and click
   again (the cursor-offset bugs reported for Wine 10+ show up after moving the window),
   open its menus, and type in its patch-name field.
+
+## S5: rack UI (`spikes/s5-rack`, `just dev` / `just s5` / `just s5-script`)
+
+An egui rack of 8 slots on our winit loop (forced X11), a keyboard map, and one editor dock.
+Each slot holds any CLAP plugin (Linux, or a Windows plugin through yabridge on our patched
+Wine); **one JACK callback runs all of them**, routes MIDI and mixes the outputs. About 1,500
+lines on top of the S2 host code. CLAP only: VST3 slots would reuse S3 and add nothing new to
+the questions S5 asks. Selection: click = exclusive, shift-click = layer. Plugins are found in
+`test-assets/dl/surge-linux` and `test-assets/bridges-vblank/clap` (or the directories given as
+arguments). `S5_PRELOAD="A; B"` fills slots 1.. at start; `S5_SCRIPT` runs timed actions (`load`,
+`select`, `layer`, `zone`, `on`/`off`, `peak`, `cpu` with a per-process breakdown, `menu`, `report`,
+`quit`; see `parse_script`).
+
+**Result (Linux Surge XT x2, Windows Surge XT, Six Sines, TyrellN6, OB-Xf in six slots):**
+
+- **Six live editors at once, instant switching.** Each slot has its own canvas window in the
+  dock; the selected one is mapped, the rest are `gui.hide()`n and unmapped. Switching to a
+  created editor takes 15-350 µs. First creation: Linux 57-135 ms, Windows 175-530 ms. Reopening
+  after a destroy: Surge 78 ms, Six Sines 10-50 ms. Plugin load: Linux 30-50 ms, Windows 0.65 s
+  (2.7 s for the first Wine start).
+- **Idle cost with an editor open: 2.0-2.3% of one core** for our process, of which the JACK
+  data-loop thread running the six plugins is 1.4% and the UI thread 0.5%; DSP load 4.6% of the
+  buffer budget at 128 frames, **0 xruns**, also with a 4-note chord layered over all six slots
+  (our process 3.8%). The Windows plugins add **about 12% more across their yabridge hosts and
+  wineserver** (14% total idle, 24% under that chord), and it does not depend on which editor
+  is visible: Six Sines' host burns 6-7% with its editor hidden, so `hide()` does not quiet a
+  bridged plugin. Budget this when the app offers Windows plugins (a "sleeping slot" policy,
+  plan Phase 2).
+- **Routing and note ownership work:** a note-on goes to every active, unmuted slot whose zone
+  contains the key and is remembered per key; the note-off goes to the remembered slots, so
+  changing selection or zones with a held key leaves no stuck note (the keyboard map shows
+  each held note's owner). Per-slot peaks confirmed that exclusive selection sounds only the
+  selected slot. A slot is installed and removed through a lock-free command queue; a removed
+  processor is handed back to the main thread, so the callback never allocates or frees.
+- **Overlap rule works:** while an egui popup is open (`Popup::is_any_open`) the dock is
+  unmapped and the popup draws over plain egui ("editor hidden while a menu is open"); the
+  editor returns when the menu closes. Checked with screenshots (`menu` script action opens a
+  slot's menu).
+- **Per-slot fd poller** (one helper thread per slot, ended on unload) and per-slot timers are
+  serviced from the one winit loop; wakeups stay under 1 per second while idle. The UI redraws at
+  2 Hz when nothing sounds and 20 Hz while notes or meters move.
+
+**Findings that change the plan**
+
+1. **Never destroy a bridged editor in the same turn as showing another.** Destroying Surge's
+   (hidden) editor right after creating Six Sines' made Wine's x11drv abort the Surge host with
+   `BadWindow (X_GetProperty)` on its own wrapper window, deterministically, with the system Wine
+   too. The same destroy a moment later (any age, shown or hidden) is fine, and so is
+   destroying an older editor in the Six-Sines-first order. Fix: evict editors from the main
+   loop 300 ms after a switch (`EVICT_DELAY`). Three bridged plugins and constant churn ran clean.
+2. **Keep a slot's canvas window for the slot's life** (reuse it for the next editor). It is cheap,
+   and destroying the parent of an editor that tears down asynchronously is the same class of
+   race.
+3. **Editor eviction is needed at 8 slots only for Windows plugins**, which cost a Wine process
+   each; Linux editors are cheap to keep. The cap (`S5_EDITOR_CACHE`, default 8) is ready.
+4. **JUCE 8 / Direct2D plugins (OB-Xf) stay blank** under our patched Wine, as in S4: they
+   load, route and sound, but their editor is empty. Not an S5 problem.
+5. egui text lacks some symbols (●, ✕ rendered as boxes); draw LEDs with the painter.
+
+**Manual test still needed:** click the rack (select, shift-click layer, M, zone fields, Load/
+Replace menus, x), click and drag on the keyboard map (plays the held key into the active
+slots), then use a plugin's knobs after switching slots and after a menu closed (mouse mapping
+after the dock was unmapped and mapped again).
 
 ## S6: SoundFont engines (`spikes/s6-soundfont`)
 

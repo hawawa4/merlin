@@ -12,9 +12,9 @@ rtsan_lib := "/usr/lib/llvm-21/lib/clang/21/lib/linux/libclang_rt.rtsan-x86_64.a
 default:
     @just --list --unsorted
 
-# This round's test: Windows Surge XT on our patched Wine (WaitForVBlank), editor embedded. Try:
-#   just dev                      Surge XT      just dev "Six Sines"
-dev name="Surge XT": (s4-vblank name)
+# This round's test: the S5 rack, Linux and Windows plugins side by side. Try:
+#   just dev                      default rack      just dev "Surge XT; Six Sines (Windows)"
+dev preload="Surge XT; Surge XT (Windows); Six Sines (Windows)": (s5 preload)
 
 # S3: Surge XT as a VST3 in our own VST3 host, editor embedded. Try:
 #   just s3-dev                   Surge XT      just s3-dev "Surge XT Effects"
@@ -140,6 +140,19 @@ s3 plugin=(assets / "dl/surge-linux/Surge XT.vst3"):
 s3-script plugin=(assets / "dl/surge-linux/Surge XT.vst3"):
     S3_SCRIPT="2:peak; 3:on 60; 4:peak; 5:off 60; 6:param 237 0.5; 7:save; 8:param 237 0.2; 9:load; 11:toggle; 12:toggle; 13:fit; 15:quit" \
         cargo run -p s3-vst3-embed --release -- "{{plugin}}"
+
+# S5: rack of 8 CLAP slots (Linux and bridged Windows plugins), one editor dock, keyboard map.
+# `preload` is a ";"-separated list of plugin names for slots 1.. (see the list printed at start)
+s5 preload="Surge XT; Surge XT (Windows); Six Sines (Windows)":
+    PATH="{{yabridge_dir}}:$PATH" WINELOADER={{patched_wine}} S5_PRELOAD="{{preload}}" \
+        cargo run -p s5-rack --release
+
+# S5 scripted run: load, switch editors, play, measure CPU (about 25 s)
+s5-script:
+    PATH="{{yabridge_dir}}:$PATH" WINELOADER={{patched_wine}} \
+    S5_PRELOAD="Surge XT; Surge XT (Windows); Six Sines (Windows)" \
+    S5_SCRIPT="8:select 1; 9:on 60; 10:peak; 10.5:off 60; 11:select 2; 12:on 60; 13:peak; 13.5:off 60; 14:select 3; 15:on 60; 16:peak; 16.5:off 60; 17:cpu; 27:cpu; 28:report; 29:quit" \
+        cargo run -p s5-rack --release
 
 # S6: render the SoundFont test pattern with all engines to spikes/s6-soundfont/out/
 s6 *files=(sf2 + " " + sf3):

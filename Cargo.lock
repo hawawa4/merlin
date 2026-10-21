@@ -1851,6 +1851,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "s5-rack"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clack-extensions",
+ "clack-host",
+ "egui",
+ "egui-wgpu",
+ "egui-winit",
+ "jack",
+ "libc",
+ "pollster",
+ "rtrb",
+ "wgpu",
+ "winit",
+ "x11rb",
+]
+
+[[package]]
 name = "s6-soundfont"
 version = "0.0.0"
 dependencies = [

@@ -232,6 +232,10 @@ Because the whole app is an X11 client, we can create **child windows inside our
 - Set `WM_WINDOW_ROLE` on our top-level window: yabridge picks the topmost ancestor with a
   role as the window whose moves it tracks.
 - Accept `request_resize` without calling `set_size` with an unadjusted size (JUCE flags it).
+- One canvas per slot, kept for the slot's life; show = map, hide = `gui.hide()` + unmap.
+- Destroy surplus bridged editors from the main loop a few hundred ms after a switch, never in
+  the same turn as showing another editor (Wine aborts the plugin host with `BadWindow`).
+- While an egui popup is open, unmap the dock (§4.6 rule 6, verified in S5).
 
 ### 4.7 Scanning and the sound database
 
