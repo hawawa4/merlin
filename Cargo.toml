@@ -23,6 +23,7 @@ merlin-model = { path = "crates/model" }
 merlin-hosting = { path = "crates/hosting" }
 merlin-engine = { path = "crates/engine" }
 merlin-audio-io = { path = "crates/audio-io" }
+merlin-embed = { path = "crates/embed" }
 
 [profile.release]
 debug = 1

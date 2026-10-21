@@ -852,6 +852,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "merlin-embed"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "merlin-hosting",
+ "merlin-model",
+ "x11rb",
+]
+
+[[package]]
 name = "merlin-engine"
 version = "0.0.0"
 dependencies = [
