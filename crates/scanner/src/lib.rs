@@ -338,7 +338,7 @@ mod tests {
         std::fs::write(d.join("a.clap"), b"1").unwrap();
         let loader = |_: &Path, _| Ok(vec![info("a")]);
         let mut cache = Cache::default();
-        let entries = scan_with(&[d.clone()], &mut cache, &loader, |_| {});
+        let entries = scan_with(std::slice::from_ref(&d), &mut cache, &loader, |_| {});
         let file = d.join("cache/plugins.json");
         cache.save(&file).unwrap();
 
@@ -349,7 +349,7 @@ mod tests {
             Ok(vec![info("a")])
         };
         assert_eq!(
-            scan_with(&[d.clone()], &mut again, &counting, |_| {}),
+            scan_with(std::slice::from_ref(&d), &mut again, &counting, |_| {}),
             entries
         );
         assert_eq!(*calls.borrow(), 0, "restored from disk");
