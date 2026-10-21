@@ -9,7 +9,7 @@ use merlin_model::Format;
 use crate::PluginProcessor;
 
 /// What the host knows about a plugin without running it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PluginInfo {
     pub format: Format,
     /// CLAP plugin id (or VST3 class id).

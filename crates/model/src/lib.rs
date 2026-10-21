@@ -11,6 +11,25 @@ pub const MAX_SLOTS: usize = 16;
 /// Current `Rig` file format version.
 pub const RIG_VERSION: u32 = 1;
 
+mod base64_opt {
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(v: &Option<Vec<u8>>, s: S) -> Result<S::Ok, S::Error> {
+        match v {
+            Some(bytes) => s.serialize_str(&STANDARD.encode(bytes)),
+            None => s.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Vec<u8>>, D::Error> {
+        Option::<String>::deserialize(d)?
+            .map(|t| STANDARD.decode(t).map_err(serde::de::Error::custom))
+            .transpose()
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Format {
@@ -73,8 +92,8 @@ pub struct Slot {
     /// Faceplate colour, RGB.
     pub colour: [u8; 3],
     pub instrument: Option<PluginRef>,
-    /// The instrument's saved state, as an opaque blob (stored beside the rig file later).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// The instrument's saved state, an opaque blob (base64 in the file).
+    #[serde(default, with = "base64_opt", skip_serializing_if = "Option::is_none")]
     pub state: Option<Vec<u8>>,
     /// Linear gain, 1.0 = unity.
     pub volume: f32,
@@ -225,6 +244,17 @@ mod tests {
         let json = serde_json::to_string_pretty(&rig).unwrap();
         let back: Rig = serde_json::from_str(&json).unwrap();
         assert_eq!(rig, back);
+    }
+
+    #[test]
+    fn plugin_state_is_base64_in_the_file() {
+        let mut rig = sample();
+        rig.slots[0].state = Some(vec![0, 1, 2, 250, 255]);
+        let json = serde_json::to_string(&rig).unwrap();
+        assert!(json.contains("\"AAEC+v8=\""), "{json}");
+        let back: Rig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.slots[0].state, Some(vec![0, 1, 2, 250, 255]));
+        assert!(serde_json::from_str::<Rig>(r#"{"slots":[{"state":"not base64!"}]}"#).is_err());
     }
 
     #[test]
