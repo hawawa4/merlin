@@ -228,7 +228,7 @@ MIDI keyboard.
   | TyrellN6 3.0 beta | u-he | ✅ redraws | ✅ redraws | ✅ redraws |
   | Surge XT 1.3.4 | JUCE | ❌ frozen | ✅ redraws | ✅ redraws |
   | Six Sines (nightly) | JUCE | ❌ frozen | ✅ redraws | ✅ redraws |
-  | OB-Xf (nightly) | JUCE 8 + Direct2D | ❌ first frame, then frozen | ❌ white, never draws | ❌ white, never draws |
+  | OB-Xf (nightly) | JUCE 8 + Direct2D | ❌ first frame, then frozen | ❌ white, never draws | ✅ redraws (with the DirectComposition patches below) |
   | CardinalSynth 26.02 | DPF/OpenGL | 💥 Wine stack overflow in `set_parent` | not tried | 💥 same |
   | Podolski 1.2.3 | u-he | VST3 only, needs S3 | |
 
@@ -253,7 +253,7 @@ MIDI keyboard.
   wined3d display mode, 60 Hz fallback) and return `S_OK`. Result: **Surge XT and Six Sines
   redraw** (Surge's voice counter shows "4 / 16" during the chord) with no DXVK, and the
   `WaitForVBlank stub!` fixme is gone. No other plugin changed behaviour, except OB-Xf:
-  - **OB-Xf is now blank instead of frozen.** Plain Wine paints one correct frame; with a
+  - **(Fixed later, see "DirectComposition" below.) OB-Xf was blank instead of frozen.** Plain Wine paints one correct frame; with a
     working vblank JUCE's repaint thread runs, and its Direct2D renderer (JUCE 8) calls
     `IDXGIFactory2::CreateSwapChainForComposition` on every frame (1773 times in 15 s). Wine
     stubs it (`dxgi_factory_CreateSwapChainForComposition ... stub!`), so nothing is drawn.
@@ -262,6 +262,17 @@ MIDI keyboard.
     implementation). Options: implement it in Wine (swap chain for composition backed by a
     plain HWND swap chain, which is what the first frame used), or a per-plugin fallback.
   - Untested: CPU cost of the vblank threads (one per output, 60 wakeups/s each, no spinning).
+- **DirectComposition (patches 0002 and 0003): JUCE 8 / Direct2D plugins such as OB-Xf now draw.**
+  JUCE's Direct2D renderer needs `CreateSwapChainForComposition` plus `dcomp.dll`, which Wine
+  stubbed completely. 0002 implements the composition swapchain in dxgi: it lives on an internal
+  hidden window and presents to the HWND that dcomp attaches it to (`dst_window_override`, private
+  data `WINE_DXGI_COMPOSITION_TARGET`), with one persistent back buffer, because JUCE repaints only
+  dirty rectangles and relies on the compositor keeping the rest of the frame (wined3d rotates
+  multiple back buffers, which showed old frames). 0003 is a minimal `dcomp.dll`: device, target
+  and visual objects; `Commit` binds each visual's swapchain to its target window; transforms,
+  clips and surfaces are not implemented. Verified on the real desktop; `import -window` (XGetImage)
+  shows GL/Vulkan-drawn windows partially, so use Spectacle for screenshots of such plugins.
+  Rebuild after editing the Wine tree: `tools/wine-rebuild.sh` (seconds, incremental).
 - **First-run dialogs:** a fresh prefix offers to install Wine Mono (and Gecko). The app must
   set `WINEDLLOVERRIDES="mscoree,mshtml="` when creating prefixes, or ship Mono preinstalled.
 - **Manual test still needed:** click and drag the Windows Surge's controls (does the

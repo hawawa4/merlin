@@ -1,0 +1,183 @@
+diff -ruN a/dlls/dxgi/dxgi_private.h b/dlls/dxgi/dxgi_private.h
+--- a/dlls/dxgi/dxgi_private.h
++++ b/dlls/dxgi/dxgi_private.h
+@@ -186,8 +186,19 @@
+     IDXGIOutput *target;
+     LONG present_count;
+     LONG in_set_fullscreen_state;
++
++    /* Swapchains created for composition (IDXGIFactory2::CreateSwapChainForComposition)
++     * have no window of their own. They are created on an internal hidden window, and when
++     * dcomp attaches them to a visual tree that targets an HWND, they present to that HWND. */
++    HWND composition_window;
++    HWND composition_target;
+ };
+ 
++/* Private data dcomp sets on a composition swapchain to tell it which HWND to present to. */
++DEFINE_GUID(WINE_DXGI_COMPOSITION_TARGET, 0xc7d1c1ba, 0x4e0b, 0x4e7a, 0x8d, 0x3b, 0x6f, 0x6b, 0xd1, 0xc0, 0xa5, 0xf1);
++
++void d3d11_swapchain_set_composition_window(IDXGISwapChain1 *iface, HWND window);
++
+ HRESULT d3d11_swapchain_init(struct d3d11_swapchain *swapchain, struct dxgi_device *device,
+         struct wined3d_swapchain_desc *desc, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC *fullscreen_desc);
+ 
+diff -ruN a/dlls/dxgi/factory.c b/dlls/dxgi/factory.c
+--- a/dlls/dxgi/factory.c
++++ b/dlls/dxgi/factory.c
+@@ -390,10 +390,64 @@
+ static HRESULT STDMETHODCALLTYPE dxgi_factory_CreateSwapChainForComposition(IWineDXGIFactory *iface,
+         IUnknown *device, const DXGI_SWAP_CHAIN_DESC1 *desc, IDXGIOutput *output, IDXGISwapChain1 **swapchain)
+ {
+-    FIXME("iface %p, device %p, desc %p, output %p, swapchain %p stub!\n",
++    DXGI_SWAP_CHAIN_FULLSCREEN_DESC fullscreen_desc = {0};
++    IWineDXGISwapChainFactory *swapchain_factory;
++    HRESULT hr;
++    HWND window;
++
++    TRACE("iface %p, device %p, desc %p, output %p, swapchain %p.\n",
+             iface, device, desc, output, swapchain);
+ 
+-    return E_NOTIMPL;
++    if (!device || !desc || !swapchain)
++    {
++        WARN("Invalid pointer.\n");
++        return DXGI_ERROR_INVALID_CALL;
++    }
++
++    if (desc->Stereo)
++    {
++        FIXME("Stereo swapchains are not supported.\n");
++        return DXGI_ERROR_UNSUPPORTED;
++    }
++
++
++    if (!dxgi_validate_swapchain_desc(desc))
++        return DXGI_ERROR_INVALID_CALL;
++
++    if (SUCCEEDED(IUnknown_QueryInterface(device, &IID_IWineDXGISwapChainFactory, (void **)&swapchain_factory)))
++    {
++        /* There is no window to render to until a composition visual tree is attached to an
++         * HWND, so the swapchain is created on an internal hidden window and presents to the
++         * real target later (see WINE_DXGI_COMPOSITION_TARGET). */
++        window = CreateWindowExW(0, L"Static", NULL, WS_POPUP, 0, 0,
++                max(desc->Width, 1), max(desc->Height, 1), NULL, NULL, NULL, NULL);
++        if (!window)
++        {
++            ERR("Failed to create the composition window.\n");
++            IWineDXGISwapChainFactory_Release(swapchain_factory);
++            return DXGI_ERROR_UNSUPPORTED;
++        }
++        fullscreen_desc.Windowed = TRUE;
++        hr = IWineDXGISwapChainFactory_create_swapchain(swapchain_factory,
++                (IDXGIFactory *)iface, window, desc, &fullscreen_desc, output, swapchain);
++        IWineDXGISwapChainFactory_Release(swapchain_factory);
++        if (FAILED(hr))
++        {
++            DestroyWindow(window);
++            return hr;
++        }
++        d3d11_swapchain_set_composition_window(*swapchain, window);
++        /* Applications repaint only the dirty rectangles of a flip model swapchain and rely
++         * on the compositor keeping the rest of the previous frame on screen. wined3d
++         * rotates multiple back buffers, so the "next" buffer would hold an older frame.
++         * One persistent buffer, presented whole, gives the same result. */
++        if (FAILED(hr = IDXGISwapChain1_ResizeBuffers(*swapchain, 1, 0, 0, DXGI_FORMAT_UNKNOWN, desc->Flags)))
++            WARN("Failed to switch to a single back buffer, hr %#lx.\n", hr);
++        return S_OK;
++    }
++
++    FIXME("Composition swapchains are only supported for d3d11 devices.\n");
++    return DXGI_ERROR_UNSUPPORTED;
+ }
+ 
+ static UINT STDMETHODCALLTYPE dxgi_factory_GetCreationFlags(IWineDXGIFactory *iface)
+diff -ruN a/dlls/dxgi/swapchain.c b/dlls/dxgi/swapchain.c
+--- a/dlls/dxgi/swapchain.c
++++ b/dlls/dxgi/swapchain.c
+@@ -264,6 +264,8 @@
+         IWineDXGIFactory_Release(swapchain->factory);
+         wined3d_swapchain_decref(swapchain->wined3d_swapchain);
+         IWineDXGIDevice_Release(device);
++        if (swapchain->composition_window)
++            DestroyWindow(swapchain->composition_window);
+     }
+ 
+     return refcount;
+@@ -278,6 +280,14 @@
+ 
+     TRACE("iface %p, guid %s, data_size %u, data %p.\n", iface, debugstr_guid(guid), data_size, data);
+ 
++    if (IsEqualGUID(guid, &WINE_DXGI_COMPOSITION_TARGET))
++    {
++        if (data_size != sizeof(HWND) || !data)
++            return DXGI_ERROR_INVALID_CALL;
++        swapchain->composition_target = *(HWND *)data;
++        return S_OK;
++    }
++
+     return dxgi_set_private_data(&swapchain->private_store, guid, data_size, data);
+ }
+ 
+@@ -345,7 +355,21 @@
+         return S_OK;
+     }
+ 
+-    if (SUCCEEDED(hr = wined3d_swapchain_present(swapchain->wined3d_swapchain, NULL, NULL, NULL, sync_interval, 0)))
++    if (swapchain->composition_target && IsWindow(swapchain->composition_target))
++    {
++        RECT dst;
++
++        /* A composition swapchain shows up in the window its visual tree targets. */
++        GetClientRect(swapchain->composition_target, &dst);
++        hr = wined3d_swapchain_present(swapchain->wined3d_swapchain, NULL, &dst,
++                swapchain->composition_target, sync_interval, 0);
++    }
++    else
++    {
++        hr = wined3d_swapchain_present(swapchain->wined3d_swapchain, NULL, NULL, NULL, sync_interval, 0);
++    }
++
++    if (SUCCEEDED(hr))
+         InterlockedIncrement(&swapchain->present_count);
+     return hr;
+ }
+@@ -565,6 +589,10 @@
+     if (flags & ~supported_flags)
+         FIXME("Ignoring flags %#x.\n", flags & ~supported_flags);
+ 
++    /* Composition swapchains keep one persistent back buffer, see CreateSwapChainForComposition. */
++    if (swapchain->composition_window && buffer_count)
++        buffer_count = 1;
++
+     wined3d_mutex_lock();
+     wined3d_swapchain_get_desc(swapchain->wined3d_swapchain, &wined3d_desc);
+     if (!(wined3d_desc.flags & WINED3D_SWAPCHAIN_FRAME_LATENCY_WAITABLE_OBJECT)
+@@ -749,8 +777,11 @@
+     TRACE("iface %p, sync_interval %u, flags %#x, present_parameters %p.\n",
+             iface, sync_interval, flags, present_parameters);
+ 
+-    if (present_parameters)
+-        FIXME("Ignored present parameters %p.\n", present_parameters);
++    /* Dirty rectangles and scrolling are ignored: the whole back buffer is presented. For
++     * composition swapchains that is what keeps the unchanged parts visible (see
++     * CreateSwapChainForComposition). */
++    if (present_parameters && (present_parameters->pScrollRect || present_parameters->pScrollOffset))
++        FIXME("Ignored scroll parameters in present parameters %p.\n", present_parameters);
+ 
+     return d3d11_swapchain_present(swapchain, sync_interval, flags);
+ }
+@@ -1043,6 +1074,14 @@
+     return hr;
+ }
+ 
++void d3d11_swapchain_set_composition_window(IDXGISwapChain1 *iface, HWND window)
++{
++    struct d3d11_swapchain *swapchain = d3d11_swapchain_from_IDXGISwapChain4((IDXGISwapChain4 *)iface);
++
++    if (swapchain->IDXGISwapChain4_iface.lpVtbl == &d3d11_swapchain_vtbl)
++        swapchain->composition_window = window;
++}
++
+ HRESULT d3d11_swapchain_init(struct d3d11_swapchain *swapchain, struct dxgi_device *device,
+         struct wined3d_swapchain_desc *desc, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC *fullscreen_desc)
+ {

@@ -19,13 +19,6 @@ pub fn lookup(id: &str, windows: bool) -> Quirks {
             ),
             warning: None,
         },
-        ("org.surge-synth-team.OB-Xf", true) => Quirks {
-            unsupported: None,
-            warning: Some(
-                "OB-Xf's editor is blank under Wine for now (it needs Direct2D composition \
-                 swap chains). The instrument itself plays.",
-            ),
-        },
         _ => Quirks::default(),
     }
 }
