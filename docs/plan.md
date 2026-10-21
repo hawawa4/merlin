@@ -425,17 +425,17 @@ libjack preload (S1), `build-wine.sh` and the patch set (S4).
 
 ### Phase 1: MVP, a playable rack (9–12 weeks)
 
-1. Workspace, `model`, `engine` with the dummy backend and offline render tests.
-2. JACK backend, JACK MIDI, automatic hardware connection, meters, CPU/xrun stats.
-3. Router and note ownership, exclusive/layer, zones, transpose, panic.
-4. CLAP hosting (instrument + inserts) and state.
-5. VST3 hosting and state.
-6. **`embed` crate:** editor dock, clipping/scroll, focus, editor cache, overlap rules.
-7. Built-in FX (EQ, compressor, delay, reverb, master limiter).
-8. Scanner, cache, browser.
-9. Rack UI, keyboard map, Settings (plugins, audio, MIDI).
-10. Windows plugins, basic (§4.8).
-11. Save/load rig, autosave, missing-plugin placeholders.
+1. ✅ Workspace, `model`, `engine` with the dummy backend and offline render tests.
+2. ✅ JACK backend, JACK MIDI, automatic hardware connection, stats. (Meters in the UI; hotplug and ALSA sequencer listing still to do.)
+3. ✅ Router and note ownership, exclusive/layer, zones, transpose, panic (property-tested).
+4. ◐ CLAP hosting (instrument) and state ✅; inserts (effects in a slot) not yet.
+5. ☐ VST3 hosting and state (port of the S3 host onto the `PluginHandle` traits).
+6. ✅ **`embed` crate:** editor dock, clipping/scroll, editor cache, overlap rules. (Keyboard focus handshake: manual test pending.)
+7. ☐ Built-in FX (EQ, compressor, delay, reverb, master limiter).
+8. ◐ Scanner library with cache ✅; child-process scanner with timeout/quarantine, VST3 and SoundFont scanning, and a searchable browser ☐.
+9. ◐ Rack UI, keyboard map ✅; Settings panel (plugins, audio, MIDI devices), performance check ☐.
+10. ◐ Windows plugins work through a manually configured Wine (`just dev` wires our patched build); the managed runtime and "Install Windows plugin…" are Phase 2.
+11. ◐ Save/open rig, autosave with crash recovery, missing-plugin placeholders ✅; crash marker for safe mode and rig migration ☐.
 
 **Exit:**
 - A 2-hour rehearsal with 6–8 instruments, including at least one Windows plugin, all editors embedded.
