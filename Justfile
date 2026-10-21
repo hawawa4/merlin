@@ -108,6 +108,11 @@ clippy:
 test:
     cargo test --workspace
 
+# Phase 1 tests that need Wine: Windows plugins through yabridge, on our patched Wine
+test-wine:
+    PATH="{{yabridge_dir}}:$PATH" WINELOADER={{patched_wine}} \
+        cargo test -p merlin-audio-io --test clap windows -- --nocapture
+
 # Is realtime scheduling available? (S1 finding: it isn't on this machine yet)
 rt-status:
     @echo "ulimit -r (max rtprio): $(ulimit -r)"

@@ -4,9 +4,12 @@
 //! the formats; this crate starts with the audio-thread half, which the engine needs.
 
 pub mod builtin;
+pub mod clap;
 mod midi;
+mod plugin;
 
 pub use midi::{MidiEvent, MidiKind};
+pub use plugin::{EditorSize, HostEvent, ParamInfo, PluginEditor, PluginHandle, PluginInfo, Waker};
 
 /// What a processor tells the engine after a block.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

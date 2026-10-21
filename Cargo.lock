@@ -865,6 +865,14 @@ dependencies = [
 [[package]]
 name = "merlin-hosting"
 version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clack-extensions",
+ "clack-host",
+ "merlin-model",
+ "libc",
+ "rtrb",
+]
 
 [[package]]
 name = "merlin-model"
