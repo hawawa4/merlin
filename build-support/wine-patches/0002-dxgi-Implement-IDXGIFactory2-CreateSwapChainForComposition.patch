@@ -1,7 +1,7 @@
 diff -ruN a/dlls/dxgi/dxgi_private.h b/dlls/dxgi/dxgi_private.h
 --- a/dlls/dxgi/dxgi_private.h
 +++ b/dlls/dxgi/dxgi_private.h
-@@ -186,8 +186,19 @@
+@@ -186,8 +186,22 @@
      IDXGIOutput *target;
      LONG present_count;
      LONG in_set_fullscreen_state;
@@ -11,6 +11,9 @@ diff -ruN a/dlls/dxgi/dxgi_private.h b/dlls/dxgi/dxgi_private.h
 +     * dcomp attaches them to a visual tree that targets an HWND, they present to that HWND. */
 +    HWND composition_window;
 +    HWND composition_target;
++    /* The last composed frame (see d3d11_swapchain_compose()). */
++    struct wined3d_texture *composition_shadow;
++    unsigned int composition_width, composition_height;
  };
  
 +/* Private data dcomp sets on a composition swapchain to tell it which HWND to present to. */
@@ -24,7 +27,7 @@ diff -ruN a/dlls/dxgi/dxgi_private.h b/dlls/dxgi/dxgi_private.h
 diff -ruN a/dlls/dxgi/factory.c b/dlls/dxgi/factory.c
 --- a/dlls/dxgi/factory.c
 +++ b/dlls/dxgi/factory.c
-@@ -390,10 +390,64 @@
+@@ -390,10 +390,58 @@
  static HRESULT STDMETHODCALLTYPE dxgi_factory_CreateSwapChainForComposition(IWineDXGIFactory *iface,
          IUnknown *device, const DXGI_SWAP_CHAIN_DESC1 *desc, IDXGIOutput *output, IDXGISwapChain1 **swapchain)
  {
@@ -77,12 +80,6 @@ diff -ruN a/dlls/dxgi/factory.c b/dlls/dxgi/factory.c
 +            return hr;
 +        }
 +        d3d11_swapchain_set_composition_window(*swapchain, window);
-+        /* Applications repaint only the dirty rectangles of a flip model swapchain and rely
-+         * on the compositor keeping the rest of the previous frame on screen. wined3d
-+         * rotates multiple back buffers, so the "next" buffer would hold an older frame.
-+         * One persistent buffer, presented whole, gives the same result. */
-+        if (FAILED(hr = IDXGISwapChain1_ResizeBuffers(*swapchain, 1, 0, 0, DXGI_FORMAT_UNKNOWN, desc->Flags)))
-+            WARN("Failed to switch to a single back buffer, hr %#lx.\n", hr);
 +        return S_OK;
 +    }
 +
@@ -94,16 +91,18 @@ diff -ruN a/dlls/dxgi/factory.c b/dlls/dxgi/factory.c
 diff -ruN a/dlls/dxgi/swapchain.c b/dlls/dxgi/swapchain.c
 --- a/dlls/dxgi/swapchain.c
 +++ b/dlls/dxgi/swapchain.c
-@@ -264,6 +264,8 @@
+@@ -264,6 +264,10 @@
          IWineDXGIFactory_Release(swapchain->factory);
          wined3d_swapchain_decref(swapchain->wined3d_swapchain);
          IWineDXGIDevice_Release(device);
++        if (swapchain->composition_shadow)
++            wined3d_texture_decref(swapchain->composition_shadow);
 +        if (swapchain->composition_window)
 +            DestroyWindow(swapchain->composition_window);
      }
  
      return refcount;
-@@ -278,6 +280,14 @@
+@@ -278,6 +282,14 @@
  
      TRACE("iface %p, guid %s, data_size %u, data %p.\n", iface, debugstr_guid(guid), data_size, data);
  
@@ -118,7 +117,90 @@ diff -ruN a/dlls/dxgi/swapchain.c b/dlls/dxgi/swapchain.c
      return dxgi_set_private_data(&swapchain->private_store, guid, data_size, data);
  }
  
-@@ -345,7 +355,21 @@
+@@ -323,8 +335,81 @@
+ 
+ /* IDXGISwapChain1 methods */
+ 
++static void __stdcall composition_shadow_destroyed(void *parent)
++{
++}
++
++static const struct wined3d_parent_ops composition_shadow_parent_ops =
++{
++    composition_shadow_destroyed,
++};
++
++/* Applications like JUCE's Direct2D renderer repaint only the dirty rectangles of a flip model
++ * swapchain and expect the compositor to keep the rest of the previous frame. wined3d does not
++ * keep the back buffer's old contents across a present, so the last composed frame is kept in a
++ * texture of our own: the freshly drawn dirty rectangles are copied into it, and the complete
++ * frame is copied back into the back buffer before it is presented. */
++static void d3d11_swapchain_compose(struct d3d11_swapchain *swapchain, const DXGI_PRESENT_PARAMETERS *parameters)
++{
++    struct wined3d_resource_desc desc;
++    struct wined3d_device_context *context;
++    struct wined3d_texture *back_buffer;
++    struct wined3d_device *device;
++    BOOL fresh = FALSE;
++    RECT full;
++
++    wined3d_mutex_lock();
++    device = wined3d_swapchain_get_device(swapchain->wined3d_swapchain);
++    context = wined3d_device_get_immediate_context(device);
++    back_buffer = wined3d_swapchain_get_back_buffer(swapchain->wined3d_swapchain, 0);
++    wined3d_resource_get_desc(wined3d_texture_get_resource(back_buffer), &desc);
++
++    if (!swapchain->composition_shadow || swapchain->composition_width != desc.width
++            || swapchain->composition_height != desc.height)
++    {
++        if (swapchain->composition_shadow)
++            wined3d_texture_decref(swapchain->composition_shadow);
++        swapchain->composition_shadow = NULL;
++        desc.bind_flags |= WINED3D_BIND_SHADER_RESOURCE;
++        if (FAILED(wined3d_texture_create(device, &desc, 1, 1, 0, NULL, NULL,
++                &composition_shadow_parent_ops, &swapchain->composition_shadow)))
++        {
++            ERR("Failed to create the composition shadow texture.\n");
++            wined3d_mutex_unlock();
++            return;
++        }
++        swapchain->composition_width = desc.width;
++        swapchain->composition_height = desc.height;
++        fresh = TRUE;
++    }
++
++    SetRect(&full, 0, 0, desc.width, desc.height);
++    if (fresh || !parameters || !parameters->DirtyRectsCount || !parameters->pDirtyRects)
++    {
++        wined3d_device_context_blt(context, swapchain->composition_shadow, 0, &full,
++                back_buffer, 0, &full, 0, NULL, WINED3D_TEXF_POINT);
++    }
++    else
++    {
++        unsigned int i;
++
++        for (i = 0; i < parameters->DirtyRectsCount; ++i)
++        {
++            RECT r = parameters->pDirtyRects[i];
++
++            if (!IntersectRect(&r, &r, &full))
++                continue;
++            wined3d_device_context_blt(context, swapchain->composition_shadow, 0, &r,
++                    back_buffer, 0, &r, 0, NULL, WINED3D_TEXF_POINT);
++        }
++    }
++    wined3d_device_context_blt(context, back_buffer, 0, &full,
++            swapchain->composition_shadow, 0, &full, 0, NULL, WINED3D_TEXF_POINT);
++    wined3d_mutex_unlock();
++}
++
+ static HRESULT d3d11_swapchain_present(struct d3d11_swapchain *swapchain,
+-        unsigned int sync_interval, unsigned int flags)
++        unsigned int sync_interval, unsigned int flags, const DXGI_PRESENT_PARAMETERS *parameters)
+ {
+     HRESULT hr;
+ 
+@@ -345,8 +430,24 @@
          return S_OK;
      }
  
@@ -127,6 +209,7 @@ diff -ruN a/dlls/dxgi/swapchain.c b/dlls/dxgi/swapchain.c
 +    {
 +        RECT dst;
 +
++        d3d11_swapchain_compose(swapchain, parameters);
 +        /* A composition swapchain shows up in the window its visual tree targets. */
 +        GetClientRect(swapchain->composition_target, &dst);
 +        hr = wined3d_swapchain_present(swapchain->wined3d_swapchain, NULL, &dst,
@@ -139,34 +222,35 @@ diff -ruN a/dlls/dxgi/swapchain.c b/dlls/dxgi/swapchain.c
 +
 +    if (SUCCEEDED(hr))
          InterlockedIncrement(&swapchain->present_count);
++
      return hr;
  }
-@@ -565,6 +589,10 @@
-     if (flags & ~supported_flags)
-         FIXME("Ignoring flags %#x.\n", flags & ~supported_flags);
  
-+    /* Composition swapchains keep one persistent back buffer, see CreateSwapChainForComposition. */
-+    if (swapchain->composition_window && buffer_count)
-+        buffer_count = 1;
-+
-     wined3d_mutex_lock();
-     wined3d_swapchain_get_desc(swapchain->wined3d_swapchain, &wined3d_desc);
-     if (!(wined3d_desc.flags & WINED3D_SWAPCHAIN_FRAME_LATENCY_WAITABLE_OBJECT)
-@@ -749,8 +777,11 @@
+@@ -356,7 +457,7 @@
+ 
+     TRACE("iface %p, sync_interval %u, flags %#x.\n", iface, sync_interval, flags);
+ 
+-    return d3d11_swapchain_present(swapchain, sync_interval, flags);
++    return d3d11_swapchain_present(swapchain, sync_interval, flags, NULL);
+ }
+ 
+ static HRESULT STDMETHODCALLTYPE d3d11_swapchain_GetBuffer(IDXGISwapChain4 *iface,
+@@ -749,10 +850,11 @@
      TRACE("iface %p, sync_interval %u, flags %#x, present_parameters %p.\n",
              iface, sync_interval, flags, present_parameters);
  
 -    if (present_parameters)
 -        FIXME("Ignored present parameters %p.\n", present_parameters);
-+    /* Dirty rectangles and scrolling are ignored: the whole back buffer is presented. For
-+     * composition swapchains that is what keeps the unchanged parts visible (see
-+     * CreateSwapChainForComposition). */
++    /* Dirty rectangles are used by composition swapchains only (d3d11_swapchain_compose()). */
 +    if (present_parameters && (present_parameters->pScrollRect || present_parameters->pScrollOffset))
 +        FIXME("Ignored scroll parameters in present parameters %p.\n", present_parameters);
  
-     return d3d11_swapchain_present(swapchain, sync_interval, flags);
+-    return d3d11_swapchain_present(swapchain, sync_interval, flags);
++    return d3d11_swapchain_present(swapchain, sync_interval, flags, present_parameters);
  }
-@@ -1043,6 +1074,14 @@
+ 
+ static BOOL STDMETHODCALLTYPE d3d11_swapchain_IsTemporaryMonoSupported(IDXGISwapChain4 *iface)
+@@ -1043,6 +1145,14 @@
      return hr;
  }
  

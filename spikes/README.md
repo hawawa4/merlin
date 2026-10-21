@@ -266,12 +266,16 @@ MIDI keyboard.
   JUCE's Direct2D renderer needs `CreateSwapChainForComposition` plus `dcomp.dll`, which Wine
   stubbed completely. 0002 implements the composition swapchain in dxgi: it lives on an internal
   hidden window and presents to the HWND that dcomp attaches it to (`dst_window_override`, private
-  data `WINE_DXGI_COMPOSITION_TARGET`), with one persistent back buffer, because JUCE repaints only
-  dirty rectangles and relies on the compositor keeping the rest of the frame (wined3d rotates
-  multiple back buffers, which showed old frames). 0003 is a minimal `dcomp.dll`: device, target
-  and visual objects; `Commit` binds each visual's swapchain to its target window; transforms,
-  clips and surfaces are not implemented. Verified on the real desktop; `import -window` (XGetImage)
-  shows GL/Vulkan-drawn windows partially, so use Spectacle for screenshots of such plugins.
+  data `WINE_DXGI_COMPOSITION_TARGET`). JUCE repaints only dirty rectangles and relies on the
+  compositor keeping the rest of the previous frame, but wined3d does not keep the back buffer's old
+  contents across a present (first frame complete, then only the repainted rectangles showed, found by
+  hovering in the real app). So the swapchain keeps a private "shadow" texture of the last composed
+  frame: each present copies the dirty rectangles into it and copies the whole frame back before
+  presenting. 0003 is a minimal `dcomp.dll`: device, target and visual objects; `Commit` binds each
+  visual's swapchain to its target window; transforms, clips and surfaces are not implemented.
+  Verified on the real desktop (`import -window` shows GL-drawn windows unreliably; use Spectacle).
+  Proton does not help: its `dcomp.dll` is the stock stub and DXVK only offers a dummy composition
+  swapchain that never shows anything.
   Rebuild after editing the Wine tree: `tools/wine-rebuild.sh` (seconds, incremental).
 - **First-run dialogs:** a fresh prefix offers to install Wine Mono (and Gecko). The app must
   set `WINEDLLOVERRIDES="mscoree,mshtml="` when creating prefixes, or ship Mono preinstalled.
