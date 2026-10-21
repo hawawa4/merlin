@@ -12,9 +12,13 @@ rtsan_lib := "/usr/lib/llvm-21/lib/clang/21/lib/linux/libclang_rt.rtsan-x86_64.a
 default:
     @just --list --unsorted
 
-# This round's test: Surge XT as a VST3 in our own VST3 host (S3), editor embedded. Try:
-#   just dev                      Surge XT      just dev "Surge XT Effects"
-dev name="Surge XT": (s3 (assets / "dl/surge-linux" / name + ".vst3"))
+# This round's test: Windows Surge XT on our patched Wine (WaitForVBlank), editor embedded. Try:
+#   just dev                      Surge XT      just dev "Six Sines"
+dev name="Surge XT": (s4-vblank name)
+
+# S3: Surge XT as a VST3 in our own VST3 host, editor embedded. Try:
+#   just s3-dev                   Surge XT      just s3-dev "Surge XT Effects"
+s3-dev name="Surge XT": (s3 (assets / "dl/surge-linux" / name + ".vst3"))
 
 # S4 with DXVK (fixes frozen JUCE editors under Wine, but blanks OB-Xf). Try:
 #   just s4-dxvk                  Surge XT      just s4-dxvk "Six Sines"
@@ -65,8 +69,25 @@ s4 plugin=(bridges / "clap/Surge XT.clap"):
         cargo run -p s2-clap-embed --release -- "{{plugin}}"
 
 # S4 compatibility matrix: every bridged plugin, load/embed time and live-redraw check
+# (plain system Wine by default; `just s4-matrix-vblank` for our patched build)
 s4-matrix *bridges:
     tools/s4-matrix.sh {{bridges}}
+
+# Build our patched Wine (Wine Staging + build-support/wine-patches/) in Docker; output in runtime/
+wine-build version="11.20" tag="vblank":
+    tools/build-wine.sh {{version}} {{tag}}
+
+patched_wine := justfile_directory() / "runtime/wine-11.20-vblank/bin/wine"
+
+# S4 with our patched Wine (WaitForVBlank implemented), on its own prefix. Try:
+#   just s4-vblank                Surge XT      just s4-vblank "Six Sines"
+s4-vblank name="Surge XT":
+    PATH="{{yabridge_dir}}:$PATH" WINELOADER={{patched_wine}} \
+        cargo run -p s2-clap-embed --release -- "{{assets}}/bridges-vblank/clap/{{name}}.clap"
+
+# S4 compatibility matrix on our patched Wine
+s4-matrix-vblank:
+    WINELOADER={{patched_wine}} tools/s4-matrix.sh {{justfile_directory()}}/{{assets}}/bridges-vblank/clap/*.clap
 
 # Format, lint and test: run before committing
 check: fmt-check clippy test

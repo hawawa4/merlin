@@ -223,13 +223,13 @@ MIDI keyboard.
   screenshots the plugin window, sets a parameter from the host and plays a chord,
   screenshots again; a live editor changes pixels. Control: native Surge `yes(756)`.
 
-  | Plugin (Windows CLAP) | GUI framework | Plain Wine 11.20 | + DXVK 3.1.1 |
-  |---|---|---|---|
-  | TyrellN6 3.0 beta | u-he | ✅ redraws | ✅ redraws |
-  | Surge XT 1.3.4 | JUCE | ❌ frozen | ✅ redraws |
-  | Six Sines (nightly) | JUCE | ❌ frozen | ✅ redraws |
-  | OB-Xf (nightly) | JUCE | ❌ frozen | ❌ white, never draws |
-  | CardinalSynth 26.02 | DPF/OpenGL | 💥 Wine stack overflow in `set_parent` | not tried |
+  | Plugin (Windows CLAP) | GUI framework | Plain Wine 11.20 | + DXVK 3.1.1 | Our patched Wine (WaitForVBlank) |
+  |---|---|---|---|---|
+  | TyrellN6 3.0 beta | u-he | ✅ redraws | ✅ redraws | ✅ redraws |
+  | Surge XT 1.3.4 | JUCE | ❌ frozen | ✅ redraws | ✅ redraws |
+  | Six Sines (nightly) | JUCE | ❌ frozen | ✅ redraws | ✅ redraws |
+  | OB-Xf (nightly) | JUCE 8 + Direct2D | ❌ first frame, then frozen | ❌ white, never draws | ❌ white, never draws |
+  | CardinalSynth 26.02 | DPF/OpenGL | 💥 Wine stack overflow in `set_parent` | not tried | 💥 same |
   | Podolski 1.2.3 | u-he | VST3 only, needs S3 | |
 
   Load 1.5 s warm (3.5 s cold), embed 0.1–1.1 s.
@@ -245,6 +245,23 @@ MIDI keyboard.
   ~15 lines, and upstream it: fixes JUCE without DXVK side effects; (2) DXVK, which helps
   but broke OB-Xf (white editor), so it can't be the blanket answer; per-plugin quirks are
   possible as a fallback.
+- **Patched Wine (`just wine-build`, `just s4-matrix-vblank`).** `tools/build-wine.sh` builds
+  Wine Staging 11.20 plus `build-support/wine-patches/*.patch` in Docker (64-bit only, about
+  4 minutes on 16 cores, output `runtime/wine-11.20-vblank/`; the prefix is a copy of the
+  plain one, `test-assets/wine/prefix-vblank`). The one patch (`dlls/dxgi/output.c`) makes
+  `WaitForVBlank` sleep to the next refresh boundary (QPC-based, refresh rate from the
+  wined3d display mode, 60 Hz fallback) and return `S_OK`. Result: **Surge XT and Six Sines
+  redraw** (Surge's voice counter shows "4 / 16" during the chord) with no DXVK, and the
+  `WaitForVBlank stub!` fixme is gone. No other plugin changed behaviour, except OB-Xf:
+  - **OB-Xf is now blank instead of frozen.** Plain Wine paints one correct frame; with a
+    working vblank JUCE's repaint thread runs, and its Direct2D renderer (JUCE 8) calls
+    `IDXGIFactory2::CreateSwapChainForComposition` on every frame (1773 times in 15 s). Wine
+    stubs it (`dxgi_factory_CreateSwapChainForComposition ... stub!`), so nothing is drawn.
+    DXVK is white for the same reason. This is a second Wine gap behind the first one: JUCE 8
+    plugins built with the Direct2D renderer need composition swap chains (or a DirectComposition
+    implementation). Options: implement it in Wine (swap chain for composition backed by a
+    plain HWND swap chain, which is what the first frame used), or a per-plugin fallback.
+  - Untested: CPU cost of the vblank threads (one per output, 60 wakeups/s each, no spinning).
 - **First-run dialogs:** a fresh prefix offers to install Wine Mono (and Gecko). The app must
   set `WINEDLLOVERRIDES="mscoree,mshtml="` when creating prefixes, or ship Mono preinstalled.
 - **Manual test still needed:** click and drag the Windows Surge's controls (does the
