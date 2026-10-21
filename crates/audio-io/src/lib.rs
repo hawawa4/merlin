@@ -2,6 +2,13 @@
 //! engine from a script without any sound card, for tests and offline rendering. The JACK
 //! backend is the next addition.
 
+mod jack_backend;
+
+pub use jack_backend::{
+    HARDWARE_INPUTS, JackBackend, JackClient, MemLock, MidiSource, Stats, VIRTUAL_INPUT,
+    lock_memory, preload_pipewire_jack,
+};
+
 use merlin_engine::{Command, Engine, EngineHandle};
 use merlin_hosting::MidiEvent;
 

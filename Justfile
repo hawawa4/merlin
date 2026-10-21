@@ -115,6 +115,10 @@ rt-status:
     @busctl --system status org.freedesktop.RealtimeKit1 >/dev/null 2>&1 && echo "rtkit: running" || echo "rtkit: not available"
     @for pid in $(pidof pipewire); do ps -L -o cls=,comm= -p $pid | grep -q "^ *FF" && echo "pipewire $pid: realtime" || echo "pipewire $pid: NOT realtime"; done
 
+# Phase 1: the engine on JACK with two zoned sine slots and an arpeggio (silent with `--quiet`)
+jack-demo *args:
+    cargo run -p merlin-audio-io --release --example jack_demo -- {{args}}
+
 # S1: JACK sine synth from your MIDI keyboard (frames: 64 or 128)
 s1 frames="128" seconds="30":
     cargo run -p s1-audio --release -- --frames {{frames}} --seconds {{seconds}}

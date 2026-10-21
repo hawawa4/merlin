@@ -841,10 +841,14 @@ dependencies = [
 name = "merlin-audio-io"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "assert_no_alloc",
  "merlin-engine",
  "merlin-hosting",
  "merlin-model",
+ "jack",
+ "libc",
+ "rtrb",
 ]
 
 [[package]]

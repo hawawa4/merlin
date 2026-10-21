@@ -8,6 +8,10 @@ publish.workspace = true
 [dependencies]
 merlin-engine.workspace = true
 merlin-hosting.workspace = true
+anyhow.workspace = true
+jack.workspace = true
+rtrb.workspace = true
+libc = "0.2"
 
 [dev-dependencies]
 merlin-model.workspace = true

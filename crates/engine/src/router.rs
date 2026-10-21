@@ -24,8 +24,9 @@ use merlin_model::{MAX_SLOTS, MidiFilter, SelectMode};
 use crate::Shared;
 use crate::events::EventBuf;
 
-/// MIDI inputs the engine distinguishes (keyboard, controller, ...).
-pub const MAX_INPUTS: usize = 4;
+/// MIDI inputs the engine distinguishes. Input 0 is the virtual keyboard (on-screen keys and
+/// tests); hardware inputs are 1 and up.
+pub const MAX_INPUTS: usize = 8;
 
 /// A slot's filter as the audio thread sees it (input names resolved to indices).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
