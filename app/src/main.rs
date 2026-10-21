@@ -11,6 +11,7 @@ mod guard;
 mod keyboard;
 mod paths;
 mod quirks;
+mod scan_worker;
 mod session;
 mod settings;
 mod ui;
@@ -86,7 +87,7 @@ struct App {
     proxy: EventLoopProxy<UserEvent>,
     args: Args,
     settings: Settings,
-    found: Vec<Found>,
+    plugin_dirs: Vec<PathBuf>,
     guard: Arc<guard::Guard>,
     run: Option<Running>,
 }
@@ -115,33 +116,6 @@ fn own_cpu_ticks() -> u64 {
 fn ticks_per_second() -> f64 {
     // SAFETY: sysconf is always safe to call.
     unsafe { libc::sysconf(libc::_SC_CLK_TCK) as f64 }
-}
-
-/// Finds plugins: standard folders, settings, command line. The result is cached by file
-/// stamp so only new or changed files are loaded (bridged ones start Wine, which is slow).
-fn discover(settings: &Settings, extra: &[PathBuf]) -> Vec<Found> {
-    let mut dirs = merlin_scanner::default_plugin_dirs();
-    dirs.extend(settings.plugin_dirs.iter().cloned());
-    dirs.extend(extra.iter().cloned());
-    let cache_file = paths::plugin_cache_file();
-    let mut cache = merlin_scanner::Cache::load(&cache_file);
-    let t = Instant::now();
-    let entries = merlin_scanner::scan(&dirs, &mut cache, |p| {
-        println!("scanning {} ...", p.display());
-    });
-    if let Err(e) = cache.save(&cache_file) {
-        eprintln!("could not save the plugin cache: {e:#}");
-    }
-    for e in entries.iter().filter(|e| e.error.is_some()) {
-        eprintln!(
-            "cannot load {}: {}",
-            e.path.display(),
-            e.error.as_deref().unwrap()
-        );
-    }
-    let found = merlin_scanner::with_feature(&entries, "instrument");
-    println!("{} instruments found in {:?}", found.len(), t.elapsed());
-    found
 }
 
 impl App {
@@ -184,7 +158,7 @@ impl App {
             window.scale_factor(),
             self.proxy.clone(),
             &self.settings,
-            self.found.clone(),
+            self.plugin_dirs.clone(),
             self.guard.clone(),
         )?;
 
@@ -581,6 +555,7 @@ impl ApplicationHandler<UserEvent> for App {
         run.wakeups += 1;
         run.session.handle_event(event);
         run.service_at = run.session.service();
+        run.ask_redraw();
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
@@ -724,7 +699,9 @@ fn main() -> Result<()> {
     }
     merlin_audio_io::preload_pipewire_jack();
     let guard = guard::Guard::new();
-    let found = discover(&settings, &args.plugin_dirs);
+    let mut plugin_dirs = merlin_scanner::default_plugin_dirs();
+    plugin_dirs.extend(settings.plugin_dirs.iter().cloned());
+    plugin_dirs.extend(args.plugin_dirs.iter().cloned());
 
     let event_loop = EventLoop::<UserEvent>::with_user_event()
         .with_x11()
@@ -733,7 +710,7 @@ fn main() -> Result<()> {
         proxy: event_loop.create_proxy(),
         args,
         settings,
-        found,
+        plugin_dirs,
         guard,
         run: None,
     };

@@ -15,8 +15,9 @@ default:
 # The app. Loads plugins from the standard CLAP folders plus test-assets (Linux and, through
 # our patched Wine, Windows ones). Try: just dev --fresh      just dev --rig my.irig
 dev *args:
+    cargo build -p merlin --release
     PATH="{{yabridge_dir}}:$PATH" WINELOADER={{patched_wine}} \
-        cargo run -p merlin --release -- \
+        target/release/merlin \
         --plugin-dir {{assets}}/dl/surge-linux --plugin-dir {{assets}}/bridges-vblank/clap {{args}}
 
 # The S5 rack spike (the old `just dev`)

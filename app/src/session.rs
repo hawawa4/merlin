@@ -14,7 +14,10 @@ use merlin_hosting::clap::ClapLibrary;
 use merlin_hosting::vst3::Vst3Library;
 use merlin_hosting::{EditorSize, HostEvent, MidiEvent, PluginHandle, Waker};
 use merlin_model::{FxSettings, MAX_SLOTS, PluginRef, Rig, SelectMode, Slot};
-use merlin_scanner::{Found, Quarantine};
+use merlin_scanner::{Cache, Entry, Found, Quarantine};
+use std::sync::mpsc;
+
+use crate::scan_worker::{self, ScanMsg};
 use winit::event_loop::EventLoopProxy;
 
 use crate::guard::{self, Guard, HostInfo};
@@ -28,6 +31,8 @@ const MAX_BLOCK: usize = 4096;
 #[derive(Debug)]
 pub enum UserEvent {
     Host(usize, HostEvent),
+    /// The scan worker has news.
+    Scan,
 }
 
 struct SlotWaker {
@@ -81,6 +86,13 @@ pub struct Session {
     /// What to tell the user instead of, or beside, a slot's editor (see `quirks`).
     pub notes: Vec<Option<String>>,
     pub found: Vec<Found>,
+    /// Every plugin file the scanner knows, including the ones that failed to load.
+    pub entries: Vec<Entry>,
+    /// Where plugins are looked for (standard folders, settings, command line).
+    pub plugin_dirs: Vec<PathBuf>,
+    scan_rx: Option<mpsc::Receiver<ScanMsg>>,
+    /// The file the scanner is probing right now.
+    pub scan_current: Option<PathBuf>,
     pub quarantine: Quarantine,
     guard: Arc<Guard>,
     pub engine: EngineHandle,
@@ -99,7 +111,7 @@ impl Session {
         scale: f64,
         proxy: EventLoopProxy<UserEvent>,
         settings: &Settings,
-        found: Vec<Found>,
+        plugin_dirs: Vec<PathBuf>,
         guard: Arc<Guard>,
     ) -> Result<Self> {
         let client = JackClient::open("merlin", Some(settings.frames))?;
@@ -117,7 +129,11 @@ impl Session {
             targets: Vec::new(),
             viewing: None,
             notes: vec![None; UI_SLOTS],
-            found,
+            found: Vec::new(),
+            entries: Vec::new(),
+            plugin_dirs,
+            scan_rx: None,
+            scan_current: None,
             quarantine: Quarantine::load(&crate::paths::quarantine_file()),
             guard,
             engine: handle,
@@ -129,6 +145,13 @@ impl Session {
             sample_rate,
             last_autosave: Instant::now(),
         };
+        // Start from what the cache knows, then let the background scan catch up.
+        s.entries = merlin_scanner::cached_entries(
+            &s.plugin_dirs,
+            &Cache::load(&crate::paths::plugin_cache_file()),
+        );
+        s.refresh_found();
+        s.start_scan(Vec::new());
         s.say(format!(
             "JACK at {sample_rate} Hz, outputs {outputs:?}, MIDI {:?}",
             s.midi_sources
@@ -137,6 +160,67 @@ impl Session {
                 .collect::<Vec<_>>()
         ));
         Ok(s)
+    }
+
+    fn refresh_found(&mut self) {
+        self.found = merlin_scanner::with_feature(&self.entries, "instrument");
+    }
+
+    pub fn scanning(&self) -> bool {
+        self.scan_rx.is_some()
+    }
+
+    /// Probes new and changed plugin files in the background; `forget` files are probed again
+    /// even if the cache has them ("retry").
+    pub fn start_scan(&mut self, forget: Vec<PathBuf>) {
+        if self.scan_rx.is_some() {
+            return;
+        }
+        self.scan_rx = Some(scan_worker::spawn(
+            self.plugin_dirs.clone(),
+            crate::paths::plugin_cache_file(),
+            forget,
+            self.proxy.clone(),
+        ));
+    }
+
+    /// Takes in what the scan worker has reported.
+    pub fn poll_scan(&mut self) {
+        let Some(rx) = self.scan_rx.as_ref() else {
+            return;
+        };
+        let mut finished = false;
+        let mut changed = false;
+        while let Ok(msg) = rx.try_recv() {
+            match msg {
+                ScanMsg::Started(p) => self.scan_current = Some(p),
+                ScanMsg::Entry(e) => {
+                    match self.entries.iter_mut().find(|x| x.path == e.path) {
+                        Some(slot) => *slot = e,
+                        None => self.entries.push(e),
+                    }
+                    changed = true;
+                }
+                ScanMsg::Finished => finished = true,
+            }
+        }
+        if changed {
+            self.refresh_found();
+        }
+        if finished {
+            self.scan_rx = None;
+            self.scan_current = None;
+            let failed = self.entries.iter().filter(|e| e.error.is_some()).count();
+            self.say(format!(
+                "scan finished: {} plugins{}",
+                self.found.len(),
+                if failed > 0 {
+                    format!(", {failed} files failed")
+                } else {
+                    String::new()
+                }
+            ));
+        }
     }
 
     pub fn say(&mut self, line: impl Into<String>) {
@@ -433,7 +517,13 @@ impl Session {
     // ---- host events and housekeeping ----------------------------------------------
 
     pub fn handle_event(&mut self, event: UserEvent) {
-        let UserEvent::Host(i, e) = event;
+        let (i, e) = match event {
+            UserEvent::Host(i, e) => (i, e),
+            UserEvent::Scan => {
+                self.poll_scan();
+                return;
+            }
+        };
         match e {
             HostEvent::MainThreadCallback => {
                 if let Some(l) = self.plugins.get_mut(i).and_then(Option::as_mut) {

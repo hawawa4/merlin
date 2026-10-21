@@ -229,7 +229,19 @@ fn header(ui: &mut egui::Ui, s: &mut Session, st: &UiState, actions: &mut Vec<Ac
             ));
         });
     });
-    if let Some(line) = s.log.last() {
+    if s.scanning() {
+        let file = s
+            .scan_current
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        ui.label(
+            RichText::new(format!("scanning plugins… {file}"))
+                .small()
+                .color(Color32::from_rgb(0xe0, 0xb4, 0x4a)),
+        );
+    } else if let Some(line) = s.log.last() {
         ui.label(RichText::new(line).small().weak());
     }
 }

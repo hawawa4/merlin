@@ -940,6 +940,7 @@ dependencies = [
  "anyhow",
  "merlin-hosting",
  "merlin-model",
+ "libc",
  "serde",
  "serde_json",
 ]

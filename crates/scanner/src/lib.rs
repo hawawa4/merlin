@@ -6,8 +6,10 @@
 //! timeouts and quarantine goes on top of the same cache (a file that crashed the scanner is
 //! recorded like a failed load).
 
+mod isolated;
 mod quarantine;
 
+pub use isolated::{RESULT_PREFIX, parse_child_output, run_isolated};
 pub use quarantine::{Quarantine, Quarantined};
 
 use std::collections::HashMap;
@@ -167,13 +169,15 @@ fn stamp(path: &Path) -> Option<(u64, u64)> {
 }
 
 /// Scans the folders, loading only files that are new or changed since the cache entry.
-/// `progress` is called with each file about to be loaded (not for cache hits). Entries for
+/// `progress` is called with each file about to be loaded (not for cache hits) and `done` with
+/// each entry as soon as it is known (cache hits included, so a UI can fill up incrementally). Entries for
 /// files that no longer exist are dropped from the cache.
 pub fn scan_with(
     dirs: &[PathBuf],
     cache: &mut Cache,
     load: &dyn Fn(&Path, bool) -> Result<Vec<PluginInfo>>,
     mut progress: impl FnMut(&Path),
+    mut done: impl FnMut(&Entry),
 ) -> Vec<Entry> {
     let files = find_clap_files(dirs);
     let mut result = Vec::with_capacity(files.len());
@@ -188,6 +192,7 @@ pub fn scan_with(
             && e.size == size
             && e.windows == windows
         {
+            done(e);
             result.push(e.clone());
             continue;
         }
@@ -205,6 +210,7 @@ pub fn scan_with(
             error,
         };
         cache.entries.insert(path, entry.clone());
+        done(&entry);
         result.push(entry);
     }
     // Drop vanished files, but only those under the folders we scanned.
@@ -214,9 +220,25 @@ pub fn scan_with(
     result
 }
 
+/// What the cache already knows about the plugin files in these folders, without loading
+/// anything (stale or unknown files are left out).
+pub fn cached_entries(dirs: &[PathBuf], cache: &Cache) -> Vec<Entry> {
+    find_clap_files(dirs)
+        .into_iter()
+        .filter_map(|(path, windows)| {
+            let (mtime, size) = stamp(&path)?;
+            cache
+                .entries
+                .get(&path)
+                .filter(|e| e.mtime == mtime && e.size == size && e.windows == windows)
+                .cloned()
+        })
+        .collect()
+}
+
 /// [`scan_with`] using the real loaders.
 pub fn scan(dirs: &[PathBuf], cache: &mut Cache, progress: impl FnMut(&Path)) -> Vec<Entry> {
-    scan_with(dirs, cache, &load_any, progress)
+    scan_with(dirs, cache, &load_any, progress, |_| {})
 }
 
 /// A plugin ready to be offered in the browser.
@@ -335,7 +357,7 @@ mod tests {
         let dirs = [d.clone()];
         let mut cache = Cache::default();
 
-        let first = scan_with(&dirs, &mut cache, &loader, |_| {});
+        let first = scan_with(&dirs, &mut cache, &loader, |_| {}, |_| {});
         assert_eq!(calls.borrow().len(), 2);
         assert_eq!(first.len(), 2);
         let bad = first.iter().find(|e| e.path.ends_with("bad.clap")).unwrap();
@@ -344,24 +366,24 @@ mod tests {
 
         // Nothing changed: nothing is loaded, failed files included.
         calls.borrow_mut().clear();
-        let second = scan_with(&dirs, &mut cache, &loader, |_| {});
+        let second = scan_with(&dirs, &mut cache, &loader, |_| {}, |_| {});
         assert!(calls.borrow().is_empty());
         assert_eq!(second, first);
 
         // One file changes: only it is loaded.
         std::fs::write(d.join("good.clap"), b"22").unwrap();
-        scan_with(&dirs, &mut cache, &loader, |_| {});
+        scan_with(&dirs, &mut cache, &loader, |_| {}, |_| {});
         assert_eq!(*calls.borrow(), vec!["good".to_string()]);
 
         // Retry forgets one file.
         calls.borrow_mut().clear();
         cache.forget(&d.join("bad.clap"));
-        scan_with(&dirs, &mut cache, &loader, |_| {});
+        scan_with(&dirs, &mut cache, &loader, |_| {}, |_| {});
         assert_eq!(*calls.borrow(), vec!["bad".to_string()]);
 
         // A removed file leaves the cache.
         std::fs::remove_file(d.join("bad.clap")).unwrap();
-        let third = scan_with(&dirs, &mut cache, &loader, |_| {});
+        let third = scan_with(&dirs, &mut cache, &loader, |_| {}, |_| {});
         assert_eq!(third.len(), 1);
         assert_eq!(cache.len(), 1);
     }
@@ -372,7 +394,13 @@ mod tests {
         std::fs::write(d.join("a.clap"), b"1").unwrap();
         let loader = |_: &Path, _| Ok(vec![info("a")]);
         let mut cache = Cache::default();
-        let entries = scan_with(std::slice::from_ref(&d), &mut cache, &loader, |_| {});
+        let entries = scan_with(
+            std::slice::from_ref(&d),
+            &mut cache,
+            &loader,
+            |_| {},
+            |_| {},
+        );
         let file = d.join("cache/plugins.json");
         cache.save(&file).unwrap();
 
@@ -383,7 +411,13 @@ mod tests {
             Ok(vec![info("a")])
         };
         assert_eq!(
-            scan_with(std::slice::from_ref(&d), &mut again, &counting, |_| {}),
+            scan_with(
+                std::slice::from_ref(&d),
+                &mut again,
+                &counting,
+                |_| {},
+                |_| {}
+            ),
             entries
         );
         assert_eq!(*calls.borrow(), 0, "restored from disk");
