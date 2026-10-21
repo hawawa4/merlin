@@ -8,9 +8,12 @@ use egui::{Color32, RichText};
 
 use merlin_model::{Format, FxSettings};
 
+use crate::browser;
 use crate::keyboard::{self, COLORS, ZoneView};
 use crate::paths;
+use crate::perf;
 use crate::session::{Session, UI_SLOTS};
+use crate::settings_ui::{self, SettingsTab};
 
 /// How a plugin is named in the browser: `Name`, `Name (VST3)`, `Name (Windows)`.
 pub fn found_label(f: &merlin_scanner::Found) -> String {
@@ -47,6 +50,22 @@ pub enum Action {
     FxPreset(usize, String),
     /// Switch the dock between the plugin's editor and the slot's effects.
     Tab(DockTab),
+    ToggleSettings,
+    /// Script-only: show a settings tab.
+    ShowSettingsTab(SettingsTab),
+    AddDir(String),
+    RemoveDir(usize),
+    Rescan(bool),
+    RetryFile(PathBuf),
+    Unquarantine(PathBuf, String),
+    SetBuffer(u32),
+    RefreshMidi,
+    SaveWine(String, String),
+    ToggleFavorite(usize),
+    /// Load browser entry `k` into a free slot.
+    BrowserLoad(usize),
+    /// A browser entry was dropped onto slot `i`.
+    DropLoad(usize, usize),
     NewRig,
     SaveRig,
     OpenRig(PathBuf),
@@ -72,6 +91,14 @@ pub enum DockTab {
 /// UI state that is not part of the session.
 pub struct UiState {
     pub tab: DockTab,
+    pub settings_open: bool,
+    pub settings_tab: SettingsTab,
+    pub query: String,
+    pub favs_only: bool,
+    pub dir_text: String,
+    pub wine_text: String,
+    pub yab_text: String,
+    pub perf: Option<(std::time::Instant, Vec<perf::Check>)>,
     pub peaks_shown: [f32; UI_SLOTS],
     pub held_key: Option<u8>,
     /// Test hook: open this slot's load menu on the next frame.
@@ -92,6 +119,14 @@ impl UiState {
     pub fn new() -> Self {
         Self {
             tab: DockTab::Plugin,
+            settings_open: false,
+            settings_tab: SettingsTab::Plugins,
+            query: String::new(),
+            favs_only: false,
+            dir_text: String::new(),
+            wine_text: String::new(),
+            yab_text: String::new(),
+            perf: None,
             peaks_shown: [0.0; UI_SLOTS],
             held_key: None,
             force_menu: None,
@@ -109,6 +144,14 @@ pub fn draw(
     actions: &mut Vec<Action>,
 ) {
     egui::Panel::top("header").show(ui, |ui| header(ui, s, st, actions));
+    if st.settings_open {
+        egui::CentralPanel::default().show(ui, |ui| {
+            *dock_rect = egui::Rect::NOTHING;
+            settings_ui::show(ui, s, st, actions);
+        });
+        return;
+    }
+    browser::panel(ui, s, st, actions);
     egui::Panel::top("rack").show(ui, |ui| {
         ui.add_space(2.0);
         for i in 0..UI_SLOTS {
@@ -159,6 +202,9 @@ fn header(ui: &mut egui::Ui, s: &mut Session, st: &UiState, actions: &mut Vec<Ac
         }
         if ui.button("Save").clicked() {
             actions.push(Action::SaveRig);
+        }
+        if ui.button("Settings").clicked() {
+            actions.push(Action::ToggleSettings);
         }
         egui::ComboBox::from_id_salt("open-rig")
             .selected_text("Open…")
@@ -291,7 +337,7 @@ fn unit(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, i: usize, actions:
         ))
         .inner_margin(egui::Margin::symmetric(6, 2))
         .corner_radius(3);
-    frame.show(ui, |ui| {
+    let unit_response = frame.show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
             ui.colored_label(color, format!("{}", i + 1));
@@ -397,6 +443,19 @@ fn unit(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, i: usize, actions:
             }
         });
     });
+    // A browser entry dragged onto this unit.
+    let drop = &unit_response.response;
+    if drop.dnd_hover_payload::<usize>().is_some() {
+        ui.painter().rect_stroke(
+            drop.rect,
+            3,
+            egui::Stroke::new(2.0, Color32::WHITE),
+            egui::StrokeKind::Inside,
+        );
+    }
+    if let Some(k) = drop.dnd_release_payload::<usize>() {
+        actions.push(Action::DropLoad(i, *k));
+    }
 }
 
 fn keys(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {

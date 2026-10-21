@@ -7,7 +7,7 @@ routing matrix, no recording.
 
 Status: **Phase 1 (MVP) in progress.** The spikes are done (GO). `just dev` runs the app: a rack of
 8 CLAP or VST3 instruments (Linux, or Windows CLAP through Wine + yabridge) with embedded editors, a keyboard
-map, zones, layers, save/open and autosave. Each slot has built-in effects (EQ, compressor, delay, reverb) and the master has a limiter. The settings panel and a searchable browser are next.
+map, zones, layers, save/open and autosave. Each slot has built-in effects (EQ, compressor, delay, reverb) and the master has a limiter. A searchable browser, a settings panel and a performance check (realtime scheduling and more, with the exact fix) are in.
 
 - [docs/research.md](docs/research.md): existing products and technical research
 - [docs/plan.md](docs/plan.md): architecture and roadmap

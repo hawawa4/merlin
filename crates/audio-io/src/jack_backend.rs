@@ -266,6 +266,15 @@ impl JackBackend {
         self.client.as_client().buffer_size()
     }
 
+    /// Asks the server for a different buffer size. Returns the size now in effect.
+    pub fn set_buffer_size(&self, frames: u32) -> Result<u32> {
+        self.client
+            .as_client()
+            .set_buffer_size(frames)
+            .map_err(|e| anyhow::anyhow!("the server refused the buffer size: {e}"))?;
+        Ok(self.buffer_size())
+    }
+
     /// DSP load reported by the server, percent.
     pub fn cpu_load(&self) -> f32 {
         self.client.as_client().cpu_load()

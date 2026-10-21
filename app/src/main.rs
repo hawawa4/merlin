@@ -7,13 +7,16 @@
 //! `merlin [--plugin-dir DIR]... [--rig FILE] [--fresh]`
 //! Test hook: `MERLIN_SCRIPT="3:load 1 Surge XT; 5:on 60; 6:peak; 8:quit"`.
 
+mod browser;
 mod guard;
 mod keyboard;
 mod paths;
+mod perf;
 mod quirks;
 mod scan_worker;
 mod session;
 mod settings;
+mod settings_ui;
 mod ui;
 
 use std::num::NonZeroU32;
@@ -87,7 +90,7 @@ struct App {
     proxy: EventLoopProxy<UserEvent>,
     args: Args,
     settings: Settings,
-    plugin_dirs: Vec<PathBuf>,
+    cli_dirs: Vec<PathBuf>,
     guard: Arc<guard::Guard>,
     run: Option<Running>,
 }
@@ -158,7 +161,7 @@ impl App {
             window.scale_factor(),
             self.proxy.clone(),
             &self.settings,
-            self.plugin_dirs.clone(),
+            self.cli_dirs.clone(),
             self.guard.clone(),
         )?;
 
@@ -195,7 +198,22 @@ impl App {
             egui,
             painter,
             session,
-            ui: UiState::new(),
+            ui: {
+                let mut ui = UiState::new();
+                ui.wine_text = self
+                    .settings
+                    .wine_loader
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default();
+                ui.yab_text = self
+                    .settings
+                    .yabridge_dir
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default();
+                ui
+            },
             settings: self.settings.clone(),
             frames: 0,
             wakeups: 0,
@@ -259,7 +277,8 @@ impl Running {
         );
         // The dock is unmapped while an egui popup is open, and while the effects tab is shown
         // in its place.
-        let covered = self.ui.popup_open || self.ui.tab == ui::DockTab::Effects;
+        let covered =
+            self.ui.popup_open || self.ui.settings_open || self.ui.tab == ui::DockTab::Effects;
         let _ = self.session.editors.set_popup_open(covered);
 
         let prims = ctx.tessellate(out.shapes, ppp);
@@ -331,6 +350,62 @@ impl Running {
                 s.set_volume(i, v);
                 Ok(())
             }
+            Action::ToggleSettings => {
+                self.ui.settings_open = !self.ui.settings_open;
+                Ok(())
+            }
+            Action::ShowSettingsTab(tab) => {
+                self.ui.settings_open = true;
+                self.ui.settings_tab = tab;
+                Ok(())
+            }
+            Action::AddDir(text) => {
+                s.add_plugin_dir(PathBuf::from(text.trim()));
+                Ok(())
+            }
+            Action::RemoveDir(i) => {
+                s.remove_plugin_dir(i);
+                Ok(())
+            }
+            Action::Rescan(all) => {
+                s.rescan(all);
+                Ok(())
+            }
+            Action::RetryFile(p) => {
+                s.retry_file(p);
+                Ok(())
+            }
+            Action::Unquarantine(p, id) => {
+                s.remove_from_quarantine(&p, &id);
+                Ok(())
+            }
+            Action::SetBuffer(n) => s.set_buffer_size(n),
+            Action::RefreshMidi => {
+                s.refresh_midi();
+                Ok(())
+            }
+            Action::SaveWine(wine, yab) => {
+                let opt = |t: String| {
+                    let t = t.trim().to_owned();
+                    (!t.is_empty()).then(|| PathBuf::from(t))
+                };
+                s.settings.wine_loader = opt(wine);
+                s.settings.yabridge_dir = opt(yab);
+                s.save_settings();
+                s.say("saved; restart the app to use the new Wine settings");
+                Ok(())
+            }
+            Action::ToggleFavorite(k) => {
+                if let Some(f) = s.found.get(k).cloned() {
+                    s.toggle_favorite(&f);
+                }
+                Ok(())
+            }
+            Action::BrowserLoad(k) => s.load_into_free_slot(k),
+            Action::DropLoad(i, k) => match s.found.get(k).cloned() {
+                Some(f) => s.load(i, &f),
+                None => Err(anyhow!("no such plugin")),
+            },
             Action::SetFx(i, fx) => {
                 s.set_fx(i, fx);
                 Ok(())
@@ -649,6 +724,16 @@ fn parse_script() -> Vec<(Duration, Action)> {
                 ),
                 "volume" => Action::Volume(slot(words.next())?, words.next()?.parse().ok()?),
                 "transpose" => Action::Transpose(slot(words.next())?, words.next()?.parse().ok()?),
+                "settings" => match words.next() {
+                    None => Action::ToggleSettings,
+                    Some(t) => Action::ShowSettingsTab(match t {
+                        "audio" => settings_ui::SettingsTab::Audio,
+                        "midi" => settings_ui::SettingsTab::Midi,
+                        "windows" => settings_ui::SettingsTab::Windows,
+                        "perf" => settings_ui::SettingsTab::Performance,
+                        _ => settings_ui::SettingsTab::Plugins,
+                    }),
+                },
                 "tab" => Action::Tab(if words.next()? == "fx" {
                     ui::DockTab::Effects
                 } else {
@@ -699,10 +784,7 @@ fn main() -> Result<()> {
     }
     merlin_audio_io::preload_pipewire_jack();
     let guard = guard::Guard::new();
-    let mut plugin_dirs = merlin_scanner::default_plugin_dirs();
-    plugin_dirs.extend(settings.plugin_dirs.iter().cloned());
-    plugin_dirs.extend(args.plugin_dirs.iter().cloned());
-
+    let cli_dirs = args.plugin_dirs.clone();
     let event_loop = EventLoop::<UserEvent>::with_user_event()
         .with_x11()
         .build()?;
@@ -710,7 +792,7 @@ fn main() -> Result<()> {
         proxy: event_loop.create_proxy(),
         args,
         settings,
-        plugin_dirs,
+        cli_dirs,
         guard,
         run: None,
     };

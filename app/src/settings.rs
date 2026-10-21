@@ -19,6 +19,8 @@ pub struct Settings {
     pub yabridge_dir: Option<PathBuf>,
     /// Seconds between autosaves; 0 turns autosave off.
     pub autosave_secs: u64,
+    /// Browser favourites, as `Session::favorite_key` makes them.
+    pub favorites: Vec<String>,
 }
 
 impl Default for Settings {
@@ -30,6 +32,7 @@ impl Default for Settings {
             wine_loader: None,
             yabridge_dir: None,
             autosave_secs: 30,
+            favorites: Vec::new(),
         }
     }
 }
@@ -45,8 +48,6 @@ impl Settings {
         }
     }
 
-    /// Used by the settings panel (next).
-    #[allow(dead_code)]
     pub fn save(&self, path: &Path) -> Result<()> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;

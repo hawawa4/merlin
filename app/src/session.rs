@@ -13,7 +13,7 @@ use merlin_engine::{Command, EngineHandle, Filter};
 use merlin_hosting::clap::ClapLibrary;
 use merlin_hosting::vst3::Vst3Library;
 use merlin_hosting::{EditorSize, HostEvent, MidiEvent, PluginHandle, Waker};
-use merlin_model::{FxSettings, MAX_SLOTS, PluginRef, Rig, SelectMode, Slot};
+use merlin_model::{Format, FxSettings, MAX_SLOTS, PluginRef, Rig, SelectMode, Slot};
 use merlin_scanner::{Cache, Entry, Found, Quarantine};
 use std::sync::mpsc;
 
@@ -90,6 +90,8 @@ pub struct Session {
     pub entries: Vec<Entry>,
     /// Where plugins are looked for (standard folders, settings, command line).
     pub plugin_dirs: Vec<PathBuf>,
+    cli_dirs: Vec<PathBuf>,
+    pub settings: Settings,
     scan_rx: Option<mpsc::Receiver<ScanMsg>>,
     /// The file the scanner is probing right now.
     pub scan_current: Option<PathBuf>,
@@ -111,7 +113,7 @@ impl Session {
         scale: f64,
         proxy: EventLoopProxy<UserEvent>,
         settings: &Settings,
-        plugin_dirs: Vec<PathBuf>,
+        cli_dirs: Vec<PathBuf>,
         guard: Arc<Guard>,
     ) -> Result<Self> {
         let client = JackClient::open("merlin", Some(settings.frames))?;
@@ -131,7 +133,9 @@ impl Session {
             notes: vec![None; UI_SLOTS],
             found: Vec::new(),
             entries: Vec::new(),
-            plugin_dirs,
+            plugin_dirs: Vec::new(),
+            cli_dirs,
+            settings: settings.clone(),
             scan_rx: None,
             scan_current: None,
             quarantine: Quarantine::load(&crate::paths::quarantine_file()),
@@ -145,6 +149,7 @@ impl Session {
             sample_rate,
             last_autosave: Instant::now(),
         };
+        s.rebuild_dirs();
         // Start from what the cache knows, then let the background scan catch up.
         s.entries = merlin_scanner::cached_entries(
             &s.plugin_dirs,
@@ -160,6 +165,120 @@ impl Session {
                 .collect::<Vec<_>>()
         ));
         Ok(s)
+    }
+
+    /// The folders to scan: the standard ones, the ones in the settings, and the command line's.
+    fn rebuild_dirs(&mut self) {
+        let mut dirs = merlin_scanner::default_plugin_dirs();
+        dirs.extend(self.settings.plugin_dirs.iter().cloned());
+        dirs.extend(self.cli_dirs.iter().cloned());
+        dirs.dedup();
+        self.plugin_dirs = dirs;
+    }
+
+    pub fn save_settings(&mut self) {
+        if let Err(e) = self.settings.save(&crate::paths::settings_file()) {
+            self.say(format!("could not save the settings: {e:#}"));
+        }
+    }
+
+    pub fn add_plugin_dir(&mut self, dir: PathBuf) {
+        if !dir.as_os_str().is_empty() && !self.settings.plugin_dirs.contains(&dir) {
+            self.settings.plugin_dirs.push(dir);
+            self.save_settings();
+            self.rebuild_dirs();
+            self.start_scan(Vec::new());
+        }
+    }
+
+    pub fn remove_plugin_dir(&mut self, index: usize) {
+        if index < self.settings.plugin_dirs.len() {
+            self.settings.plugin_dirs.remove(index);
+            self.save_settings();
+            self.rebuild_dirs();
+            // Entries from folders that are no longer scanned go away.
+            let dirs = self.plugin_dirs.clone();
+            self.entries
+                .retain(|e| dirs.iter().any(|d| e.path.starts_with(d)));
+            self.refresh_found();
+        }
+    }
+
+    /// Probes the plugin files again: only new and changed ones, or all of them.
+    pub fn rescan(&mut self, everything: bool) {
+        let forget = if everything {
+            self.entries.iter().map(|e| e.path.clone()).collect()
+        } else {
+            Vec::new()
+        };
+        self.start_scan(forget);
+    }
+
+    /// Probes one file again (the "retry" for a file that failed to scan).
+    pub fn retry_file(&mut self, path: PathBuf) {
+        self.start_scan(vec![path]);
+    }
+
+    pub fn remove_from_quarantine(&mut self, path: &Path, id: &str) {
+        if self.quarantine.remove(path, id) {
+            let _ = self.quarantine.save(&crate::paths::quarantine_file());
+        }
+    }
+
+    /// A stable key for a browser entry, for favourites.
+    pub fn favorite_key(f: &Found) -> String {
+        format!(
+            "{}:{}{}",
+            match f.info.format {
+                Format::Vst3 => "vst3",
+                _ => "clap",
+            },
+            f.info.id,
+            if f.windows { ":win" } else { "" }
+        )
+    }
+
+    pub fn is_favorite(&self, f: &Found) -> bool {
+        self.settings.favorites.contains(&Self::favorite_key(f))
+    }
+
+    pub fn toggle_favorite(&mut self, f: &Found) {
+        let key = Self::favorite_key(f);
+        match self.settings.favorites.iter().position(|k| *k == key) {
+            Some(p) => {
+                self.settings.favorites.remove(p);
+            }
+            None => self.settings.favorites.push(key),
+        }
+        self.save_settings();
+    }
+
+    /// Loads browser entry `k` into the slot being viewed if that is empty, else the first
+    /// empty slot.
+    pub fn load_into_free_slot(&mut self, k: usize) -> Result<()> {
+        let found = self.found.get(k).cloned().context("no such plugin")?;
+        let free = self
+            .viewing
+            .filter(|&i| self.rig.slots[i].instrument.is_none())
+            .or_else(|| (0..UI_SLOTS).find(|&i| self.rig.slots[i].instrument.is_none()))
+            .context("all slots are in use: drop it on one to replace it")?;
+        self.load(free, &found)
+    }
+
+    pub fn set_buffer_size(&mut self, frames: u32) -> Result<()> {
+        let backend = self.backend.as_ref().context("audio is not running")?;
+        let now = backend.set_buffer_size(frames)?;
+        self.settings.frames = frames;
+        self.save_settings();
+        self.say(format!("buffer size {now} frames"));
+        Ok(())
+    }
+
+    /// Looks for MIDI devices that appeared since the last time and connects them.
+    pub fn refresh_midi(&mut self) {
+        if let Some(b) = self.backend.as_ref() {
+            self.midi_sources = b.connect_midi_sources();
+        }
     }
 
     fn refresh_found(&mut self) {
