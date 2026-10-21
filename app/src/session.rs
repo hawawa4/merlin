@@ -13,7 +13,7 @@ use merlin_engine::{Command, EngineHandle, Filter};
 use merlin_hosting::clap::ClapLibrary;
 use merlin_hosting::vst3::Vst3Library;
 use merlin_hosting::{EditorSize, HostEvent, MidiEvent, PluginHandle, Waker};
-use merlin_model::{MAX_SLOTS, PluginRef, Rig, SelectMode, Slot};
+use merlin_model::{FxSettings, MAX_SLOTS, PluginRef, Rig, SelectMode, Slot};
 use merlin_scanner::{Found, Quarantine};
 use winit::event_loop::EventLoopProxy;
 
@@ -166,7 +166,9 @@ impl Session {
         let s = &self.rig.slots[i];
         let filter = Filter::from_model(&s.filter, |n| self.input_index(n));
         let (volume, pan, mute) = (s.volume, s.pan, s.mute);
+        let settings = s.fx;
         let _ = self.engine.send(Command::SetFilter { slot: i, filter });
+        let _ = self.engine.send(Command::SetFx { slot: i, settings });
         let _ = self.engine.send(Command::SetMix {
             slot: i,
             volume,
@@ -389,6 +391,22 @@ impl Session {
         self.push_slot_settings(i);
     }
 
+    /// A slot's built-in effects.
+    pub fn set_fx(&mut self, i: usize, mut fx: FxSettings) {
+        fx.clamp();
+        self.rig.slots[i].fx = fx;
+        self.dirty = true;
+        self.push_slot_settings(i);
+    }
+
+    pub fn set_master_volume(&mut self, volume: f32) {
+        self.rig.master_volume = volume.clamp(0.0, 1.5);
+        self.dirty = true;
+        let _ = self
+            .engine
+            .send(Command::SetMasterVolume(self.rig.master_volume));
+    }
+
     pub fn set_transpose(&mut self, i: usize, semitones: i8) {
         self.rig.slots[i].filter.transpose = semitones;
         self.dirty = true;
@@ -510,6 +528,7 @@ impl Session {
     pub fn new_rig(&mut self) {
         self.clear();
         self.rig = new_rig("Untitled");
+        let _ = self.engine.send(Command::SetMasterVolume(1.0));
         self.rig_path = None;
         self.dirty = false;
     }
@@ -539,7 +558,16 @@ impl Session {
     pub fn apply_rig(&mut self, mut rig: Rig) {
         self.clear();
         rig.slots.resize_with(UI_SLOTS, Slot::default);
+        for slot in &mut rig.slots {
+            slot.fx.clamp();
+        }
         self.rig = rig;
+        let _ = self
+            .engine
+            .send(Command::SetMasterVolume(self.rig.master_volume));
+        let _ = self
+            .engine
+            .send(Command::SetInheritPedal(self.rig.inherit_pedal));
         for i in 0..UI_SLOTS {
             let Some(r) = self.rig.slots[i].instrument.clone() else {
                 continue;

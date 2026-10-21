@@ -336,8 +336,10 @@ fn volume_pan_and_mute() {
         .ok();
     r.render(BLOCK, vec![]); // ramp
     let left = r.render(BLOCK, vec![]);
-    assert!((left.left[10] - 0.5 * std::f32::consts::SQRT_2).abs() < 1e-3);
-    assert!(left.right[10].abs() < 1e-3);
+    // The master limiter delays everything by its lookahead (about 1.5 ms), so look at the end
+    // of the block.
+    assert!((left.left[BLOCK - 1] - 0.5 * std::f32::consts::SQRT_2).abs() < 1e-3);
+    assert!(left.right[BLOCK - 1].abs() < 1e-3);
 
     r.handle()
         .send(Command::SetMix {
@@ -349,7 +351,7 @@ fn volume_pan_and_mute() {
         .ok();
     r.render(BLOCK, vec![]);
     let muted = r.render(BLOCK, vec![]);
-    assert_eq!(muted.peak(0..BLOCK), 0.0);
+    assert_eq!(muted.peak(100..BLOCK), 0.0);
 
     r.handle()
         .send(Command::SetMix {
@@ -362,7 +364,7 @@ fn volume_pan_and_mute() {
     r.handle().send(Command::SetMasterVolume(0.5)).ok();
     r.render(BLOCK, vec![]);
     let half = r.render(BLOCK, vec![]);
-    assert!((half.left[10] - 0.25).abs() < 1e-3, "master volume");
+    assert!((half.left[BLOCK - 1] - 0.25).abs() < 1e-3, "master volume");
 }
 
 #[test]

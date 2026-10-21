@@ -4,6 +4,7 @@ use assert_no_alloc::{AllocDisabler, assert_no_alloc};
 use merlin_engine::{Command, Filter, SelectMode};
 use merlin_hosting::MidiEvent;
 use merlin_hosting::builtin::SineSynth;
+use merlin_model::FxSettings;
 
 #[global_allocator]
 static ALLOCATOR: AllocDisabler = AllocDisabler;
@@ -37,6 +38,15 @@ fn processing_does_not_allocate() {
                 },
             })
             .ok();
+    }
+    let mut fx = FxSettings::default();
+    fx.eq.enabled = true;
+    fx.eq.mid_db = 5.0;
+    fx.comp.enabled = true;
+    fx.delay.enabled = true;
+    fx.reverb.enabled = true;
+    for slot in 0..4 {
+        handle.send(Command::SetFx { slot, settings: fx }).ok();
     }
     let (mut l, mut r) = (vec![0.0; 128], vec![0.0; 128]);
     let notes: Vec<MidiEvent> = (0..8)

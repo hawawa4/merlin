@@ -24,6 +24,7 @@ toml = "0.9"
 merlin-model = { path = "crates/model" }
 merlin-hosting = { path = "crates/hosting" }
 merlin-engine = { path = "crates/engine" }
+merlin-dsp = { path = "crates/dsp" }
 merlin-audio-io = { path = "crates/audio-io" }
 merlin-embed = { path = "crates/embed" }
 merlin-scanner = { path = "crates/scanner" }

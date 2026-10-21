@@ -437,7 +437,7 @@ libjack preload (S1), `build-wine.sh` and the patch set (S4).
 4. ◐ CLAP hosting (instrument) and state ✅; inserts (effects in a slot) not yet.
 5. ✅ VST3 hosting and state (`hosting::vst3`, ported from S3 onto the `PluginHandle` traits, with `IMessage`/`IAttributeList`; first audio bus only, no programs/units yet). Scanner reads `.vst3` bundles too.
 6. ✅ **`embed` crate:** editor dock, clipping/scroll, editor cache, overlap rules. (Keyboard focus handshake: manual test pending.)
-7. ☐ Built-in FX (EQ, compressor, delay, reverb, master limiter).
+7. ✅ Built-in FX in the `dsp` crate: EQ, compressor, delay, reverb per slot (an Effects tab in the dock), master limiter. Tails keep ringing after an instrument sleeps. Plugin inserts (up to 4 per slot) still to do.
 8. ◐ Scanner library with cache ✅; child-process scanner with timeout/quarantine, VST3 and SoundFont scanning, and a searchable browser ☐.
 9. ◐ Rack UI, keyboard map ✅; Settings panel (plugins, audio, MIDI devices), performance check ☐.
 10. ◐ Windows plugins work through a manually configured Wine (`just dev` wires our patched build); the managed runtime and "Install Windows plugin…" are Phase 2.

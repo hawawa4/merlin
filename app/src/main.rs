@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
 use egui::ViewportId;
+use merlin_model::FxSettings;
 use merlin_scanner::Found;
 use session::{Session, UI_SLOTS, UserEvent};
 use settings::Settings;
@@ -282,7 +283,10 @@ impl Running {
             (dock_rect.width() * ppp).round() as u32,
             (dock_rect.height() * ppp).round() as u32,
         );
-        let _ = self.session.editors.set_popup_open(self.ui.popup_open);
+        // The dock is unmapped while an egui popup is open, and while the effects tab is shown
+        // in its place.
+        let covered = self.ui.popup_open || self.ui.tab == ui::DockTab::Effects;
+        let _ = self.session.editors.set_popup_open(covered);
 
         let prims = ctx.tessellate(out.shapes, ppp);
         let mut textures = out.textures_delta;
@@ -351,6 +355,34 @@ impl Running {
             }
             Action::Volume(i, v) => {
                 s.set_volume(i, v);
+                Ok(())
+            }
+            Action::SetFx(i, fx) => {
+                s.set_fx(i, fx);
+                Ok(())
+            }
+            Action::FxPreset(i, name) => {
+                let mut fx = s.rig.slots[i].fx;
+                match name.as_str() {
+                    "reverb" => fx.reverb.enabled = true,
+                    "delay" => fx.delay.enabled = true,
+                    "comp" => fx.comp.enabled = true,
+                    "eq" => {
+                        fx.eq.enabled = true;
+                        fx.eq.low_db = 5.0;
+                        fx.eq.high_db = -4.0;
+                    }
+                    _ => fx = FxSettings::default(),
+                }
+                s.set_fx(i, fx);
+                Ok(())
+            }
+            Action::SetMaster(v) => {
+                s.set_master_volume(v);
+                Ok(())
+            }
+            Action::Tab(tab) => {
+                self.ui.tab = tab;
                 Ok(())
             }
             Action::Transpose(i, t) => {
@@ -642,6 +674,13 @@ fn parse_script() -> Vec<(Duration, Action)> {
                 ),
                 "volume" => Action::Volume(slot(words.next())?, words.next()?.parse().ok()?),
                 "transpose" => Action::Transpose(slot(words.next())?, words.next()?.parse().ok()?),
+                "tab" => Action::Tab(if words.next()? == "fx" {
+                    ui::DockTab::Effects
+                } else {
+                    ui::DockTab::Plugin
+                }),
+                "master" => Action::SetMaster(words.next()?.parse().ok()?),
+                "fx" => Action::FxPreset(slot(words.next())?, words.next()?.to_string()),
                 "fit" => Action::Fit,
                 "on" => Action::NoteOn(words.next()?.parse().ok()?),
                 "off" => Action::NoteOff(words.next()?.parse().ok()?),

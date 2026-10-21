@@ -11,6 +11,10 @@ pub const MAX_SLOTS: usize = 16;
 /// Current `Rig` file format version.
 pub const RIG_VERSION: u32 = 1;
 
+mod fx;
+
+pub use fx::{CompSettings, DelaySettings, EqSettings, FxSettings, ReverbSettings};
+
 mod base64_opt {
     use base64::Engine as _;
     use base64::engine::general_purpose::STANDARD;
@@ -103,6 +107,8 @@ pub struct Slot {
     pub filter: MidiFilter,
     /// Receives MIDI when selected.
     pub armed: bool,
+    /// The slot's built-in effects (plan §4.3): EQ, compressor, delay, reverb.
+    pub fx: FxSettings,
 }
 
 impl Default for Slot {
@@ -117,6 +123,7 @@ impl Default for Slot {
             mute: false,
             filter: MidiFilter::default(),
             armed: true,
+            fx: FxSettings::default(),
         }
     }
 }

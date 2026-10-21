@@ -881,6 +881,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "merlin-dsp"
+version = "0.0.0"
+dependencies = [
+ "merlin-model",
+]
+
+[[package]]
 name = "merlin-embed"
 version = "0.0.0"
 dependencies = [
@@ -895,6 +902,7 @@ name = "merlin-engine"
 version = "0.0.0"
 dependencies = [
  "assert_no_alloc",
+ "merlin-dsp",
  "merlin-hosting",
  "merlin-model",
  "proptest",

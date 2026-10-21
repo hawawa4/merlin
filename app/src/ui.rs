@@ -6,7 +6,7 @@ use std::sync::atomic::Ordering;
 
 use egui::{Color32, RichText};
 
-use merlin_model::Format;
+use merlin_model::{Format, FxSettings};
 
 use crate::keyboard::{self, COLORS, ZoneView};
 use crate::paths;
@@ -41,6 +41,12 @@ pub enum Action {
     NoteOn(u8),
     NoteOff(u8),
     Panic,
+    SetFx(usize, FxSettings),
+    SetMaster(f32),
+    /// Script-only: switch a named preset of effects on (`reverb`, `delay`, `comp`, `eq`, `off`).
+    FxPreset(usize, String),
+    /// Switch the dock between the plugin's editor and the slot's effects.
+    Tab(DockTab),
     NewRig,
     SaveRig,
     OpenRig(PathBuf),
@@ -57,8 +63,15 @@ pub enum Action {
     Quit,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DockTab {
+    Plugin,
+    Effects,
+}
+
 /// UI state that is not part of the session.
 pub struct UiState {
+    pub tab: DockTab,
     pub peaks_shown: [f32; UI_SLOTS],
     pub held_key: Option<u8>,
     /// Test hook: open this slot's load menu on the next frame.
@@ -78,6 +91,7 @@ pub struct StatusInfo {
 impl UiState {
     pub fn new() -> Self {
         Self {
+            tab: DockTab::Plugin,
             peaks_shown: [0.0; UI_SLOTS],
             held_key: None,
             force_menu: None,
@@ -102,9 +116,15 @@ pub fn draw(
         }
     });
     egui::Panel::bottom("keys").show(ui, |ui| keys(ui, s, st, actions));
-    egui::Panel::top("dockbar").show(ui, |ui| dock_bar(ui, s, actions));
+    egui::Panel::top("dockbar").show(ui, |ui| dock_bar(ui, s, st, actions));
     egui::CentralPanel::default().show(ui, |ui| {
         *dock_rect = ui.available_rect_before_wrap();
+        if st.tab == DockTab::Effects
+            && let Some(i) = s.viewing
+        {
+            fx_panel(ui, s, i, actions);
+            return;
+        }
         let note = s.viewing.and_then(|i| s.notes[i].as_deref());
         let text = if s.viewing.is_none() {
             "Load an instrument into a slot, then select it"
@@ -171,6 +191,25 @@ fn header(ui: &mut egui::Ui, s: &mut Session, st: &UiState, actions: &mut Vec<Ac
                 .clicked()
             {
                 actions.push(Action::Panic);
+            }
+            let mut master = s.rig.master_volume;
+            if ui
+                .add(
+                    egui::Slider::new(&mut master, 0.0..=1.5)
+                        .fixed_decimals(2)
+                        .text("master"),
+                )
+                .changed()
+            {
+                actions.push(Action::SetMaster(master));
+            }
+            let limiting =
+                f32::from_bits(s.engine.shared.limiter_reduction.swap(0, Ordering::Relaxed));
+            if limiting > 0.5 {
+                ui.label(
+                    RichText::new(format!("LIMIT {limiting:.1} dB"))
+                        .color(Color32::from_rgb(0xe0, 0x6c, 0x5a)),
+                );
             }
             let (xruns, dsp, buf) = s
                 .backend()
@@ -372,12 +411,32 @@ fn keys(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Acti
     }
 }
 
-fn dock_bar(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
+fn dock_bar(ui: &mut egui::Ui, s: &Session, st: &UiState, actions: &mut Vec<Action>) {
     ui.horizontal(|ui| {
         let Some(i) = s.viewing else {
             ui.label("EDITOR · nothing selected");
             return;
         };
+        for (tab, label) in [(DockTab::Plugin, "Plugin"), (DockTab::Effects, "Effects")] {
+            if ui.selectable_label(st.tab == tab, label).clicked() {
+                actions.push(Action::Tab(tab));
+            }
+        }
+        ui.separator();
+        if st.tab == DockTab::Effects {
+            let fx = &s.rig.slots[i].fx;
+            let on = [
+                fx.eq.enabled,
+                fx.comp.enabled,
+                fx.delay.enabled,
+                fx.reverb.enabled,
+            ]
+            .iter()
+            .filter(|&&e| e)
+            .count();
+            ui.colored_label(COLORS[i], format!("EFFECTS · {} · {on}/4 on", i + 1));
+            return;
+        }
         let name = s.rig.slots[i]
             .instrument
             .as_ref()
@@ -411,4 +470,230 @@ fn dock_bar(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
             actions.push(Action::Scroll(sx, sy));
         }
     });
+}
+
+fn knob(
+    ui: &mut egui::Ui,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    name: &str,
+    unit: &str,
+    log: bool,
+    decimals: usize,
+) {
+    ui.add(
+        egui::Slider::new(value, range)
+            .logarithmic(log)
+            .fixed_decimals(decimals)
+            .suffix(unit)
+            .text(name),
+    );
+}
+
+/// One effect "pedal": a framed section with an enable toggle.
+fn pedal(
+    ui: &mut egui::Ui,
+    title: &str,
+    color: Color32,
+    enabled: &mut bool,
+    body: impl FnOnce(&mut egui::Ui),
+) {
+    egui::Frame::new()
+        .fill(color.gamma_multiply(if *enabled { 0.22 } else { 0.08 }))
+        .stroke(egui::Stroke::new(
+            1.0,
+            color.gamma_multiply(if *enabled { 1.0 } else { 0.4 }),
+        ))
+        .inner_margin(egui::Margin::same(8))
+        .corner_radius(4)
+        .show(ui, |ui| {
+            // Children of a wrapped row would inherit its horizontal layout.
+            ui.vertical(|ui| {
+                ui.set_width(285.0);
+                ui.spacing_mut().slider_width = 100.0;
+                ui.horizontal(|ui| {
+                    ui.checkbox(enabled, "");
+                    ui.label(RichText::new(title).strong().color(color));
+                });
+                ui.add_enabled_ui(*enabled, body);
+            });
+        });
+}
+
+/// The slot's built-in effects: EQ, compressor, delay, reverb, in signal order.
+fn fx_panel(ui: &mut egui::Ui, s: &Session, i: usize, actions: &mut Vec<Action>) {
+    let before = s.rig.slots[i].fx;
+    let mut fx = before;
+    let reduction = f32::from_bits(s.engine.shared.comp_reduction[i].load(Ordering::Relaxed));
+    ui.add_space(6.0);
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(10.0, 10.0);
+            pedal(
+                ui,
+                "EQ",
+                Color32::from_rgb(0x5a, 0xa9, 0xe0),
+                &mut fx.eq.enabled,
+                |ui| {
+                    knob(ui, &mut fx.eq.low_db, -18.0..=18.0, "low", " dB", false, 1);
+                    knob(
+                        ui,
+                        &mut fx.eq.low_hz,
+                        20.0..=800.0,
+                        "low freq",
+                        " Hz",
+                        true,
+                        0,
+                    );
+                    knob(ui, &mut fx.eq.mid_db, -18.0..=18.0, "mid", " dB", false, 1);
+                    knob(
+                        ui,
+                        &mut fx.eq.mid_hz,
+                        100.0..=10000.0,
+                        "mid freq",
+                        " Hz",
+                        true,
+                        0,
+                    );
+                    knob(ui, &mut fx.eq.mid_q, 0.2..=8.0, "mid Q", "", true, 2);
+                    knob(
+                        ui,
+                        &mut fx.eq.high_db,
+                        -18.0..=18.0,
+                        "high",
+                        " dB",
+                        false,
+                        1,
+                    );
+                    knob(
+                        ui,
+                        &mut fx.eq.high_hz,
+                        1500.0..=16000.0,
+                        "high freq",
+                        " Hz",
+                        true,
+                        0,
+                    );
+                },
+            );
+            pedal(
+                ui,
+                "COMPRESSOR",
+                Color32::from_rgb(0xe0, 0xb4, 0x4a),
+                &mut fx.comp.enabled,
+                |ui| {
+                    knob(
+                        ui,
+                        &mut fx.comp.threshold_db,
+                        -60.0..=0.0,
+                        "threshold",
+                        " dB",
+                        false,
+                        1,
+                    );
+                    knob(ui, &mut fx.comp.ratio, 1.0..=20.0, "ratio", ":1", true, 1);
+                    knob(
+                        ui,
+                        &mut fx.comp.attack_ms,
+                        0.1..=200.0,
+                        "attack",
+                        " ms",
+                        true,
+                        1,
+                    );
+                    knob(
+                        ui,
+                        &mut fx.comp.release_ms,
+                        5.0..=2000.0,
+                        "release",
+                        " ms",
+                        true,
+                        0,
+                    );
+                    knob(
+                        ui,
+                        &mut fx.comp.knee_db,
+                        0.0..=24.0,
+                        "knee",
+                        " dB",
+                        false,
+                        1,
+                    );
+                    knob(
+                        ui,
+                        &mut fx.comp.makeup_db,
+                        0.0..=24.0,
+                        "makeup",
+                        " dB",
+                        false,
+                        1,
+                    );
+                    ui.add(
+                        egui::ProgressBar::new((reduction / 24.0).clamp(0.0, 1.0))
+                            .text(format!("reduction {reduction:.1} dB")),
+                    );
+                },
+            );
+            pedal(
+                ui,
+                "DELAY",
+                Color32::from_rgb(0x6c, 0xc9, 0x6a),
+                &mut fx.delay.enabled,
+                |ui| {
+                    knob(
+                        ui,
+                        &mut fx.delay.time_ms,
+                        1.0..=1500.0,
+                        "time",
+                        " ms",
+                        true,
+                        0,
+                    );
+                    knob(
+                        ui,
+                        &mut fx.delay.feedback,
+                        0.0..=0.95,
+                        "feedback",
+                        "",
+                        false,
+                        2,
+                    );
+                    knob(ui, &mut fx.delay.mix, 0.0..=1.0, "mix", "", false, 2);
+                    knob(
+                        ui,
+                        &mut fx.delay.damping_hz,
+                        500.0..=18000.0,
+                        "damping",
+                        " Hz",
+                        true,
+                        0,
+                    );
+                    ui.checkbox(&mut fx.delay.ping_pong, "ping-pong");
+                },
+            );
+            pedal(
+                ui,
+                "REVERB",
+                Color32::from_rgb(0xb0, 0x7a, 0xe0),
+                &mut fx.reverb.enabled,
+                |ui| {
+                    knob(ui, &mut fx.reverb.room, 0.0..=1.0, "room", "", false, 2);
+                    knob(
+                        ui,
+                        &mut fx.reverb.damping,
+                        0.0..=1.0,
+                        "damping",
+                        "",
+                        false,
+                        2,
+                    );
+                    knob(ui, &mut fx.reverb.width, 0.0..=1.0, "width", "", false, 2);
+                    knob(ui, &mut fx.reverb.mix, 0.0..=1.0, "mix", "", false, 2);
+                },
+            );
+        });
+    });
+    if fx != before {
+        actions.push(Action::SetFx(i, fx));
+    }
 }

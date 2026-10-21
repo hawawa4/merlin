@@ -1,8 +1,9 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
+use merlin_dsp::{FxChain, Limiter};
 use merlin_hosting::{Io, MidiEvent, PluginProcessor, ProcessStatus};
-use merlin_model::{MAX_SLOTS, SelectMode};
+use merlin_model::{FxSettings, MAX_SLOTS, SelectMode};
 
 use crate::Shared;
 use crate::events::EventBuf;
@@ -13,6 +14,10 @@ const RETIRED_QUEUE: usize = 64;
 /// Master duck around a panic.
 const FADE_OUT_SECS: f32 = 0.005;
 const FADE_IN_SECS: f32 = 0.020;
+/// Master limiter ceiling.
+const LIMITER_CEILING_DB: f32 = -0.3;
+/// An idle slot's effects are skipped after this long without any output.
+const FX_IDLE_SECS: f32 = 2.0;
 
 /// Main thread -> audio thread.
 pub enum Command {
@@ -38,8 +43,15 @@ pub enum Command {
         slot: usize,
         mode: SelectMode,
     },
+    /// A slot's built-in effects.
+    SetFx {
+        slot: usize,
+        settings: FxSettings,
+    },
     SetInheritPedal(bool),
     SetMasterVolume(f32),
+    /// The master limiter is on by default.
+    SetLimiter(bool),
     Panic,
 }
 
@@ -84,10 +96,13 @@ struct SlotRt {
     last_l: f32,
     last_r: f32,
     sleeping: bool,
+    fx: FxChain,
+    /// Frames of exactly silent output while the instrument sleeps with effects on.
+    quiet_frames: usize,
 }
 
 impl SlotRt {
-    fn new() -> Self {
+    fn new(sample_rate: f32) -> Self {
         Self {
             processor: None,
             volume: 1.0,
@@ -96,6 +111,8 @@ impl SlotRt {
             last_l: 0.0,
             last_r: 0.0,
             sleeping: false,
+            fx: FxChain::new(sample_rate),
+            quiet_frames: 0,
         }
     }
 
@@ -132,6 +149,9 @@ pub struct Engine {
     fade: Fade,
     fade_out: u32,
     fade_in: u32,
+    limiter: Limiter,
+    limiter_on: bool,
+    sample_rate: f32,
     commands: rtrb::Consumer<Command>,
     retired: rtrb::Producer<Retired>,
     shared: Arc<Shared>,
@@ -145,7 +165,7 @@ pub fn new(sample_rate: f32, max_block: usize) -> (Engine, EngineHandle) {
     let engine = Engine {
         max_block,
         router: Router::new(shared.clone()),
-        slots: (0..MAX_SLOTS).map(|_| SlotRt::new()).collect(),
+        slots: (0..MAX_SLOTS).map(|_| SlotRt::new(sample_rate)).collect(),
         events: (0..MAX_SLOTS).map(|_| EventBuf::new()).collect(),
         scratch_l: vec![0.0; max_block],
         scratch_r: vec![0.0; max_block],
@@ -155,6 +175,9 @@ pub fn new(sample_rate: f32, max_block: usize) -> (Engine, EngineHandle) {
         fade: Fade::Idle,
         fade_out: (FADE_OUT_SECS * sample_rate) as u32,
         fade_in: (FADE_IN_SECS * sample_rate) as u32,
+        limiter: Limiter::new(sample_rate, LIMITER_CEILING_DB),
+        limiter_on: true,
+        sample_rate,
         commands: cmd_rx,
         retired: ret_tx,
         shared: shared.clone(),
@@ -206,6 +229,8 @@ impl Engine {
                 (s.volume, s.pan, s.mute) = (volume, pan, mute);
             }
             Command::Select { slot, mode } => self.router.select(slot, mode, &mut self.events),
+            Command::SetFx { slot, settings } => self.slots[slot].fx.set(&settings),
+            Command::SetLimiter(on) => self.limiter_on = on,
             Command::SetInheritPedal(on) => self.router.inherit_pedal = on,
             Command::SetMasterVolume(v) => self.master_volume = v,
             Command::Panic => {
@@ -252,6 +277,7 @@ impl Engine {
         self.mix_l[..frames].fill(0.0);
         self.mix_r[..frames].fill(0.0);
         let mut sleeping = 0u16;
+        let fx_idle_frames = (FX_IDLE_SECS * self.sample_rate) as usize;
         for i in 0..MAX_SLOTS {
             let slot = &mut self.slots[i];
             let Some(processor) = slot.processor.as_mut() else {
@@ -261,21 +287,43 @@ impl Engine {
             // A slot that is a keyboard target always runs: no wake-up latency for what is being
             // played, and its editor can see regular process calls. Only idle slots sleep.
             let target = self.router.targets() & (1 << i) != 0;
-            if slot.sleeping && events.is_empty() && !target {
+            let skip_instrument = slot.sleeping && events.is_empty() && !target;
+            // A sleeping instrument's effects keep running until their tails have died away.
+            let fx_live = slot.fx.is_active() && slot.quiet_frames < fx_idle_frames;
+            if skip_instrument && !fx_live {
                 sleeping |= 1 << i;
                 continue;
             }
             self.scratch_l[..frames].fill(0.0);
             self.scratch_r[..frames].fill(0.0);
-            let status = processor.process(
-                &mut Io {
-                    input: None,
-                    out_l: &mut self.scratch_l[..frames],
-                    out_r: &mut self.scratch_r[..frames],
-                },
-                events,
-            );
-            slot.sleeping = status == ProcessStatus::Sleep;
+            if !skip_instrument {
+                let status = processor.process(
+                    &mut Io {
+                        input: None,
+                        out_l: &mut self.scratch_l[..frames],
+                        out_r: &mut self.scratch_r[..frames],
+                    },
+                    events,
+                );
+                slot.sleeping = status == ProcessStatus::Sleep;
+            }
+            if slot.fx.is_active() {
+                slot.fx
+                    .process(&mut self.scratch_l[..frames], &mut self.scratch_r[..frames]);
+                self.shared.comp_reduction[i].store(
+                    slot.fx.compressor_reduction_db().to_bits(),
+                    Ordering::Relaxed,
+                );
+                if skip_instrument {
+                    let loud = self.scratch_l[..frames]
+                        .iter()
+                        .chain(&self.scratch_r[..frames])
+                        .any(|x| x.abs() > 1e-7);
+                    slot.quiet_frames = if loud { 0 } else { slot.quiet_frames + frames };
+                } else {
+                    slot.quiet_frames = 0;
+                }
+            }
 
             // Ramp the gain across the block so volume, pan and mute changes don't click.
             let (tl, tr) = slot.target_gains();
@@ -322,6 +370,14 @@ impl Engine {
             let g = self.master_volume * duck;
             out_l[t] = self.mix_l[t] * g;
             out_r[t] = self.mix_r[t] * g;
+        }
+        if self.limiter_on {
+            self.limiter.process(out_l, out_r);
+            self.shared
+                .limiter_reduction
+                .fetch_max(self.limiter.reduction_db().to_bits(), Ordering::Relaxed);
+        }
+        for t in 0..frames {
             master_peak = master_peak.max(out_l[t].abs()).max(out_r[t].abs());
         }
         self.shared
