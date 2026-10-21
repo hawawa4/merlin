@@ -6,9 +6,23 @@ use std::sync::atomic::Ordering;
 
 use egui::{Color32, RichText};
 
+use merlin_model::Format;
+
 use crate::keyboard::{self, COLORS, ZoneView};
 use crate::paths;
 use crate::session::{Session, UI_SLOTS};
+
+/// How a plugin is named in the browser: `Name`, `Name (VST3)`, `Name (Windows)`.
+pub fn found_label(f: &merlin_scanner::Found) -> String {
+    let mut label = f.info.name.clone();
+    if f.info.format == Format::Vst3 {
+        label.push_str(" (VST3)");
+    }
+    if f.windows {
+        label.push_str(" (Windows)");
+    }
+    label
+}
 
 #[derive(Debug)]
 pub enum Action {
@@ -196,9 +210,13 @@ fn unit(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, i: usize, actions:
     );
     let label = match (&saved.instrument, loaded) {
         (Some(r), true) => format!(
-            "{}  {}",
+            "{}  {}{}",
             r.name,
-            if r.windows { "CLAP·WIN" } else { "CLAP" }
+            match r.format {
+                Format::Vst3 => "VST3",
+                _ => "CLAP",
+            },
+            if r.windows { "·WIN" } else { "" }
         ),
         (Some(r), false) => format!(
             "{}  ({})",
@@ -297,11 +315,7 @@ fn unit(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, i: usize, actions:
                 .width(100.0)
                 .show_ui(ui, |ui| {
                     for (k, f) in s.found.iter().enumerate() {
-                        let mut label = if f.windows {
-                            format!("{} (Windows)", f.info.name)
-                        } else {
-                            f.info.name.clone()
-                        };
+                        let mut label = found_label(f);
                         let unsupported = crate::quirks::lookup(&f.info.id, f.windows).unsupported;
                         if unsupported.is_some() {
                             label.push_str("  (unsupported)");

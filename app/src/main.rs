@@ -119,7 +119,7 @@ fn ticks_per_second() -> f64 {
 /// Finds plugins: standard folders, settings, command line. The result is cached by file
 /// stamp so only new or changed files are loaded (bridged ones start Wine, which is slow).
 fn discover(settings: &Settings, extra: &[PathBuf]) -> Vec<Found> {
-    let mut dirs = merlin_scanner::default_clap_dirs();
+    let mut dirs = merlin_scanner::default_plugin_dirs();
     dirs.extend(settings.plugin_dirs.iter().cloned());
     dirs.extend(extra.iter().cloned());
     let cache_file = paths::plugin_cache_file();
@@ -321,13 +321,7 @@ impl Running {
             },
             Action::LoadNamed(i, query) => {
                 let q = query.to_lowercase();
-                let label = |f: &Found| {
-                    if f.windows {
-                        format!("{} (windows)", f.info.name.to_lowercase())
-                    } else {
-                        f.info.name.to_lowercase()
-                    }
-                };
+                let label = |f: &Found| ui::found_label(f).to_lowercase();
                 let k = s
                     .found
                     .iter()

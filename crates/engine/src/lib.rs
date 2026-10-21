@@ -23,7 +23,7 @@ pub struct Shared {
     /// Output peak per slot since the UI last read it (`swap(0)`), as `f32` bits.
     pub peaks: [AtomicU32; MAX_SLOTS],
     pub master_peak: AtomicU32,
-    /// Bit i set: slot i is asleep (silent, no tail, not being processed).
+    /// Bit i set: slot i is asleep (idle, silent, no tail, and not being processed).
     pub sleeping: AtomicU16,
     /// Events dropped because a slot's event list was full.
     pub dropped_events: AtomicU32,

@@ -11,8 +11,9 @@ use merlin_audio_io::{JackBackend, JackClient, MidiSource};
 use merlin_embed::{EditorManager, PluginLookup};
 use merlin_engine::{Command, EngineHandle, Filter};
 use merlin_hosting::clap::ClapLibrary;
+use merlin_hosting::vst3::Vst3Library;
 use merlin_hosting::{EditorSize, HostEvent, MidiEvent, PluginHandle, Waker};
-use merlin_model::{Format, MAX_SLOTS, PluginRef, Rig, SelectMode, Slot};
+use merlin_model::{MAX_SLOTS, PluginRef, Rig, SelectMode, Slot};
 use merlin_scanner::{Found, Quarantine};
 use winit::event_loop::EventLoopProxy;
 
@@ -211,10 +212,12 @@ impl Session {
             proxy: Mutex::new(self.proxy.clone()),
             slot: i,
         });
-        let plugin = ClapLibrary::load(path)?.create(id, waker)?;
-        Ok(Loaded {
-            plugin: Box::new(plugin),
-        })
+        let plugin: Box<dyn PluginHandle> = if path.extension().is_some_and(|e| e == "vst3") {
+            Box::new(Vst3Library::load(path)?.create(id, waker)?)
+        } else {
+            Box::new(ClapLibrary::load(path)?.create(id, waker)?)
+        };
+        Ok(Loaded { plugin })
     }
 
     /// Installs a created plugin in a slot: activate and hand its processor to the engine.
@@ -245,7 +248,7 @@ impl Session {
         self.install(i, loaded)?;
         let slot = &mut self.rig.slots[i];
         slot.instrument = Some(PluginRef {
-            format: Format::Clap,
+            format: found.info.format,
             id: found.info.id.clone(),
             name: found.info.name.clone(),
             path: Some(found.path.clone()),

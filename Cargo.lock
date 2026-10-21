@@ -910,8 +910,10 @@ dependencies = [
  "clack-host",
  "merlin-model",
  "libc",
+ "libloading 0.9.0",
  "rtrb",
  "serde",
+ "vst3",
 ]
 
 [[package]]

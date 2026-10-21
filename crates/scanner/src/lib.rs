@@ -1,6 +1,6 @@
 //! Finding plugins and remembering what was found (plan §4.7).
 //!
-//! This is the scanning library: discovery of `.clap` files, a cache keyed by path + mtime +
+//! This is the scanning library: discovery of `.clap` files and `.vst3` bundles, a cache keyed by path + mtime +
 //! size so only changed files are looked at again, and a loader that reads a file's plugin
 //! descriptors. It runs the loader in-process for now; the child-process scanner with
 //! timeouts and quarantine goes on top of the same cache (a file that crashed the scanner is
@@ -17,6 +17,7 @@ use std::time::UNIX_EPOCH;
 use anyhow::{Context, Result};
 use merlin_hosting::PluginInfo;
 use merlin_hosting::clap::ClapLibrary;
+use merlin_hosting::vst3::Vst3Library;
 use serde::{Deserialize, Serialize};
 
 /// How deep below a scan folder `.clap` files are looked for (vendors use subfolders).
@@ -77,22 +78,30 @@ impl Cache {
     }
 }
 
-/// Where CLAP plugins usually live.
-pub fn default_clap_dirs() -> Vec<PathBuf> {
+/// Where plugins usually live (CLAP and VST3).
+pub fn default_plugin_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Some(home) = std::env::var_os("HOME") {
         dirs.push(Path::new(&home).join(".clap"));
+        dirs.push(Path::new(&home).join(".vst3"));
     }
     dirs.extend(
-        ["/usr/lib/clap", "/usr/lib64/clap", "/usr/local/lib/clap"]
-            .into_iter()
-            .map(PathBuf::from),
+        [
+            "/usr/lib/clap",
+            "/usr/lib64/clap",
+            "/usr/local/lib/clap",
+            "/usr/lib/vst3",
+            "/usr/lib64/vst3",
+            "/usr/local/lib/vst3",
+        ]
+        .into_iter()
+        .map(PathBuf::from),
     );
     dirs
 }
 
-/// `.clap` files in the folders (and a few levels below), with whether each is a yabridge
-/// bridge. Bundles (a `.clap` that is a directory) are not descended into.
+/// `.clap` files and `.vst3` bundles in the folders (and a few levels below), with whether each
+/// is a yabridge bridge (CLAP only). Bundle directories are plugins, not folders to search.
 pub fn find_clap_files(dirs: &[PathBuf]) -> Vec<(PathBuf, bool)> {
     fn walk(dir: &Path, depth: usize, out: &mut Vec<(PathBuf, bool)>) {
         let Ok(rd) = std::fs::read_dir(dir) else {
@@ -105,6 +114,8 @@ pub fn find_clap_files(dirs: &[PathBuf]) -> Vec<(PathBuf, bool)> {
                 // A chainloader named like the plugin, with a `.clap-win` link beside it.
                 let windows = p.with_extension("clap-win").exists();
                 out.push((p, windows));
+            } else if p.extension().is_some_and(|e| e == "vst3") {
+                out.push((p, false));
             } else if p.is_dir() && depth < MAX_DEPTH {
                 walk(&p, depth + 1, out);
             }
@@ -124,6 +135,22 @@ pub fn load_clap(path: &Path, _windows: bool) -> Result<Vec<PluginInfo>> {
     ClapLibrary::load(path)
         .and_then(|lib| lib.plugins())
         .with_context(|| format!("scanning {}", path.display()))
+}
+
+/// Reads a VST3 bundle's audio classes by loading it.
+pub fn load_vst3(path: &Path) -> Result<Vec<PluginInfo>> {
+    Vst3Library::load(path)
+        .map(|lib| lib.plugins())
+        .with_context(|| format!("scanning {}", path.display()))
+}
+
+/// Reads whatever kind of plugin file this is.
+pub fn load_any(path: &Path, windows: bool) -> Result<Vec<PluginInfo>> {
+    if path.extension().is_some_and(|e| e == "vst3") {
+        load_vst3(path)
+    } else {
+        load_clap(path, windows)
+    }
 }
 
 fn stamp(path: &Path) -> Option<(u64, u64)> {
@@ -187,9 +214,9 @@ pub fn scan_with(
     result
 }
 
-/// [`scan_with`] using the real CLAP loader.
+/// [`scan_with`] using the real loaders.
 pub fn scan(dirs: &[PathBuf], cache: &mut Cache, progress: impl FnMut(&Path)) -> Vec<Entry> {
-    scan_with(dirs, cache, &load_clap, progress)
+    scan_with(dirs, cache, &load_any, progress)
 }
 
 /// A plugin ready to be offered in the browser.
@@ -266,6 +293,8 @@ mod tests {
         // A bundle directory is a plugin, not a folder to search.
         std::fs::create_dir_all(d.join("bundle.clap/inner")).unwrap();
         std::fs::write(d.join("bundle.clap/inner/e.clap"), b"x").unwrap();
+        std::fs::create_dir_all(d.join("Synth.vst3/Contents/x86_64-linux")).unwrap();
+        std::fs::write(d.join("Synth.vst3/Contents/x86_64-linux/inner.clap"), b"x").unwrap();
 
         let files: Vec<(String, bool)> = find_clap_files(std::slice::from_ref(&d))
             .into_iter()
@@ -279,6 +308,7 @@ mod tests {
         assert_eq!(
             files,
             vec![
+                ("Synth.vst3".into(), false),
                 ("a.clap".into(), false),
                 ("b.clap".into(), true),
                 ("bundle.clap".into(), false),
@@ -411,5 +441,20 @@ mod tests {
         assert_eq!(plugins[0].id, "org.surge-synth-team.surge-xt");
         assert!(plugins[0].is_instrument());
         assert!(load_clap(Path::new("/nonexistent.clap"), false).is_err());
+    }
+
+    #[test]
+    fn reads_real_vst3_classes() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../test-assets/dl/surge-linux/Surge XT.vst3");
+        if !path.exists() {
+            eprintln!("skipped: Surge XT VST3 not installed");
+            return;
+        }
+        let plugins = load_any(&path, false).unwrap();
+        let synth = plugins.iter().find(|p| p.name == "Surge XT").unwrap();
+        assert!(synth.is_instrument());
+        assert_eq!(synth.format, Format::Vst3);
+        assert!(load_any(Path::new("/nonexistent.vst3"), false).is_err());
     }
 }

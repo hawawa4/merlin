@@ -6,8 +6,8 @@ simple built-in effects, switched from MIDI controllers. Not a DAW: no tracks, n
 routing matrix, no recording.
 
 Status: **Phase 1 (MVP) in progress.** The spikes are done (GO). `just dev` runs the app: a rack of
-8 CLAP instruments (Linux, or Windows through Wine + yabridge) with embedded editors, a keyboard
-map, zones, layers, save/open and autosave. VST3, built-in effects and the settings panel are next.
+8 CLAP or VST3 instruments (Linux, or Windows CLAP through Wine + yabridge) with embedded editors, a keyboard
+map, zones, layers, save/open and autosave. Built-in effects, the settings panel and a searchable browser are next.
 
 - [docs/research.md](docs/research.md): existing products and technical research
 - [docs/plan.md](docs/plan.md): architecture and roadmap

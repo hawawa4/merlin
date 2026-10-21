@@ -435,7 +435,7 @@ libjack preload (S1), `build-wine.sh` and the patch set (S4).
 2. ✅ JACK backend, JACK MIDI, automatic hardware connection, stats. (Meters in the UI; hotplug and ALSA sequencer listing still to do.)
 3. ✅ Router and note ownership, exclusive/layer, zones, transpose, panic (property-tested).
 4. ◐ CLAP hosting (instrument) and state ✅; inserts (effects in a slot) not yet.
-5. ☐ VST3 hosting and state (port of the S3 host onto the `PluginHandle` traits).
+5. ✅ VST3 hosting and state (`hosting::vst3`, ported from S3 onto the `PluginHandle` traits, with `IMessage`/`IAttributeList`; first audio bus only, no programs/units yet). Scanner reads `.vst3` bundles too.
 6. ✅ **`embed` crate:** editor dock, clipping/scroll, editor cache, overlap rules. (Keyboard focus handshake: manual test pending.)
 7. ☐ Built-in FX (EQ, compressor, delay, reverb, master limiter).
 8. ◐ Scanner library with cache ✅; child-process scanner with timeout/quarantine, VST3 and SoundFont scanning, and a searchable browser ☐.

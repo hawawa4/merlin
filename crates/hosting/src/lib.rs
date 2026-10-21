@@ -7,6 +7,7 @@ pub mod builtin;
 pub mod clap;
 mod midi;
 mod plugin;
+pub mod vst3;
 
 pub use midi::{MidiEvent, MidiKind};
 pub use plugin::{EditorSize, HostEvent, ParamInfo, PluginEditor, PluginHandle, PluginInfo, Waker};

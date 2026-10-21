@@ -258,7 +258,10 @@ impl Engine {
                 continue;
             };
             let events = self.events[i].as_slice();
-            if slot.sleeping && events.is_empty() {
+            // A slot that is a keyboard target always runs: no wake-up latency for what is being
+            // played, and its editor can see regular process calls. Only idle slots sleep.
+            let target = self.router.targets() & (1 << i) != 0;
+            if slot.sleeping && events.is_empty() && !target {
                 sleeping |= 1 << i;
                 continue;
             }
@@ -273,9 +276,6 @@ impl Engine {
                 events,
             );
             slot.sleeping = status == ProcessStatus::Sleep;
-            if slot.sleeping {
-                sleeping |= 1 << i;
-            }
 
             // Ramp the gain across the block so volume, pan and mute changes don't click.
             let (tl, tr) = slot.target_gains();

@@ -11,5 +11,7 @@ anyhow.workspace = true
 serde.workspace = true
 rtrb.workspace = true
 libc = "0.2"
+libloading.workspace = true
+vst3 = "0.3"
 clack-host = "0.2"
 clack-extensions = { version = "0.2", features = ["clack-host", "gui", "timer", "posix-fd", "state", "params", "note-ports", "audio-ports", "log", "latency"] }

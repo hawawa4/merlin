@@ -238,7 +238,7 @@ fn rendering_is_deterministic() {
 }
 
 #[test]
-fn idle_slots_sleep_and_wake_on_midi() {
+fn idle_slots_sleep_and_a_target_always_runs() {
     let mut r = OfflineRenderer::new(SR, BLOCK);
     let calls = Arc::new(AtomicUsize::new(0));
     r.handle()
@@ -248,37 +248,65 @@ fn idle_slots_sleep_and_wake_on_midi() {
         })
         .ok();
     r.handle()
+        .send(Command::SetProcessor {
+            slot: 1,
+            processor: Box::new(Dc(0.0)),
+        })
+        .ok();
+    r.handle()
         .send(Command::Select {
             slot: 0,
             mode: SelectMode::Exclusive,
         })
         .ok();
     r.render(BLOCK, vec![]);
-    // Silent and idle: asleep after the first call, and never called again.
+    // A silent target is still processed every block (it is what the player is about to use).
     let before = calls.load(Ordering::Relaxed);
     r.render(BLOCK * 50, vec![]);
     assert_eq!(
         calls.load(Ordering::Relaxed),
-        before,
-        "a sleeping slot is not processed"
+        before + 50,
+        "targets are never skipped"
     );
-    assert_eq!(r.handle().shared.sleeping.load(Ordering::Relaxed), 1);
-    // A note wakes it; once the release has run out it sleeps again.
+    assert_eq!(r.handle().shared.sleeping.load(Ordering::Relaxed) & 1, 0);
+
+    // Play a note, then move the keyboard to slot 1: slot 0 rings out and then sleeps.
     r.render(
-        BLOCK * 20,
+        BLOCK * 8,
         vec![
             (0, midi(MidiEvent::note_on(0, 0, 60, 100))),
-            (BLOCK * 5, midi(MidiEvent::note_off(0, 0, 60))),
+            (BLOCK * 2, midi(MidiEvent::note_off(0, 0, 60))),
         ],
     );
-    let awake = calls.load(Ordering::Relaxed);
-    assert!(awake > before + 5);
+    r.handle()
+        .send(Command::Select {
+            slot: 1,
+            mode: SelectMode::Exclusive,
+        })
+        .ok();
+    r.render(BLOCK * 20, vec![]);
+    let asleep = calls.load(Ordering::Relaxed);
     r.render(BLOCK * 50, vec![]);
     assert_eq!(
         calls.load(Ordering::Relaxed),
-        awake,
-        "asleep again once the tail is over"
+        asleep,
+        "an idle slot is not processed"
     );
+    assert_eq!(r.handle().shared.sleeping.load(Ordering::Relaxed) & 1, 1);
+
+    // Selecting it wakes it.
+    r.handle()
+        .send(Command::Select {
+            slot: 0,
+            mode: SelectMode::Exclusive,
+        })
+        .ok();
+    r.render(BLOCK * 4, vec![]);
+    assert!(
+        calls.load(Ordering::Relaxed) > asleep,
+        "a slot that becomes the target runs again"
+    );
+    assert_eq!(r.handle().shared.sleeping.load(Ordering::Relaxed) & 1, 0);
 }
 
 #[test]
