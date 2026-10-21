@@ -12,9 +12,15 @@ rtsan_lib := "/usr/lib/llvm-21/lib/clang/21/lib/linux/libclang_rt.rtsan-x86_64.a
 default:
     @just --list --unsorted
 
-# This round's test: the S5 rack, Linux and Windows plugins side by side. Try:
-#   just dev                      default rack      just dev "Surge XT; Six Sines (Windows)"
-dev preload="Surge XT; Surge XT (Windows); Six Sines (Windows)": (s5 preload)
+# The app. Loads plugins from the standard CLAP folders plus test-assets (Linux and, through
+# our patched Wine, Windows ones). Try: just dev --fresh      just dev --rig my.irig
+dev *args:
+    PATH="{{yabridge_dir}}:$PATH" WINELOADER={{patched_wine}} \
+        cargo run -p merlin --release -- \
+        --plugin-dir {{assets}}/dl/surge-linux --plugin-dir {{assets}}/bridges-vblank/clap {{args}}
+
+# The S5 rack spike (the old `just dev`)
+s5-dev preload="Surge XT; Surge XT (Windows); Six Sines (Windows)": (s5 preload)
 
 # S3: Surge XT as a VST3 in our own VST3 host, editor embedded. Try:
 #   just s3-dev                   Surge XT      just s3-dev "Surge XT Effects"
