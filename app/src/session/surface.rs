@@ -4,7 +4,8 @@
 //! the device back.
 
 use merlin_audio_io::{DEVICE_OUTPUTS, DeviceMessage, friendly_name, sink_friendly_name};
-use merlin_control::launchkey::{self, Model, Surface, View};
+use merlin_control::surface::{self, PADS, RigState, SlotState};
+use surface_api::Surface;
 
 use super::{Session, UI_SLOTS};
 
@@ -12,12 +13,17 @@ use super::{Session, UI_SLOTS};
 pub(super) struct ActiveSurface {
     /// The device's readable name (what its mappings are filed under).
     pub device: String,
-    model: Model,
     /// Which of our device outputs goes to it, and the port it is connected to.
     port: u8,
     sink: String,
-    surface: Surface,
+    surface: Box<dyn Surface>,
+    /// Set while the connection to the device is being made: the first messages wait until then
+    /// (the link is made a moment after the call, and what is sent before it is lost).
+    wait_until: Option<std::time::Instant>,
 }
+
+/// How long to wait after connecting before the first message.
+const LINK_DELAY: std::time::Duration = std::time::Duration::from_millis(300);
 
 impl Session {
     /// Starts driving the controllers that are connected, and lets go of the ones that left.
@@ -26,13 +32,13 @@ impl Session {
         let Some(b) = self.backend.as_ref() else {
             return;
         };
-        let wanted: Vec<(String, Model)> = self
+        let wanted: Vec<(String, Box<dyn Surface>)> = self
             .midi_sources
             .iter()
             .filter(|m| m.role == merlin_audio_io::InputRole::Controller)
             .filter_map(|m| {
                 let name = friendly_name(&m.device);
-                launchkey::detect(&name).map(|model| (name, model))
+                crate::drivers::detect(&name).map(|surface| (name, surface))
             })
             .collect();
         let sinks = b.hardware_midi_sinks();
@@ -53,7 +59,7 @@ impl Session {
             }
         }
         // Take up the new ones.
-        for (name, model) in wanted {
+        for (name, surface) in wanted {
             if self.surfaces.iter().any(|s| s.device == name) {
                 continue;
             }
@@ -72,25 +78,22 @@ impl Session {
             if let Some(b) = self.backend.as_ref() {
                 b.connect_device_out(port as usize, Some(&sink));
             }
-            let mut surface = Surface::new(model);
-            let hello = surface.connect();
-            Self::send_all(self.backend.as_mut(), port, &hello);
             self.say(format!(
-                "controller: Launchkey MK3 {} found ({name}); its layout is on",
-                model.keys
+                "controller: {} found ({name}); its layout is on",
+                surface.description().model
             ));
             self.surfaces.push(ActiveSurface {
                 device: name,
-                model,
                 port,
                 sink,
                 surface,
+                wait_until: Some(std::time::Instant::now() + LINK_DELAY),
             });
         }
         let profile = self
             .surfaces
             .iter()
-            .flat_map(|s| launchkey::profile(&s.device, s.model))
+            .flat_map(|s| surface::profile(&s.device, s.surface.description()))
             .collect();
         self.mapper.set_profile(profile);
         self.update_surfaces();
@@ -111,14 +114,19 @@ impl Session {
         all
     }
 
-    /// What the controllers should show now.
-    fn surface_view(&self) -> View {
-        let mut v = View::default();
-        for i in 0..launchkey::PADS.min(UI_SLOTS) {
-            v.slots[i] = launchkey::SlotView {
+    /// What the controllers should show now, in the app's own terms.
+    fn rig_state(&self) -> RigState {
+        let colour = |i: usize| {
+            let c = crate::keyboard::COLORS[i];
+            [c.r(), c.g(), c.b()]
+        };
+        let mut v = RigState::default();
+        for i in 0..PADS.min(UI_SLOTS) {
+            v.slots[i] = SlotState {
                 loaded: self.plugins[i].is_some(),
                 playing: self.targets.contains(&i),
                 muted: self.rig.slots[i].mute,
+                rgb: colour(i),
             };
         }
         v.snapshots = self.rig.snapshots.len();
@@ -135,15 +143,15 @@ impl Session {
             (None, None) => format!("{tempo:.0} bpm"),
         };
         if let Some(i) = primary {
-            for k in 0..launchkey::PADS {
+            for k in 0..PADS {
                 v.knobs[k] = self.knob_label(i, k);
             }
-            v.drum = launchkey::SLOT_COLOURS.get(i).copied();
+            v.drum = (i < UI_SLOTS).then(|| colour(i));
         }
-        for i in 0..launchkey::PADS {
+        for i in 0..PADS {
             v.faders[i] = format!("{:.2}", self.rig.slots[i].volume);
         }
-        v.faders[launchkey::PADS] = format!("{:.2}", self.rig.master_volume);
+        v.faders[PADS] = format!("{:.2}", self.rig.master_volume);
         v
     }
 
@@ -153,9 +161,19 @@ impl Session {
         if self.surfaces.is_empty() {
             return;
         }
-        let view = self.surface_view();
+        let state = self.rig_state();
+        let now = std::time::Instant::now();
         for s in &mut self.surfaces {
-            let out = s.surface.update(&view);
+            if let Some(t) = s.wait_until {
+                if now < t {
+                    continue;
+                }
+                s.wait_until = None;
+                let hello = s.surface.connect();
+                Self::send_all(self.backend.as_mut(), s.port, &hello);
+            }
+            let view = surface::to_view(&state, s.surface.description());
+            let out = s.surface.render(&view);
             if !Self::send_all(self.backend.as_mut(), s.port, &out) {
                 // The queue was full: forget what was sent so the next round sends it all.
                 s.surface.connect();
@@ -163,19 +181,20 @@ impl Session {
         }
     }
 
-    /// A message from a controller we drive, before the mappings see it: pad-mode reports change
-    /// what the pads show.
+    /// A message from a controller we drive, before the mappings see it: the driver follows
+    /// what the device reports about itself (which pad layout is showing).
     pub(super) fn surface_input(&mut self, incoming: &merlin_control::Incoming) {
         let merlin_control::Message::Cc { number, value } = incoming.message else {
             return;
         };
+        let bytes = [0xB0 | incoming.channel, number, value];
         let mut changed = false;
         for s in self
             .surfaces
             .iter_mut()
-            .filter(|s| s.device == incoming.device)
+            .filter(|s| s.device == incoming.device && s.wait_until.is_none())
         {
-            changed |= s.surface.input(incoming.channel, number, value);
+            changed |= s.surface.input(&bytes);
         }
         if changed {
             self.update_surfaces();
@@ -202,7 +221,7 @@ impl Session {
     pub fn surface_devices(&self) -> Vec<(String, String)> {
         self.surfaces
             .iter()
-            .map(|s| (s.device.clone(), format!("Launchkey MK3 {}", s.model.keys)))
+            .map(|s| (s.device.clone(), s.surface.description().model.clone()))
             .collect()
     }
 }

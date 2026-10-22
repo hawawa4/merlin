@@ -15,6 +15,11 @@ path = "src/main.rs"
 name = "merlin-scan"
 path = "src/bin/scan.rs"
 
+# Device drivers (devices/): each can be left out of a build.
+[features]
+default = ["launchkey-mk3"]
+launchkey-mk3 = ["dep:launchkey-mk3"]
+
 [dependencies]
 merlin-model.workspace = true
 merlin-hosting.workspace = true
@@ -25,6 +30,8 @@ merlin-scanner.workspace = true
 merlin-wine.workspace = true
 merlin-control.workspace = true
 merlin-backing.workspace = true
+surface-api.workspace = true
+launchkey-mk3 = { workspace = true, optional = true }
 rtrb.workspace = true
 anyhow.workspace = true
 serde.workspace = true

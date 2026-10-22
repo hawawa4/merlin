@@ -8,6 +8,7 @@
 //! Test hook: `MERLIN_SCRIPT="3:load 1 Surge XT; 5:on 60; 6:peak; 8:quit"`.
 
 mod browser;
+mod drivers;
 mod guard;
 mod keyboard;
 mod macro_panel;

@@ -436,12 +436,12 @@ LK_SCRIPT = "; ".join(
     + [f"{t}:report" for t in [7.5 + i for i in range(14)]]
     + ["23:quit"]
 )
-# Top pad 2 selects slot 2; Track right goes on to slot 3; bottom pad 1 recalls snapshot 1 (slot 1
+# Top pad 2 selects slot 2; Track > (CC 102 on the real device) goes on to slot 3; bottom pad 1 recalls snapshot 1 (slot 1
 # again); fader button 1 mutes slot 1. Knob 1 (pan, default) picks up at the middle and goes
 # right; knob 2 (reverb) picks up at the bottom and switches the reverb on; knob 3 is a macro and
 # raises the level. Then Device Select held (pad 3 of the select row), back to Session, then Drum.
 LK_CONTROLS = (
-    "1:144 97 100; 2:BF 103 127; 3:144 112 100; 4:BF 37 127; 5:BF 21 64; 6:BF 21 127; "
+    "1:144 97 100; 2:BF 102 127; 3:144 112 100; 4:BF 37 127; 5:BF 21 64; 6:BF 21 127; "
     "7:BF 22 0; 8:BF 22 64; 9:BF 23 64; 10:BF 23 127; 11:BF 3 9; 12:144 66 100; 13:BF 3 2; 14:BF 3 1"
 )
 
@@ -458,7 +458,7 @@ def launchkey_check():
         problems.append("the app did not leave DAW mode on quitting")
     # Pad lights: slot 1 plays (pulsing, channel 3) then goes steady as slot 2, then 3 take over,
     # and pulses again when it is selected back.
-    want = [(0x92, 96, 5), (0x90, 96, 5), (0x92, 97, 45), (0x92, 98, 21), (0x92, 96, 5)]
+    want = [(0x92, 96, 5), (0x90, 96, 5), (0x92, 97, 41), (0x92, 98, 21), (0x92, 96, 5)]
     last = -1
     for w in want:
         try:

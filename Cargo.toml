@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["spikes/*", "crates/*", "app"]
+members = ["spikes/*", "crates/*", "devices/*", "app"]
 exclude = ["vendor"]
 
 [workspace.package]
@@ -32,6 +32,10 @@ merlin-scanner = { path = "crates/scanner" }
 merlin-wine = { path = "crates/wine" }
 merlin-control = { path = "crates/control" }
 merlin-backing = { path = "crates/backing" }
+
+# Device support: independent of the app (see devices/README.md).
+surface-api = { path = "devices/surface-api" }
+launchkey-mk3 = { path = "devices/launchkey-mk3" }
 
 [profile.release]
 debug = 1

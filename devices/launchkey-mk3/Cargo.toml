@@ -1,0 +1,10 @@
+[package]
+name = "launchkey-mk3"
+version = "0.0.0"
+description = "Driver for the Novation Launchkey MK3 (25, 37, 49, 61, 88): DAW mode, pad and button lights, the screen"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+surface-api = { path = "../surface-api" }

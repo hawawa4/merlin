@@ -950,11 +950,13 @@ dependencies = [
  "merlin-model",
  "merlin-scanner",
  "merlin-wine",
+ "launchkey-mk3",
  "libc",
  "pollster",
  "rtrb",
  "serde",
  "serde_json",
+ "surface-api",
  "toml",
  "wgpu",
  "winit",
@@ -989,6 +991,7 @@ name = "merlin-control"
 version = "0.0.0"
 dependencies = [
  "merlin-model",
+ "surface-api",
 ]
 
 [[package]]
@@ -1204,6 +1207,13 @@ dependencies = [
  "euclid",
  "polycool",
  "smallvec",
+]
+
+[[package]]
+name = "launchkey-mk3"
+version = "0.0.0"
+dependencies = [
+ "surface-api",
 ]
 
 [[package]]
@@ -2597,6 +2607,13 @@ name = "strength_reduce"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fe895eb47f22e2ddd4dabc02bce419d2e643c8e3b585c78158b349195bc24d82"
+
+[[package]]
+name = "surface-api"
+version = "0.0.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "symphonia"

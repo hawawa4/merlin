@@ -94,7 +94,7 @@ fn midi_policy(
 /// What a device is for until the user says otherwise: the DAW port of a controller we know is
 /// a controller, everything else a keyboard.
 fn default_role(name: &str) -> crate::settings::DeviceRole {
-    if merlin_control::launchkey::detect(name).is_some() {
+    if crate::drivers::detect(name).is_some() {
         crate::settings::DeviceRole::Controller
     } else {
         crate::settings::DeviceRole::Keyboard

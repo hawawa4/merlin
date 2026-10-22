@@ -18,7 +18,7 @@ import time
 POT = {21 + i: f"knob {i + 1}" for i in range(8)}
 FADER = {53 + i: f"fader {i + 1}" for i in range(9)}
 FADER_BUTTON = {37 + i: f"fader button {i + 1}" for i in range(9)}
-BUTTON = {102: "track left", 103: "track right", 104: "scene up", 105: "scene down",
+BUTTON = {102: "track > (next)", 103: "track < (previous)", 104: "scene up", 105: "scene down",
           74: "capture MIDI", 75: "quantise", 76: "click", 77: "undo",
           115: "play", 116: "stop", 117: "record", 118: "loop", 108: "shift?", 51: "up?", 52: "down?"}
 CC = {**POT, **FADER, **FADER_BUTTON, **BUTTON}

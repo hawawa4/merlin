@@ -4,7 +4,7 @@
 //! (which slots are loaded, what is selected, the current volumes), get back a list of outcomes.
 //! The app turns those into the same actions the buttons on screen perform.
 
-pub mod launchkey;
+pub mod surface;
 
 use std::collections::HashMap;
 
