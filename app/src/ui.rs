@@ -116,6 +116,11 @@ pub enum Action {
     SaveRig,
     OpenRig(PathBuf),
     RenameRig(String),
+    /// Show or leave the Perform view.
+    SetPerform(bool),
+    /// Lock the Perform view (it cannot be left) or unlock it.
+    SetLock(bool),
+    ToggleFullscreen,
     /// Save the current state as a new snapshot.
     AddSnapshot,
     RecallSnapshot(usize),
@@ -146,6 +151,12 @@ pub enum DockTab {
 pub struct UiState {
     pub tab: DockTab,
     pub settings_open: bool,
+    /// The Perform view is showing.
+    pub perform: bool,
+    /// Perform view locked: it cannot be left and dropped files are ignored.
+    pub locked: bool,
+    /// When the Unlock button was pressed down, while it is.
+    pub unlock_since: Option<std::time::Instant>,
     pub settings_tab: SettingsTab,
     pub query: String,
     /// Search box of the preset list in a SoundFont slot.
@@ -184,6 +195,9 @@ impl UiState {
         Self {
             tab: DockTab::Plugin,
             settings_open: false,
+            perform: false,
+            locked: false,
+            unlock_since: None,
             settings_tab: SettingsTab::Plugins,
             query: String::new(),
             preset_query: String::new(),
@@ -215,6 +229,14 @@ pub fn draw(
     actions: &mut Vec<Action>,
 ) {
     drag_overlay(ui, st);
+    if ui.input(|i| i.key_pressed(egui::Key::F11)) && !(st.perform && st.locked) {
+        actions.push(Action::SetPerform(!st.perform));
+    }
+    if st.perform {
+        *dock_rect = egui::Rect::NOTHING;
+        crate::perform::show(ui, s, st, actions);
+        return;
+    }
     egui::Panel::top("header").show(ui, |ui| header(ui, s, st, actions));
     egui::Panel::top("snapshots").show(ui, |ui| snapshot_bar(ui, s, actions));
     if st.settings_open {
@@ -496,6 +518,13 @@ fn header(ui: &mut egui::Ui, s: &mut Session, st: &UiState, actions: &mut Vec<Ac
         }
         if ui.button("Settings").clicked() {
             actions.push(Action::ToggleSettings);
+        }
+        if ui
+            .button("Perform")
+            .on_hover_text("Stage view: big buttons for snapshots, instruments and volume (F11 also, Escape leaves)")
+            .clicked()
+        {
+            actions.push(Action::SetPerform(true));
         }
         egui::ComboBox::from_id_salt("open-rig")
             .selected_text("Open…")

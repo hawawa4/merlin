@@ -14,9 +14,9 @@ default:
 
 # The app. Loads plugins from the standard CLAP folders plus test-assets (Linux and, through
 # our patched Wine, Windows ones). Try: just dev --fresh      just dev --rig my.irig
-# This round: snapshots. Set up a few slots, press "+ Save snapshot" (the strip under the title bar),
-# change volumes / mute / which slot plays, save another, then click between them. Everything is
-# stored in the rig file. See docs/qa-checklist.md section 5b. Pretend controller: `just e2e-controls`.
+# This round: the Perform view. Press "Perform" in the title bar (or F11): big snapshot buttons, one
+# tile per instrument, master fader, panic. "Lock" keeps it from being left until "Unlock" is held for
+# a second. See docs/qa-checklist.md section 5c. The window also opens without taking the focus now.
 dev *args:
     cargo build -p merlin --release
     PATH="{{yabridge_dir}}:$PATH" WINELOADER={{patched_wine}} \

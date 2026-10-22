@@ -46,6 +46,15 @@ Snapshots are saved inside the rig file, so one file holds the whole setup.
 - [ ] *Next snapshot* and *Previous snapshot* on a foot switch step through the strip and wrap.
 - [ ] *Recall the snapshot given by the number sent* on Program Change: patch 0 is the first snapshot. After a recall, a mapped knob does nothing until it reaches the value (if set to Pick up).
 
+## 5c. Perform view
+- [ ] Press **Perform** in the title bar (or F11). The editor disappears and you get snapshot buttons, one tile per loaded instrument, the master fader and PANIC. Click a snapshot: it recalls and lights up.
+- [ ] Click a tile's name: only that instrument plays (its border lights). **+** layers it with the others. **MUTE** mutes it. The tile's slider changes its volume and the bar above it moves while you play.
+- [ ] **Full screen** toggles the window; F11 or **Leave** (or Escape) goes back to the rack, and the editor of the selected slot returns.
+- [ ] **Lock**: then **Leave**, Escape and F11 do nothing, and dropping a file on the window is ignored (the log says so). A quick click on **LOCKED** does nothing; holding it for about a second (a yellow bar fills) unlocks.
+- [ ] With a controller: snapshot and slot mappings keep working while locked; the tiles follow.
+- [ ] On a touch screen, if you have one: are the buttons big enough, does holding to unlock work?
+- [ ] Window start: launching the app from a terminal while typing elsewhere must not steal your typing focus (needs your KDE setup; see the log line "could not ask for a quiet start" if it fails).
+
 ## 6. Stability
 - [ ] Kill a Windows plugin's Wine process while the app runs: `pgrep -af yabridge-host`, then `kill -9 <pid>` of one. The app should restart itself from the autosave and name the plugin it quarantined (it comes back with *Retry*).
 - [ ] The 2-hour rehearsal: 6–8 instruments including a Windows one, switching and playing for 2 hours. For an unattended version: `just soak 7200 3 --windows "Six Sines"`, then read the `state:` lines (xruns, held keys, RSS, threads). Expect 0 xruns, 0 held keys at the end, memory flat.

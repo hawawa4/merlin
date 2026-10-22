@@ -13,6 +13,7 @@ mod keyboard;
 mod marker;
 mod paths;
 mod perf;
+mod perform;
 mod quirks;
 mod scan_worker;
 mod session;
@@ -307,8 +308,10 @@ impl Running {
         );
         // The dock is unmapped while an egui popup is open, and while the effects tab is shown
         // in its place.
-        let covered =
-            self.ui.popup_open || self.ui.settings_open || self.ui.tab == ui::DockTab::Effects;
+        let covered = self.ui.popup_open
+            || self.ui.settings_open
+            || self.ui.perform
+            || self.ui.tab == ui::DockTab::Effects;
         let _ = self.session.editors.set_popup_open(covered);
 
         let prims = ctx.tessellate(out.shapes, ppp);
@@ -446,6 +449,27 @@ impl Running {
                 s.set_mapping_takeover(i, t);
                 Ok(())
             }
+            Action::SetPerform(on) => {
+                // A locked stage view stays until it is unlocked.
+                if on || !self.ui.locked {
+                    self.ui.perform = on;
+                    if on {
+                        self.ui.settings_open = false;
+                    }
+                }
+                Ok(())
+            }
+            Action::SetLock(on) => {
+                self.ui.locked = on && self.ui.perform;
+                self.ui.unlock_since = None;
+                Ok(())
+            }
+            Action::ToggleFullscreen => {
+                let full = self.window.fullscreen().is_some();
+                self.window
+                    .set_fullscreen((!full).then_some(winit::window::Fullscreen::Borderless(None)));
+                Ok(())
+            }
             Action::AddSnapshot => {
                 s.add_snapshot();
                 Ok(())
@@ -496,6 +520,10 @@ impl Running {
             Action::SyncWindows => s.sync_windows_plugins(),
             Action::DropFile(path) => {
                 self.ui.drag_hint = None;
+                if self.ui.locked {
+                    self.session.say("locked: ignoring the dropped file");
+                    return;
+                }
                 let ext = path
                     .extension()
                     .and_then(|e| e.to_str())
@@ -721,7 +749,7 @@ impl Running {
                 s.say(format!(
                     "state: rig '{}'{}, xruns {xruns}, DSP {dsp:.1}%, held keys {held}, \
                      RSS {rss_mb} MB, threads {threads}, midi {midi}, master {:.2}, vol1 {:.2}, targets {:?}, dock shows {:?}, \
-                     popup {}, slots {}",
+                     popup {}, slots {}, perform {}, locked {}",
                     s.rig.name,
                     if s.dirty { " (modified)" } else { "" },
                     s.rig.master_volume,
@@ -729,7 +757,9 @@ impl Running {
                     s.targets.iter().map(|i| i + 1).collect::<Vec<_>>(),
                     s.editors.shown().map(|i| i + 1),
                     self.ui.popup_open,
-                    loaded.join(" ")
+                    loaded.join(" "),
+                    self.ui.perform,
+                    self.ui.locked
                 ));
                 Ok(())
             }
@@ -1031,6 +1061,10 @@ fn parse_script() -> Vec<(Duration, Action)> {
                 }
                 "drop" => Action::DropFile(PathBuf::from(words.collect::<Vec<_>>().join(" "))),
                 "runtime" => Action::InstallRuntime,
+                // perform on|off, lock on|off, fullscreen
+                "perform" => Action::SetPerform(words.next()? == "on"),
+                "lock" => Action::SetLock(words.next()? == "on"),
+                "fullscreen" => Action::ToggleFullscreen,
                 // snapshot save | recall N | update N | remove N (N counted from 1)
                 "snapshot" => {
                     let verb = words.next()?;
