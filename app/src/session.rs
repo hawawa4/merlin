@@ -35,6 +35,15 @@ pub enum UserEvent {
     Host(usize, HostEvent),
     /// The scan worker has news.
     Scan,
+    /// A SoundFont finished decoding on a worker thread.
+    Font,
+}
+
+/// A decoded SoundFont (or why not) for the slot that asked for it.
+struct FontMsg {
+    slot: usize,
+    found: Found,
+    font: Result<Arc<merlin_hosting::soundfont::Font>>,
 }
 
 struct SlotWaker {
@@ -118,6 +127,10 @@ pub struct Session {
     cli_dirs: Vec<PathBuf>,
     pub settings: Settings,
     scan_rx: Option<mpsc::Receiver<ScanMsg>>,
+    font_tx: mpsc::Sender<FontMsg>,
+    font_rx: mpsc::Receiver<FontMsg>,
+    /// Per slot: the SoundFont being decoded for it (path and name).
+    pub loading: Vec<Option<(PathBuf, String)>>,
     /// The file the scanner is probing right now.
     pub scan_current: Option<PathBuf>,
     pub quarantine: Quarantine,
@@ -147,6 +160,7 @@ impl Session {
         let backend = client.start(engine)?;
         let outputs = backend.connect_outputs();
         let midi_sources = backend.connect_midi_sources();
+        let (font_tx, font_rx) = mpsc::channel();
         let mut s = Self {
             rig: new_rig("Untitled"),
             rig_path: None,
@@ -167,6 +181,9 @@ impl Session {
             cli_dirs,
             settings: settings.clone(),
             scan_rx: None,
+            font_tx,
+            font_rx,
+            loading: vec![None; UI_SLOTS],
             scan_current: None,
             quarantine: Quarantine::load(&crate::paths::quarantine_file()),
             guard,
@@ -507,8 +524,61 @@ impl Session {
         Ok(())
     }
 
-    /// Loads a plugin chosen in the browser into a slot (replacing what is there).
+    /// Loads a plugin chosen in the browser into a slot (replacing what is there). A SoundFont
+    /// that has to be decoded first (seconds for an SF3) is decoded on a worker thread, and the
+    /// slot says "loading" until it is ready.
     pub fn load(&mut self, i: usize, found: &Found) -> Result<()> {
+        use merlin_hosting::soundfont::{Font, is_soundfont};
+        self.loading[i] = None;
+        if is_soundfont(&found.path) && !Font::is_cached(&found.path) {
+            self.loading[i] = Some((found.path.clone(), found.info.name.clone()));
+            let (tx, owned, proxy) = (self.font_tx.clone(), found.clone(), self.proxy.clone());
+            std::thread::Builder::new()
+                .name("soundfont-load".into())
+                .spawn(move || {
+                    let font = Font::load(&owned.path);
+                    let _ = tx.send(FontMsg {
+                        slot: i,
+                        found: owned,
+                        font,
+                    });
+                    let _ = proxy.send_event(UserEvent::Font);
+                })
+                .context("cannot start the SoundFont loader")?;
+            self.say(format!("slot {}: decoding {}...", i + 1, found.info.name));
+            return Ok(());
+        }
+        self.load_now(i, found)
+    }
+
+    /// Finishes the SoundFont loads that were waiting for a worker.
+    pub fn poll_fonts(&mut self) {
+        while let Ok(msg) = self.font_rx.try_recv() {
+            let current = self.loading[msg.slot]
+                .as_ref()
+                .is_some_and(|(p, _)| *p == msg.found.path);
+            if !current {
+                continue; // the slot was given something else meanwhile
+            }
+            self.loading[msg.slot] = None;
+            match msg.font {
+                // `font` stays alive until the plugin holds its own copy.
+                Ok(font) => {
+                    if let Err(e) = self.load_now(msg.slot, &msg.found) {
+                        self.say(format!("error: {e:#}"));
+                    }
+                    drop(font);
+                }
+                Err(e) => self.say(format!(
+                    "slot {}: {}: {e:#}",
+                    msg.slot + 1,
+                    msg.found.info.name
+                )),
+            }
+        }
+    }
+
+    fn load_now(&mut self, i: usize, found: &Found) -> Result<()> {
         if let Some(why) = crate::quirks::lookup(&found.info.id, found.windows).unsupported {
             return Err(anyhow!("{} is not supported: {why}", found.info.name));
         }
@@ -554,6 +624,7 @@ impl Session {
     /// Takes the plugin out of a slot: editor first, then the engine lets go of the processor,
     /// then the plugin is deactivated and destroyed. The rig slot is cleared.
     pub fn unload(&mut self, i: usize) {
+        self.loading[i] = None;
         if self.remove_runtime(i) {
             let slot = &mut self.rig.slots[i];
             slot.instrument = None;
@@ -740,6 +811,9 @@ impl Session {
     pub fn set_master_volume(&mut self, volume: f32) {
         self.rig.master_volume = volume.clamp(0.0, 1.5);
         self.dirty = true;
+        // Decode the rig's SoundFonts side by side (an SF3 takes seconds); the slots below
+        // then find them ready. Held until the rig is up.
+        let _fonts = self.decode_soundfonts();
         let _ = self
             .engine
             .send(Command::SetMasterVolume(self.rig.master_volume));
@@ -775,6 +849,10 @@ impl Session {
             UserEvent::Host(i, e) => (i, e),
             UserEvent::Scan => {
                 self.poll_scan();
+                return;
+            }
+            UserEvent::Font => {
+                self.poll_fonts();
                 return;
             }
         };
@@ -969,6 +1047,31 @@ impl Session {
             }
         }
         self.dirty = false;
+    }
+
+    /// Decodes every SoundFont the rig uses, one thread per file.
+    fn decode_soundfonts(&self) -> Vec<Arc<merlin_hosting::soundfont::Font>> {
+        use merlin_hosting::soundfont::{Font, is_soundfont};
+        let mut paths: Vec<PathBuf> = self
+            .rig
+            .slots
+            .iter()
+            .filter_map(|s| s.instrument.as_ref())
+            .filter_map(|r| self.locate(r).ok())
+            .map(|(p, _)| p)
+            .filter(|p| is_soundfont(p) && !Font::is_cached(p))
+            .collect();
+        paths.sort();
+        paths.dedup();
+        std::thread::scope(|scope| {
+            let jobs: Vec<_> = paths
+                .iter()
+                .map(|p| scope.spawn(move || Font::load(p)))
+                .collect();
+            jobs.into_iter()
+                .filter_map(|j| j.join().ok()?.ok())
+                .collect()
+        })
     }
 
     /// Finds the file for a saved plugin: by id in what was scanned (a path alone can go stale

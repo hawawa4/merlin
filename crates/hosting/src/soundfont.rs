@@ -67,12 +67,33 @@ fn cache() -> &'static Mutex<HashMap<PathBuf, Weak<Font>>> {
 }
 
 impl Font {
+    /// Is a decoded copy held by some slot right now? Then [`Font::load`] is instant.
+    pub fn is_cached(path: &Path) -> bool {
+        cache()
+            .lock()
+            .unwrap()
+            .get(path)
+            .is_some_and(|w| w.strong_count() > 0)
+    }
+
     /// Decodes the file, or returns the copy another slot already holds. Slow; call it off the
     /// UI thread when you can.
     pub fn load(path: &Path) -> Result<Arc<Font>> {
-        // One decode at a time: two slots loading the same file must end up sharing one copy.
-        static LOADING: Mutex<()> = Mutex::new(());
-        let _one_at_a_time = LOADING.lock().unwrap_or_else(|e| e.into_inner());
+        // One decode per file at a time: two slots loading the same file must end up sharing one
+        // copy, while different files decode side by side.
+        static LOADING: Mutex<Vec<(PathBuf, Arc<Mutex<()>>)>> = Mutex::new(Vec::new());
+        let gate = {
+            let mut gates = LOADING.lock().unwrap_or_else(|e| e.into_inner());
+            match gates.iter().find(|(p, _)| p == path) {
+                Some((_, g)) => g.clone(),
+                None => {
+                    let g = Arc::new(Mutex::new(()));
+                    gates.push((path.to_owned(), g.clone()));
+                    g
+                }
+            }
+        };
+        let _one_at_a_time = gate.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(font) = cache().lock().unwrap().get(path).and_then(Weak::upgrade) {
             return Ok(font);
         }

@@ -404,7 +404,10 @@ fn unit(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, i: usize, actions:
                 "missing"
             }
         ),
-        (None, _) => "— empty —".to_string(),
+        (None, _) => match &s.loading[i] {
+            Some((_, name)) => format!("{name}  (loading…)"),
+            None => "— empty —".to_string(),
+        },
     };
     let frame = egui::Frame::new()
         .fill(color.gamma_multiply(if selected { 0.30 } else { 0.12 }))
