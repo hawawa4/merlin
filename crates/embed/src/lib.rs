@@ -7,7 +7,9 @@
 //! a popup open the dock is unmapped.
 
 mod dock;
+mod focus;
 mod manager;
 
 pub use dock::{Dock, MAX_EDITORS};
+pub use focus::show_without_focus;
 pub use manager::{EVICT_DELAY, EditorInfo, EditorManager, PluginLookup, ShowOutcome};

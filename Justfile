@@ -14,10 +14,9 @@ default:
 
 # The app. Loads plugins from the standard CLAP folders plus test-assets (Linux and, through
 # our patched Wine, Windows ones). Try: just dev --fresh      just dev --rig my.irig
-# This round: MIDI device roles. Settings -> MIDI devices lists every device with an activity light, a
-# role (Keyboard plays instruments, Controller never does) and a "use" switch, remembered by name.
-# No keyboard at hand? Run `just fake-keyboard` in another terminal: a pretend keyboard that plugs in
-# for a minute and plays a scale.
+# This round: snapshots. Set up a few slots, press "+ Save snapshot" (the strip under the title bar),
+# change volumes / mute / which slot plays, save another, then click between them. Everything is
+# stored in the rig file. See docs/qa-checklist.md section 5b. Pretend controller: `just e2e-controls`.
 dev *args:
     cargo build -p merlin --release
     PATH="{{yabridge_dir}}:$PATH" WINELOADER={{patched_wine}} \

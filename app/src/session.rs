@@ -20,6 +20,7 @@ use merlin_scanner::{Cache, Entry, Found, Quarantine};
 use std::sync::mpsc;
 
 mod controls;
+mod snapshots;
 
 use crate::scan_worker::{self, ScanMsg};
 use winit::event_loop::EventLoopProxy;
@@ -189,6 +190,8 @@ pub struct Session {
     /// The action a control is being learned for, while the user is teaching one.
     learn: Option<merlin_model::ControlAction>,
     last_control: Option<String>,
+    /// The snapshot recalled last.
+    last_snapshot: Option<usize>,
     /// MIDI activity: the message count last seen per input, and until when its light stays on.
     midi_seen: [u32; merlin_engine::MAX_INPUTS],
     midi_lit: [Option<Instant>; merlin_engine::MAX_INPUTS],
@@ -275,6 +278,7 @@ impl Session {
             control_stop,
             learn: None,
             last_control: None,
+            last_snapshot: None,
             midi_seen: Default::default(),
             midi_lit: Default::default(),
             slot_cpu: [SlotCpu::default(); UI_SLOTS],
@@ -1517,6 +1521,7 @@ impl Session {
     pub fn new_rig(&mut self) {
         self.clear();
         self.rig = new_rig("Untitled");
+        self.last_snapshot = None;
         self.sync_mappings();
         let _ = self.engine.send(Command::SetMasterVolume(1.0));
         self.rig_path = None;
@@ -1559,6 +1564,7 @@ impl Session {
             slot.inserts.resize(MAX_INSERTS, None);
         }
         self.rig = rig;
+        self.last_snapshot = None;
         self.sync_mappings();
         let _ = self
             .engine

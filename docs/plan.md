@@ -473,7 +473,7 @@ libjack preload (S1), `build-wine.sh` and the patch set (S4).
   - Scopes: global → rig → slot.
 - **Switch instruments by CC, Program Change or note**, with next/prev on a foot switch ✅ (select, layer, mute, next, previous, slot-by-number, slot volume and master volume faders with jump or pick-up, panic; mapped controls no longer play an instrument; tested end to end with a pretend controller, `just e2e-controls`). Still to do in this group: toggle/range/curve glue, relative encoders, takeover scale modes, global and per-slot scopes.
 - 8 macros per slot.
-- **Snapshots:** active slots, zones, volumes, FX on/off, macros, SoundFont presets. Recalled by Program Change or a button.
+- **Snapshots** ✅ (partly): active slots, zones, transpose, volumes, pan, mute, FX on/off, insert bypass, SoundFont presets and master volume. They live inside the rig file (one file holds the whole setup), shown as a strip under the header (click to recall, right-click to rename, update or remove). Recalled by button, Program Change (`recall snapshot by number`) or next/previous on a foot switch; `just e2e-controls` checks all three. Macros join them once macros exist.
 - **Perform view** and lock mode.
 
 **Exit:** a whole set is playable without touching the computer.

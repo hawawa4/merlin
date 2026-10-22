@@ -32,6 +32,9 @@ pub struct Context {
     pub targets: u16,
     pub volumes: [f32; MAX_SLOTS],
     pub master: f32,
+    /// How many snapshots the rig has, and the one recalled last.
+    pub snapshots: usize,
+    pub snapshot: Option<usize>,
 }
 
 /// What to do. Slots are 0-based.
@@ -42,6 +45,7 @@ pub enum Outcome {
     ToggleMute(usize),
     SetVolume(usize, f32),
     SetMaster(f32),
+    Recall(usize),
     Panic,
 }
 
@@ -184,6 +188,30 @@ fn fire(action: &ControlAction, inc: &Incoming, ctx: &Context) -> Option<Outcome
             };
             Some(Outcome::Select(next))
         }
+        ControlAction::RecallSnapshot { snapshot } => {
+            ((snapshot as usize) < ctx.snapshots).then_some(Outcome::Recall(snapshot as usize))
+        }
+        ControlAction::RecallSnapshotByValue { base } => {
+            let key = match inc.message {
+                Message::Note { key, .. } => key,
+                ref m => value_of(m),
+            };
+            let n = base as usize + key as usize;
+            (n < ctx.snapshots).then_some(Outcome::Recall(n))
+        }
+        ControlAction::NextSnapshot | ControlAction::PrevSnapshot => {
+            let count = ctx.snapshots;
+            if count == 0 {
+                return None;
+            }
+            let forward = matches!(action, ControlAction::NextSnapshot);
+            Some(Outcome::Recall(match ctx.snapshot {
+                Some(c) if forward => (c + 1) % count,
+                Some(c) => (c + count - 1) % count,
+                None if forward => 0,
+                None => count - 1,
+            }))
+        }
         ControlAction::Panic => Some(Outcome::Panic),
         _ => None,
     }
@@ -231,6 +259,8 @@ mod tests {
             targets: bits(targets),
             volumes: [1.0; MAX_SLOTS],
             master: 1.0,
+            snapshots: 0,
+            snapshot: None,
         }
     }
 
@@ -450,5 +480,51 @@ mod tests {
             m.handle(&cc("F", 0, 7, 10), &c),
             vec![Outcome::SetVolume(0, 10.0 / 127.0)]
         );
+    }
+
+    #[test]
+    fn snapshots_are_recalled_by_button_by_number_and_in_turn() {
+        let mut m = Mapper::new(&[
+            map(
+                None,
+                SourceKind::Cc { number: 1 },
+                ControlAction::RecallSnapshot { snapshot: 2 },
+            ),
+            map(
+                None,
+                SourceKind::Cc { number: 2 },
+                ControlAction::NextSnapshot,
+            ),
+            map(
+                None,
+                SourceKind::Cc { number: 3 },
+                ControlAction::PrevSnapshot,
+            ),
+            map(
+                None,
+                SourceKind::Program,
+                ControlAction::RecallSnapshotByValue { base: 0 },
+            ),
+        ]);
+        let mut c = ctx(&[0], &[0]);
+        assert!(
+            m.handle(&cc("F", 0, 1, 127), &c).is_empty(),
+            "none saved yet"
+        );
+        c.snapshots = 3;
+        assert_eq!(m.handle(&cc("F", 0, 1, 127), &c), vec![Outcome::Recall(2)]);
+        // Nothing recalled yet: next starts at the first, previous at the last.
+        assert_eq!(m.handle(&cc("F", 0, 2, 127), &c), vec![Outcome::Recall(0)]);
+        assert_eq!(m.handle(&cc("F", 0, 3, 127), &c), vec![Outcome::Recall(2)]);
+        c.snapshot = Some(2);
+        assert_eq!(m.handle(&cc("F", 0, 2, 127), &c), vec![Outcome::Recall(0)]);
+        c.snapshot = Some(0);
+        assert_eq!(m.handle(&cc("F", 0, 3, 127), &c), vec![Outcome::Recall(2)]);
+        let pc = Incoming {
+            device: "K".into(),
+            channel: 0,
+            message: Message::Program { number: 1 },
+        };
+        assert_eq!(m.handle(&pc, &c), vec![Outcome::Recall(1)]);
     }
 }

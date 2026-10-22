@@ -14,10 +14,12 @@ pub const RIG_VERSION: u32 = 1;
 mod fx;
 mod mapping;
 mod migrate;
+mod snapshot;
 
 pub use fx::{CompSettings, DelaySettings, EqSettings, FxSettings, ReverbSettings};
 pub use mapping::{ControlAction, Mapping, Source, SourceKind, Takeover};
 pub use migrate::{Migration, migrate};
+pub use snapshot::{MAX_SNAPSHOTS, PresetChoice, SlotSnapshot, Snapshot};
 
 mod base64_opt {
     use base64::Engine as _;
@@ -173,6 +175,8 @@ pub struct Rig {
     pub master_volume: f32,
     /// What MIDI controls do in this rig.
     pub mappings: Vec<Mapping>,
+    /// Saved performance states (which slots play, volumes, effects on or off, presets).
+    pub snapshots: Vec<Snapshot>,
 }
 
 impl Default for Rig {
@@ -185,6 +189,7 @@ impl Default for Rig {
             inherit_pedal: false,
             master_volume: 1.0,
             mappings: Vec::new(),
+            snapshots: Vec::new(),
         }
     }
 }
@@ -196,6 +201,7 @@ pub enum RigError {
     BadFilter(usize),
     TooManyInserts(usize),
     BadMapping(usize),
+    BadSnapshot(usize),
     NewerVersion(u32),
     /// No migration path from this format version.
     Unmigratable(u32),
@@ -213,6 +219,7 @@ impl std::fmt::Display for RigError {
                 write!(f, "slot {} has more than {MAX_INSERTS} inserts", i + 1)
             }
             Self::BadMapping(i) => write!(f, "mapping {} is not valid", i + 1),
+            Self::BadSnapshot(i) => write!(f, "snapshot {} is not valid", i + 1),
             Self::NewerVersion(v) => write!(f, "rig format {v} is newer than this app understands"),
             Self::Unmigratable(v) => write!(f, "cannot upgrade rig format {v}"),
             Self::Parse(e) => write!(f, "not a valid rig file: {e}"),
@@ -233,6 +240,12 @@ impl Rig {
         }
         if let Some(i) = self.mappings.iter().position(|m| !m.is_valid()) {
             return Err(RigError::BadMapping(i));
+        }
+        if self.snapshots.len() > MAX_SNAPSHOTS {
+            return Err(RigError::BadSnapshot(MAX_SNAPSHOTS));
+        }
+        if let Some(i) = self.snapshots.iter().position(|s| !s.is_valid()) {
+            return Err(RigError::BadSnapshot(i));
         }
         if let Some(&i) = self.selected.iter().find(|&&i| i >= self.slots.len()) {
             return Err(RigError::BadSelection(i));

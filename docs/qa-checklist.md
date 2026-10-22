@@ -35,6 +35,17 @@ Tick as you go; anything odd, send me what you saw (and the exact text of any er
 - [ ] A mapped key or pedal must no longer play the instrument; unmapped ones still do.
 - [ ] Save the rig, close, reopen: the mappings are still there.
 
+## 5b. Snapshots (no hardware needed except the last three items)
+Snapshots are saved inside the rig file, so one file holds the whole setup.
+- [ ] Load 3 slots. Make a sound you like (slot 1 plays, volumes set, one effect on) and press **+ Save snapshot** in the strip under the title bar. Change things (select slot 3, lower a volume, mute a slot, switch an effect off, pick another SoundFont preset), save a second snapshot, then click between them. Each click restores: which slots play, volumes, mute, zones, effects on/off, insert bypass, SoundFont preset, master volume.
+- [ ] Right-click a snapshot: rename it, **Update with what is set now**, **Remove**.
+- [ ] Recalling a snapshot while holding a key: no stuck note, no pop you wouldn't expect.
+- [ ] Save the rig, **New**, reopen it: the snapshots are in the strip and still recall correctly.
+- [ ] Open a rig that has *fewer* instruments loaded than the snapshot expects (unload a slot after saving it): recalling works and nothing crashes.
+- [ ] Settings → Controls → *Recall a snapshot* → Learn → press a pad/button. Pressing it recalls that snapshot.
+- [ ] *Next snapshot* and *Previous snapshot* on a foot switch step through the strip and wrap.
+- [ ] *Recall the snapshot given by the number sent* on Program Change: patch 0 is the first snapshot. After a recall, a mapped knob does nothing until it reaches the value (if set to Pick up).
+
 ## 6. Stability
 - [ ] Kill a Windows plugin's Wine process while the app runs: `pgrep -af yabridge-host`, then `kill -9 <pid>` of one. The app should restart itself from the autosave and name the plugin it quarantined (it comes back with *Retry*).
 - [ ] The 2-hour rehearsal: 6–8 instruments including a Windows one, switching and playing for 2 hours. For an unattended version: `just soak 7200 3 --windows "Six Sines"`, then read the `state:` lines (xruns, held keys, RSS, threads). Expect 0 xruns, 0 held keys at the end, memory flat.

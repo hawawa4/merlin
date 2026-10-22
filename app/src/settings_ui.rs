@@ -31,11 +31,15 @@ pub enum ActionKind {
     SelectByValue,
     SlotVolume,
     MasterVolume,
+    RecallSnapshot,
+    NextSnapshot,
+    PrevSnapshot,
+    RecallSnapshotByValue,
     Panic,
 }
 
 impl ActionKind {
-    const ALL: [ActionKind; 9] = [
+    const ALL: [ActionKind; 13] = [
         Self::SelectSlot,
         Self::ToggleLayer,
         Self::ToggleMute,
@@ -44,6 +48,10 @@ impl ActionKind {
         Self::SelectByValue,
         Self::SlotVolume,
         Self::MasterVolume,
+        Self::RecallSnapshot,
+        Self::NextSnapshot,
+        Self::PrevSnapshot,
+        Self::RecallSnapshotByValue,
         Self::Panic,
     ];
 
@@ -57,6 +65,10 @@ impl ActionKind {
             Self::SelectByValue => "Select the slot given by the number sent",
             Self::SlotVolume => "Volume of a slot (fader or knob)",
             Self::MasterVolume => "Master volume (fader or knob)",
+            Self::RecallSnapshot => "Recall a snapshot",
+            Self::NextSnapshot => "Next snapshot (foot switch)",
+            Self::PrevSnapshot => "Previous snapshot (foot switch)",
+            Self::RecallSnapshotByValue => "Recall the snapshot given by the number sent",
             Self::Panic => "Panic (all notes off)",
         }
     }
@@ -81,6 +93,10 @@ impl ActionKind {
             Self::SelectByValue => A::SelectByValue { base },
             Self::SlotVolume => A::SlotVolume { slot },
             Self::MasterVolume => A::MasterVolume,
+            Self::RecallSnapshot => A::RecallSnapshot { snapshot: slot },
+            Self::NextSnapshot => A::NextSnapshot,
+            Self::PrevSnapshot => A::PrevSnapshot,
+            Self::RecallSnapshotByValue => A::RecallSnapshotByValue { base },
             Self::Panic => A::Panic,
         }
     }
@@ -339,6 +355,18 @@ fn controls(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<
             ui.label("first slot");
             let mut shown = st.new_base + 1;
             ui.add(egui::DragValue::new(&mut shown).range(1..=crate::session::UI_SLOTS));
+            st.new_base = shown - 1;
+        }
+        if st.new_kind == ActionKind::RecallSnapshot {
+            ui.label("snapshot");
+            let mut shown = st.new_slot + 1;
+            ui.add(egui::DragValue::new(&mut shown).range(1..=merlin_model::MAX_SNAPSHOTS));
+            st.new_slot = shown - 1;
+        }
+        if st.new_kind == ActionKind::RecallSnapshotByValue {
+            ui.label("first snapshot");
+            let mut shown = st.new_base + 1;
+            ui.add(egui::DragValue::new(&mut shown).range(1..=merlin_model::MAX_SNAPSHOTS));
             st.new_base = shown - 1;
         }
         match s.learning() {

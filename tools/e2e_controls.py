@@ -38,25 +38,77 @@ CONTROLS = (
 )
 
 
-def main():
-    for p in (APP, CONTROLLER):
-        if not p.exists():
-            sys.exit(f"missing {p}: cargo build --release -p merlin -p merlin-audio-io --examples")
+def run(script, controls, seconds, keep=None):
+    """Runs the app with the script and the controller; returns the app's output."""
     work = Path(tempfile.mkdtemp(prefix="irig-e2e-"))
-    env = dict(os.environ, MERLIN_SCRIPT=SCRIPT)
+    env = dict(os.environ, MERLIN_SCRIPT=script)
     for var, d in (("XDG_DATA_HOME", "data"), ("XDG_STATE_HOME", "state"), ("XDG_CACHE_HOME", "cache"), ("XDG_CONFIG_HOME", "config")):
         env[var] = str(work / d)
     app = subprocess.Popen([str(APP), "--fresh"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
     time.sleep(6)
-    ctl = subprocess.Popen([str(CONTROLLER), "Fake Controller", CONTROLS, "13"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    ctl = subprocess.Popen([str(CONTROLLER), "Fake Controller", controls, str(seconds)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         out, _ = app.communicate(timeout=60)
     except subprocess.TimeoutExpired:
         app.kill()
         out, _ = app.communicate()
     ctl.terminate()
+    if keep is not None:
+        keep(work)
     shutil.rmtree(work, ignore_errors=True)
+    return out
 
+
+def main():
+    for p in (APP, CONTROLLER):
+        if not p.exists():
+            sys.exit(f"missing {p}: cargo build --release -p merlin -p merlin-audio-io --examples")
+    controls_check()
+    snapshots_check()
+
+
+SNAP_FILE = Path(tempfile.gettempdir()) / "irig-e2e-snapshots.irig"
+SNAP_SCRIPT = "; ".join(
+    [
+        "1:load 1 TimGM6mb", "1.2:load 2 TimGM6mb", "1.4:load 3 TimGM6mb",
+        # State A: slot 1 plays at full volume. State B: slot 3 plays, slot 1 at 0.4.
+        "4:select 1", "4.1:volume 1 1.0", "4.2:snapshot save",
+        "4.3:select 3", "4.4:volume 1 0.4", "4.5:snapshot save",
+        "4.6:map cc 30 snap 1", "4.7:map cc 31 snap 2", "4.8:map cc 32 snapnext",
+        "4.9:map program snapbyvalue 1",
+        f"5:save {SNAP_FILE}",
+    ]
+    + [f"{t}:report" for t in (7.5, 8.5, 9.5, 10.5)]
+    + ["12:quit"]
+)
+SNAP_CONTROLS = "1:B0 30 127; 2:B0 31 127; 3:B0 32 127; 4:C0 1"
+
+
+def snapshots_check():
+    import json
+    out = run(SNAP_SCRIPT, SNAP_CONTROLS, 8)
+    seq = [(float(v), t.strip()) for v, t in re.findall(r"vol1 ([\d.]+), targets \[([\d, ]*)\]", out)]
+    wanted = [(1.0, "1"), (0.4, "3"), (1.0, "1"), (0.4, "3")]
+    problems = []
+    if seq[:4] != wanted:
+        problems.append(f"states {seq}, wanted {wanted}")
+    try:
+        rig = json.loads(SNAP_FILE.read_text())
+        if len(rig.get("snapshots", [])) != 2:
+            problems.append(f"saved rig has {len(rig.get('snapshots', []))} snapshots")
+    except Exception as e:  # noqa: BLE001
+        problems.append(f"saved rig unreadable: {e}")
+    finally:
+        SNAP_FILE.unlink(missing_ok=True)
+    if problems:
+        print("FAIL (snapshots)\n  " + "\n  ".join(problems))
+        print(out[-3000:])
+        sys.exit(1)
+    print(f"ok: snapshots recalled by button, next and Program Change: {seq[:4]}")
+
+
+def controls_check():
+    out = run(SCRIPT, CONTROLS, 13)
     states = re.findall(r"master ([\d.]+), vol1 ([\d.]+), targets \[([\d, ]*)\]", out)
     seq = [(float(m), float(v), t.strip()) for m, v, t in states]
     # The slot that plays, after each control (the reports run a second apart, the controller's

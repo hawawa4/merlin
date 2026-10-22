@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::MAX_SLOTS;
+use crate::{MAX_SLOTS, MAX_SNAPSHOTS};
 
 /// Which message on which device a mapping listens to.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,6 +55,16 @@ pub enum ControlAction {
         slot: u8,
     },
     MasterVolume,
+    /// Recall a snapshot.
+    RecallSnapshot {
+        snapshot: u8,
+    },
+    NextSnapshot,
+    PrevSnapshot,
+    /// The value picks the snapshot: `base + value`.
+    RecallSnapshotByValue {
+        base: u8,
+    },
     /// All notes off.
     Panic,
 }
@@ -91,6 +101,15 @@ impl ControlAction {
             }
             Self::SlotVolume { slot } => format!("Volume of slot {}", slot as usize + 1),
             Self::MasterVolume => "Master volume".into(),
+            Self::RecallSnapshot { snapshot } => {
+                format!("Recall snapshot {}", snapshot as usize + 1)
+            }
+            Self::NextSnapshot => "Next snapshot".into(),
+            Self::PrevSnapshot => "Previous snapshot".into(),
+            Self::RecallSnapshotByValue { base } => format!(
+                "Recall snapshot by number (value 0 = snapshot {})",
+                base as usize + 1
+            ),
             Self::Panic => "Panic (all notes off)".into(),
         }
     }
@@ -143,6 +162,8 @@ impl Mapping {
             }
             && match self.action {
                 ControlAction::SelectByValue { base } => (base as usize) < MAX_SLOTS,
+                ControlAction::RecallSnapshot { snapshot: n }
+                | ControlAction::RecallSnapshotByValue { base: n } => (n as usize) < MAX_SNAPSHOTS,
                 _ => true,
             }
     }

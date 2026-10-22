@@ -116,6 +116,12 @@ pub enum Action {
     SaveRig,
     OpenRig(PathBuf),
     RenameRig(String),
+    /// Save the current state as a new snapshot.
+    AddSnapshot,
+    RecallSnapshot(usize),
+    UpdateSnapshot(usize),
+    RenameSnapshot(usize, String),
+    RemoveSnapshot(usize),
     // Script-only.
     LoadNamed(usize, String),
     SaveAs(PathBuf),
@@ -210,6 +216,7 @@ pub fn draw(
 ) {
     drag_overlay(ui, st);
     egui::Panel::top("header").show(ui, |ui| header(ui, s, st, actions));
+    egui::Panel::top("snapshots").show(ui, |ui| snapshot_bar(ui, s, actions));
     if st.settings_open {
         egui::CentralPanel::default().show(ui, |ui| {
             *dock_rect = egui::Rect::NOTHING;
@@ -423,6 +430,47 @@ fn drag_overlay(ui: &mut egui::Ui, st: &UiState) {
                     });
                 });
         });
+}
+
+/// The saved performance states: click one to bring it back; right-click for more.
+fn snapshot_bar(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new("Snapshots").strong()).on_hover_text(
+            "A snapshot remembers which slots play, their volumes, zones, effects on or off and SoundFont presets. Click one to bring it back; right-click to rename, update or remove it. They are saved in the rig file.",
+        );
+        let current = s.current_snapshot();
+        for (n, snap) in s.snapshots().iter().enumerate() {
+            let label = format!("{}  {}", n + 1, snap.name);
+            let r = ui.selectable_label(current == Some(n), label);
+            if r.clicked() {
+                actions.push(Action::RecallSnapshot(n));
+            }
+            r.context_menu(|ui| {
+                let mut name = snap.name.clone();
+                if ui
+                    .add(egui::TextEdit::singleline(&mut name).desired_width(160.0))
+                    .changed()
+                {
+                    actions.push(Action::RenameSnapshot(n, name));
+                }
+                if ui.button("Update with what is set now").clicked() {
+                    actions.push(Action::UpdateSnapshot(n));
+                    ui.close();
+                }
+                if ui.button("Remove").clicked() {
+                    actions.push(Action::RemoveSnapshot(n));
+                    ui.close();
+                }
+            });
+        }
+        if ui
+            .button("+ Save snapshot")
+            .on_hover_text("Remember the current state")
+            .clicked()
+        {
+            actions.push(Action::AddSnapshot);
+        }
+    });
 }
 
 fn header(ui: &mut egui::Ui, s: &mut Session, st: &UiState, actions: &mut Vec<Action>) {

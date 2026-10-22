@@ -109,6 +109,8 @@ impl Session {
             targets: self.targets.iter().fold(0, |m, &i| m | 1 << i),
             volumes: std::array::from_fn(|i| self.rig.slots.get(i).map_or(1.0, |s| s.volume)),
             master: self.rig.master_volume,
+            snapshots: self.rig.snapshots.len(),
+            snapshot: self.last_snapshot,
         }
     }
 
@@ -119,6 +121,7 @@ impl Session {
             Outcome::ToggleMute(i) => self.toggle_mute(i),
             Outcome::SetVolume(i, v) => self.set_volume(i, v),
             Outcome::SetMaster(v) => self.set_master_volume(v),
+            Outcome::Recall(n) => self.recall_snapshot(n),
             Outcome::Panic => self.panic(),
         }
     }

@@ -141,10 +141,18 @@ impl App {
             event_loop.create_window(
                 Window::default_attributes()
                     .with_title("Merlin")
-                    .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 900.0)),
+                    .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 900.0))
+                    // Shown below, once the window manager has been told not to focus it.
+                    .with_visible(false)
+                    .with_active(false),
             )?,
         );
         let xid = x11_window_id(&window)?;
+        // The window appears behind what the user is working in, without taking the keyboard.
+        if let Err(e) = merlin_embed::show_without_focus(xid) {
+            eprintln!("could not ask for a quiet start: {e:#}");
+        }
+        window.set_visible(true);
         println!("main window X11 id {xid:#x}");
 
         let ctx = egui::Context::default();
@@ -436,6 +444,26 @@ impl Running {
             }
             Action::SetTakeover(i, t) => {
                 s.set_mapping_takeover(i, t);
+                Ok(())
+            }
+            Action::AddSnapshot => {
+                s.add_snapshot();
+                Ok(())
+            }
+            Action::RecallSnapshot(n) => {
+                s.recall_snapshot(n);
+                Ok(())
+            }
+            Action::UpdateSnapshot(n) => {
+                s.update_snapshot(n);
+                Ok(())
+            }
+            Action::RenameSnapshot(n, name) => {
+                s.rename_snapshot(n, name);
+                Ok(())
+            }
+            Action::RemoveSnapshot(n) => {
+                s.remove_snapshot(n);
                 Ok(())
             }
             Action::AddMapping(m) => {
@@ -1003,6 +1031,18 @@ fn parse_script() -> Vec<(Duration, Action)> {
                 }
                 "drop" => Action::DropFile(PathBuf::from(words.collect::<Vec<_>>().join(" "))),
                 "runtime" => Action::InstallRuntime,
+                // snapshot save | recall N | update N | remove N (N counted from 1)
+                "snapshot" => {
+                    let verb = words.next()?;
+                    let n = |w: Option<&str>| w?.parse::<usize>().ok()?.checked_sub(1);
+                    match verb {
+                        "save" => Action::AddSnapshot,
+                        "recall" => Action::RecallSnapshot(n(words.next())?),
+                        "update" => Action::UpdateSnapshot(n(words.next())?),
+                        "remove" => Action::RemoveSnapshot(n(words.next())?),
+                        _ => return None,
+                    }
+                }
                 "fit" => Action::Fit,
                 "on" => Action::NoteOn(words.next()?.parse().ok()?),
                 "off" => Action::NoteOff(words.next()?.parse().ok()?),
@@ -1023,7 +1063,7 @@ fn parse_script() -> Vec<(Duration, Action)> {
         .collect()
 }
 
-/// `select 2`, `layer 3`, `mute 1`, `volume 1`, `byvalue 1`, `master`, `next`, `prev`, `panic`
+/// `select 2`, `layer 3`, `mute 1`, `volume 1`, `byvalue 1`, `master`, `snap 2`, `snapbyvalue 1`, `snapnext`, `snapprev`, `next`, `prev`, `panic`
 /// (slots counted from 1), for the script's `map` and `learn`.
 fn parse_control_action(
     words: &mut std::str::SplitWhitespace<'_>,
@@ -1047,6 +1087,14 @@ fn parse_control_action(
             base: num(words.next())?,
         },
         "master" => A::MasterVolume,
+        "snap" => A::RecallSnapshot {
+            snapshot: num(words.next())?,
+        },
+        "snapbyvalue" => A::RecallSnapshotByValue {
+            base: num(words.next())?,
+        },
+        "snapnext" => A::NextSnapshot,
+        "snapprev" => A::PrevSnapshot,
         "next" => A::NextSlot,
         "prev" => A::PrevSlot,
         "panic" => A::Panic,
