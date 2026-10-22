@@ -135,6 +135,8 @@ pub struct Session {
     cli_dirs: Vec<PathBuf>,
     pub settings: Settings,
     scan_rx: Option<mpsc::Receiver<ScanMsg>>,
+    /// A scan was asked for while one was running: run it next, forgetting these files.
+    scan_again: Option<Vec<PathBuf>>,
     windows_rx: Option<mpsc::Receiver<WindowsMsg>>,
     /// What the Windows job is doing, or how the last one ended (for the Settings tab).
     pub windows_status: String,
@@ -192,6 +194,7 @@ impl Session {
             cli_dirs,
             settings: settings.clone(),
             scan_rx: None,
+            scan_again: None,
             windows_rx: None,
             windows_status: String::new(),
             font_tx,
@@ -217,6 +220,10 @@ impl Session {
         );
         s.refresh_found();
         s.start_scan(Vec::new());
+        // Windows plugins installed in a known prefix are bridged without being asked.
+        if s.windows_runtime().is_some() {
+            let _ = s.sync_windows_plugins();
+        }
         s.say(format!(
             "JACK at {sample_rate} Hz, outputs {outputs:?}, MIDI {:?}",
             s.midi_sources
@@ -264,6 +271,27 @@ impl Session {
         })
     }
 
+    /// The Wine prefixes to look for Windows plugins in: ours first, then the one the
+    /// environment names (`WINEPREFIX`) and `~/.wine`, when they exist.
+    pub fn windows_prefixes(&self) -> Vec<PathBuf> {
+        let mut v = vec![
+            self.settings
+                .wine_prefix
+                .clone()
+                .unwrap_or_else(crate::paths::wine_prefix),
+        ];
+        let others = [
+            std::env::var_os("WINEPREFIX").map(PathBuf::from),
+            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".wine")),
+        ];
+        for p in others.into_iter().flatten() {
+            if p.join("drive_c").is_dir() && !v.contains(&p) {
+                v.push(p);
+            }
+        }
+        v
+    }
+
     pub fn windows_busy(&self) -> bool {
         self.windows_rx.is_some()
     }
@@ -296,7 +324,8 @@ impl Session {
             .windows_runtime()
             .context("set the Wine program and the yabridge folder first")?;
         self.windows_status = "looking for Windows plugins...".into();
-        self.start_windows_job(move |_| sync_report(&rt))
+        let prefixes = self.windows_prefixes();
+        self.start_windows_job(move |_| sync_report(&rt, &prefixes))
     }
 
     /// Runs a plugin installer (`.exe` or `.msi`) in the Windows prefix, then syncs. The
@@ -310,6 +339,7 @@ impl Session {
             .file_name()
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
         self.windows_status = format!("preparing to install {name}...");
+        let prefixes = self.windows_prefixes();
         self.start_windows_job(move |tx| {
             if !rt.prefix_ready() {
                 let _ = tx.send(WindowsMsg::Status(
@@ -330,7 +360,7 @@ impl Session {
                     "{name} exited with {status}, looking for plugins anyway..."
                 )));
             }
-            sync_report(&rt)
+            sync_report(&rt, &prefixes)
         })
     }
 
@@ -500,6 +530,9 @@ impl Session {
     /// even if the cache has them ("retry").
     pub fn start_scan(&mut self, forget: Vec<PathBuf>) {
         if self.scan_rx.is_some() {
+            // One scan at a time; ask for another when this one is done (new files may have
+            // appeared since it listed the folders).
+            self.scan_again.get_or_insert_with(Vec::new).extend(forget);
             return;
         }
         self.scan_rx = Some(scan_worker::spawn(
@@ -536,6 +569,9 @@ impl Session {
         if finished {
             self.scan_rx = None;
             self.scan_current = None;
+            if let Some(forget) = self.scan_again.take() {
+                self.start_scan(forget);
+            }
             let failed = self.entries.iter().filter(|e| e.error.is_some()).count();
             self.say(format!(
                 "scan finished: {} plugins{}",
@@ -1490,30 +1526,59 @@ pub fn read_rig(path: &Path) -> Result<Rig> {
     Ok(rig)
 }
 
-/// Makes the bridges (CLAP and VST3) and says what happened, in a sentence.
-fn sync_report(rt: &merlin_wine::Runtime) -> Result<String> {
-    let clap = rt.sync_clap_bridges(&crate::paths::bridges_dir());
-    let vst3 = rt.sync_vst3_bridges(&crate::paths::bridges_vst3_dir());
-    if let (Err(a), Err(b)) = (&clap, &vst3) {
-        return Err(anyhow!("{a:#}; {b:#}"));
-    }
-    let (mut ready, mut new, mut removed, mut skipped) = (0, 0, 0, Vec::new());
-    let mut problems = Vec::new();
-    for r in [clap, vst3] {
-        match r {
-            Ok(r) => {
-                ready += r.created.len() + r.unchanged;
-                new += r.created.len();
-                removed += r.removed.len();
-                skipped.extend(r.skipped);
+/// Makes the bridges (CLAP and VST3) for every prefix and says what happened, in a sentence.
+/// A plugin that is in two prefixes is bridged from the first.
+fn sync_report(rt: &merlin_wine::Runtime, prefixes: &[PathBuf]) -> Result<String> {
+    let (mut ready, mut new, mut removed) = (0, 0, 0);
+    let (mut skipped, mut problems) = (Vec::new(), Vec::new());
+    let mut looked = Vec::new();
+    for (n, prefix) in prefixes.iter().enumerate() {
+        let rt = merlin_wine::Runtime {
+            prefix: prefix.clone(),
+            ..rt.clone()
+        };
+        let (clap, vst3) = (
+            rt.sync_clap_bridges(&crate::paths::bridges_dir()),
+            rt.sync_vst3_bridges(&crate::paths::bridges_vst3_dir()),
+        );
+        if n == 0 {
+            // A broken yabridge shows on the first prefix; say so instead of "0 plugins".
+            if let (Err(a), Err(b)) = (&clap, &vst3) {
+                return Err(anyhow!("{a:#}; {b:#}"));
             }
-            Err(e) => problems.push(format!("{e:#}")),
         }
+        let mut here = 0;
+        for r in [clap, vst3] {
+            match r {
+                Ok(r) => {
+                    here += r.created.len() + r.unchanged;
+                    new += r.created.len();
+                    removed += r.removed.len();
+                    skipped.extend(r.skipped);
+                }
+                Err(e) => problems.push(format!("{e:#}")),
+            }
+        }
+        ready += here;
+        looked.push(format!(
+            "{} ({})",
+            prefix.display(),
+            if !prefix.join("drive_c").is_dir() {
+                "not created yet".to_owned()
+            } else if here == 0 {
+                "no plugins in its CLAP or VST3 folders".to_owned()
+            } else {
+                format!("{here} plugin{}", if here == 1 { "" } else { "s" })
+            }
+        ));
     }
     let mut text = format!(
         "{ready} Windows plugin{} ready ({new} new, {removed} removed)",
         if ready == 1 { "" } else { "s" }
     );
+    if ready == 0 {
+        text.push_str(&format!("; looked in {}", looked.join(", ")));
+    }
     if !skipped.is_empty() {
         let list: Vec<String> = skipped
             .iter()

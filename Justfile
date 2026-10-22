@@ -14,15 +14,15 @@ default:
 
 # The app. Loads plugins from the standard CLAP folders plus test-assets (Linux and, through
 # our patched Wine, Windows ones). Try: just dev --fresh      just dev --rig my.irig
-# This round: Windows plugin installer. Settings → Windows → Windows plugins: paste the path of an
-# installer (.exe/.msi), press Install, finish its window; the plugins then show up in the browser.
-# "Look for installed plugins" syncs plugins that are already in the Windows environment.
+# This round: Windows plugins are found by themselves. At startup every Windows CLAP/VST3 plugin in
+# the Wine prefix (here test-assets/wine/prefix-vblank) gets a bridge and shows up in the browser.
+# Settings → Windows has the Wine doctor, an installer box and "Look for installed plugins".
 dev *args:
     cargo build -p merlin --release
     PATH="{{yabridge_dir}}:$PATH" WINELOADER={{patched_wine}} \
+        WINEPREFIX="{{justfile_directory()}}/{{assets}}/wine/prefix-vblank" \
         target/release/merlin \
-        --plugin-dir {{assets}}/dl/surge-linux --plugin-dir {{assets}}/bridges-vblank/clap \
-        --plugin-dir {{assets}}/sf {{args}}
+        --plugin-dir {{assets}}/dl/surge-linux --plugin-dir {{assets}}/sf {{args}}
 
 # Soak run: random switching, layering, notes and editor tabs for SECS seconds with Surge XT,
 # in throwaway state directories. Look at the `state:` lines (xruns, held keys, RSS, threads);
