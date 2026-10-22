@@ -33,6 +33,7 @@ impl Session {
                         .iter()
                         .map(|ins| ins.as_ref().is_some_and(|ins| ins.bypass))
                         .collect(),
+                    macros: s.macros.iter().map(|m| m.value).collect(),
                     preset: self
                         .preset(i)
                         .map(|(bank, program)| PresetChoice { bank, program }),
@@ -126,6 +127,9 @@ impl Session {
                     index,
                     bypass,
                 });
+            }
+            for (k, &v) in s.macros.iter().enumerate() {
+                self.set_macro(i, k, v);
             }
             if let Some(p) = s.preset
                 && self.preset(i).is_some_and(|now| now != (p.bank, p.program))

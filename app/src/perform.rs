@@ -260,6 +260,23 @@ fn tile(ui: &mut egui::Ui, s: &Session, st: &UiState, i: usize, actions: &mut Ve
             {
                 actions.push(Action::Volume(i, vol));
             }
+            // The slot's macros that do something.
+            for (k, m) in s.macros(i).iter().enumerate() {
+                if m.targets.is_empty() {
+                    continue;
+                }
+                let mut v = m.value;
+                if ui
+                    .add(
+                        egui::Slider::new(&mut v, 0.0..=1.0)
+                            .fixed_decimals(2)
+                            .text(m.label(k)),
+                    )
+                    .changed()
+                {
+                    actions.push(Action::SetMacro(i, k, v));
+                }
+            }
         });
 }
 

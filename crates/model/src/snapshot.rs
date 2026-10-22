@@ -28,6 +28,8 @@ pub struct SlotSnapshot {
     pub fx: FxSettings,
     /// Per insert position: bypassed?
     pub insert_bypass: Vec<bool>,
+    /// Where each macro sits.
+    pub macros: Vec<f32>,
     /// For a SoundFont slot.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preset: Option<PresetChoice>,
@@ -42,6 +44,7 @@ impl Default for SlotSnapshot {
             filter: MidiFilter::default(),
             fx: FxSettings::default(),
             insert_bypass: Vec::new(),
+            macros: Vec::new(),
             preset: None,
         }
     }
@@ -77,6 +80,8 @@ impl Snapshot {
             && self.slots.iter().all(|s| {
                 let f = &s.filter;
                 s.insert_bypass.len() <= MAX_INSERTS
+                    && s.macros.len() <= crate::MACROS_PER_SLOT
+                    && s.macros.iter().all(|v| (0.0..=1.0).contains(v))
                     && f.key_lo <= f.key_hi
                     && f.key_hi <= 127
                     && f.vel_lo <= f.vel_hi

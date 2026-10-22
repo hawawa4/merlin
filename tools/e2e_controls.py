@@ -62,9 +62,10 @@ def run(script, controls, seconds, keep=None):
 def main():
     for p in (APP, CONTROLLER):
         if not p.exists():
-            sys.exit(f"missing {p}: cargo build --release -p merlin -p merlin-audio-io --examples")
+            sys.exit(f"missing {p}: just e2e-controls (builds both)")
     controls_check()
     snapshots_check()
+    macros_check()
 
 
 SNAP_FILE = Path(tempfile.gettempdir()) / "irig-e2e-snapshots.irig"
@@ -105,6 +106,33 @@ def snapshots_check():
         print(out[-3000:])
         sys.exit(1)
     print(f"ok: snapshots recalled by button, next and Program Change: {seq[:4]}")
+
+
+MACRO_SCRIPT = "; ".join(
+    [
+        "1:load 1 TimGM6mb",
+        # Macro 1 of slot 1 drives the SoundFont's level (range 0..2); it starts where the level is.
+        "4:macrotarget 1 1 sampler:level", "4.1:map cc 40 macro 1 1", "4.2:snapshot save",
+        "4.3:map program snapbyvalue 1",
+    ]
+    + [f"{t}:report" for t in (5, 7.5, 8.5, 9.5, 10.5)]
+    + ["12:quit"]
+)
+MACRO_CONTROLS = "1:B0 40 127; 2:B0 40 0; 3:C0 0; 4:B0 40 64"
+
+
+def macros_check():
+    out = run(MACRO_SCRIPT, MACRO_CONTROLS, 8)
+    seq = [(float(m), float(g)) for m, g in re.findall(r"macro1 ([\d.]+), gain1 ([\d.-]+)", out)]
+    wanted = [(0.5, 1.0), (1.0, 2.0), (0.0, 0.0), (0.5, 1.0), (0.5, 1.0)]
+    problems = []
+    if len(seq) != 5 or any(abs(a - c) > 0.02 or abs(b - d) > 0.02 for (a, b), (c, d) in zip(seq, wanted)):
+        problems.append(f"(macro, gain) {seq}, wanted {wanted}")
+    if problems:
+        print("FAIL (macros)\n  " + "\n  ".join(problems))
+        print(out[-3000:])
+        sys.exit(1)
+    print(f"ok: a macro knob moves a SoundFont's level, and a snapshot restores it: {seq}")
 
 
 def controls_check():

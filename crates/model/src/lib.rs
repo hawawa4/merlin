@@ -12,11 +12,13 @@ pub const MAX_SLOTS: usize = 16;
 pub const RIG_VERSION: u32 = 1;
 
 mod fx;
+mod macros;
 mod mapping;
 mod migrate;
 mod snapshot;
 
 pub use fx::{CompSettings, DelaySettings, EqSettings, FxSettings, ReverbSettings};
+pub use macros::{MACROS_PER_SLOT, MAX_MACRO_TARGETS, Macro, MacroTarget, SamplerField};
 pub use mapping::{ControlAction, Mapping, Source, SourceKind, Takeover};
 pub use migrate::{Migration, migrate};
 pub use snapshot::{MAX_SNAPSHOTS, PresetChoice, SlotSnapshot, Snapshot};
@@ -131,6 +133,8 @@ pub struct Slot {
     /// Up to [`MAX_INSERTS`] effect plugins; position in the list is the insert's position.
     /// A `None` entry is an empty insert position.
     pub inserts: Vec<Option<Insert>>,
+    /// Up to [`MACROS_PER_SLOT`] macros; a shorter list means the rest are untouched.
+    pub macros: Vec<Macro>,
 }
 
 impl Default for Slot {
@@ -147,6 +151,7 @@ impl Default for Slot {
             armed: true,
             fx: FxSettings::default(),
             inserts: Vec::new(),
+            macros: Vec::new(),
         }
     }
 }
@@ -200,6 +205,7 @@ pub enum RigError {
     BadSelection(usize),
     BadFilter(usize),
     TooManyInserts(usize),
+    BadMacro(usize),
     BadMapping(usize),
     BadSnapshot(usize),
     NewerVersion(u32),
@@ -218,6 +224,7 @@ impl std::fmt::Display for RigError {
             Self::TooManyInserts(i) => {
                 write!(f, "slot {} has more than {MAX_INSERTS} inserts", i + 1)
             }
+            Self::BadMacro(i) => write!(f, "slot {} has an invalid macro", i + 1),
             Self::BadMapping(i) => write!(f, "mapping {} is not valid", i + 1),
             Self::BadSnapshot(i) => write!(f, "snapshot {} is not valid", i + 1),
             Self::NewerVersion(v) => write!(f, "rig format {v} is newer than this app understands"),
@@ -253,6 +260,9 @@ impl Rig {
         for (i, s) in self.slots.iter().enumerate() {
             if s.inserts.len() > MAX_INSERTS {
                 return Err(RigError::TooManyInserts(i));
+            }
+            if s.macros.len() > MACROS_PER_SLOT || !s.macros.iter().all(Macro::is_valid) {
+                return Err(RigError::BadMacro(i));
             }
             let f = &s.filter;
             let ok = f.key_lo <= f.key_hi

@@ -55,6 +55,17 @@ Snapshots are saved inside the rig file, so one file holds the whole setup.
 - [ ] On a touch screen, if you have one: are the buttons big enough, does holding to unlock work?
 - [ ] Window start: launching the app from a terminal while typing elsewhere must not steal your typing focus (needs your KDE setup; see the log line "could not ask for a quiet start" if it fails).
 
+## 5d. Macros
+- [ ] Load a SoundFont and a CLAP/VST3 synth. Select the SoundFont, open the **Macros** tab. On macro 1 press **+ parameter...**: pick *Brightness* and *Level*. Drag the knob: the sound gets brighter and louder together. The **x** removes a target.
+- [ ] On the synth: add its filter cutoff and one more parameter to a macro (use the search box). The knob moves them, and the plugin's editor (Plugin tab) shows the new values.
+- [ ] Set a target's *from* and *to* to 100% and 0%: the parameter runs backwards.
+- [ ] Rename a macro; it keeps the name after Save, New, reopen. The knob position and its targets are restored.
+- [ ] Adding the *first* target to a macro must not change the sound by itself.
+- [ ] Save a snapshot with a macro at 0.2, move the macro to 0.9, recall the snapshot: the macro and the sound go back.
+- [ ] Settings > Controls: *Macro of a slot (knob or fader)*, pick slot and macro, **Learn...**, turn a knob. The knob moves the macro (Pick up: only after it passes the current position).
+- [ ] Perform view: macros that have targets appear as sliders on their instrument's tile.
+- [ ] Try a Windows plugin (Surge XT Windows, Six Sines) as a macro target; the app must stay responsive.
+
 ## 6. Stability
 - [ ] Kill a Windows plugin's Wine process while the app runs: `pgrep -af yabridge-host`, then `kill -9 <pid>` of one. The app should restart itself from the autosave and name the plugin it quarantined (it comes back with *Retry*).
 - [ ] The 2-hour rehearsal: 6–8 instruments including a Windows one, switching and playing for 2 hours. For an unattended version: `just soak 7200 3 --windows "Six Sines"`, then read the `state:` lines (xruns, held keys, RSS, threads). Expect 0 xruns, 0 held keys at the end, memory flat.

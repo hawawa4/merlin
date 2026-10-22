@@ -10,6 +10,7 @@
 mod browser;
 mod guard;
 mod keyboard;
+mod macro_panel;
 mod marker;
 mod paths;
 mod perf;
@@ -311,7 +312,8 @@ impl Running {
         let covered = self.ui.popup_open
             || self.ui.settings_open
             || self.ui.perform
-            || self.ui.tab == ui::DockTab::Effects;
+            || self.ui.tab == ui::DockTab::Effects
+            || self.ui.tab == ui::DockTab::Macros;
         let _ = self.session.editors.set_popup_open(covered);
 
         let prims = ctx.tessellate(out.shapes, ppp);
@@ -470,6 +472,59 @@ impl Running {
                     .set_fullscreen((!full).then_some(winit::window::Fullscreen::Borderless(None)));
                 Ok(())
             }
+            Action::SetMacro(i, k, v) => {
+                s.set_macro(i, k, v);
+                Ok(())
+            }
+            Action::RenameMacro(i, k, name) => {
+                s.rename_macro(i, k, name);
+                Ok(())
+            }
+            Action::AddMacroParam(i, k, insert, info) => {
+                s.add_macro_param(i, k, insert, &info);
+                Ok(())
+            }
+            Action::AddMacroSampler(i, k, field) => {
+                s.add_macro_sampler(i, k, field);
+                Ok(())
+            }
+            Action::RemoveMacroTarget(i, k, t) => {
+                s.remove_macro_target(i, k, t);
+                Ok(())
+            }
+            Action::SetMacroRange(i, k, t, from, to) => {
+                s.set_macro_range(i, k, t, from, to);
+                Ok(())
+            }
+            Action::AddMacroParamNamed(i, k, query) => {
+                let q = query.to_lowercase();
+                if let Some(field) = q.strip_prefix("sampler:") {
+                    match merlin_model::SamplerField::ALL
+                        .into_iter()
+                        .find(|f| f.name().to_lowercase() == field)
+                    {
+                        Some(f) => {
+                            s.add_macro_sampler(i, k, f);
+                            Ok(())
+                        }
+                        None => Err(anyhow::anyhow!("no sampler field {field:?}")),
+                    }
+                } else {
+                    let found = s
+                        .plugin_params(i, None)
+                        .iter()
+                        .find(|p| p.name.to_lowercase().contains(&q))
+                        .cloned();
+                    match found {
+                        Some(p) => {
+                            s.say(format!("macro {} drives {:?}", k + 1, p.name));
+                            s.add_macro_param(i, k, None, &p);
+                            Ok(())
+                        }
+                        None => Err(anyhow::anyhow!("no parameter matching {query:?}")),
+                    }
+                }
+            }
             Action::AddSnapshot => {
                 s.add_snapshot();
                 Ok(())
@@ -595,7 +650,7 @@ impl Running {
                     match tab {
                         ui::DockTab::Plugin => s.show_editor(i),
                         ui::DockTab::Insert(k) => s.show_insert_editor(i, k),
-                        ui::DockTab::Effects => {}
+                        ui::DockTab::Effects | ui::DockTab::Macros => {}
                     }
                 }
                 Ok(())
@@ -749,7 +804,7 @@ impl Running {
                 s.say(format!(
                     "state: rig '{}'{}, xruns {xruns}, DSP {dsp:.1}%, held keys {held}, \
                      RSS {rss_mb} MB, threads {threads}, midi {midi}, master {:.2}, vol1 {:.2}, targets {:?}, dock shows {:?}, \
-                     popup {}, slots {}, perform {}, locked {}",
+                     popup {}, slots {}, perform {}, locked {}, macro1 {:.2}, gain1 {:.2}",
                     s.rig.name,
                     if s.dirty { " (modified)" } else { "" },
                     s.rig.master_volume,
@@ -759,7 +814,9 @@ impl Running {
                     self.ui.popup_open,
                     loaded.join(" "),
                     self.ui.perform,
-                    self.ui.locked
+                    self.ui.locked,
+                    s.macro_value(0, 0),
+                    s.sampler_gain(0).unwrap_or(-1.0)
                 ));
                 Ok(())
             }
@@ -994,6 +1051,7 @@ fn parse_script() -> Vec<(Duration, Action)> {
                 },
                 "tab" => Action::Tab(match words.next()? {
                     "fx" => ui::DockTab::Effects,
+                    "macros" => ui::DockTab::Macros,
                     t if t.starts_with("insert") => ui::DockTab::Insert(
                         t["insert".len()..].parse::<usize>().ok()?.checked_sub(1)?,
                     ),
@@ -1061,6 +1119,17 @@ fn parse_script() -> Vec<(Duration, Action)> {
                 }
                 "drop" => Action::DropFile(PathBuf::from(words.collect::<Vec<_>>().join(" "))),
                 "runtime" => Action::InstallRuntime,
+                // macro <slot> <n> <0..1>; macrotarget <slot> <n> <param name part | sampler:level>
+                "macro" => Action::SetMacro(
+                    slot(words.next())?,
+                    slot(words.next())?,
+                    words.next()?.parse().ok()?,
+                ),
+                "macrotarget" => Action::AddMacroParamNamed(
+                    slot(words.next())?,
+                    slot(words.next())?,
+                    words.collect::<Vec<_>>().join(" "),
+                ),
                 // perform on|off, lock on|off, fullscreen
                 "perform" => Action::SetPerform(words.next()? == "on"),
                 "lock" => Action::SetLock(words.next()? == "on"),
@@ -1097,7 +1166,7 @@ fn parse_script() -> Vec<(Duration, Action)> {
         .collect()
 }
 
-/// `select 2`, `layer 3`, `mute 1`, `volume 1`, `byvalue 1`, `master`, `snap 2`, `snapbyvalue 1`, `snapnext`, `snapprev`, `next`, `prev`, `panic`
+/// `select 2`, `layer 3`, `mute 1`, `volume 1`, `byvalue 1`, `master`, `macro 1 3`, `snap 2`, `snapbyvalue 1`, `snapnext`, `snapprev`, `next`, `prev`, `panic`
 /// (slots counted from 1), for the script's `map` and `learn`.
 fn parse_control_action(
     words: &mut std::str::SplitWhitespace<'_>,
@@ -1121,6 +1190,10 @@ fn parse_control_action(
             base: num(words.next())?,
         },
         "master" => A::MasterVolume,
+        "macro" => A::SlotMacro {
+            slot: num(words.next())?,
+            index: num(words.next())?,
+        },
         "snap" => A::RecallSnapshot {
             snapshot: num(words.next())?,
         },

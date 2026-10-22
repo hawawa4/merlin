@@ -20,6 +20,7 @@ use merlin_scanner::{Cache, Entry, Found, Quarantine};
 use std::sync::mpsc;
 
 mod controls;
+mod macros;
 mod snapshots;
 
 use crate::scan_worker::{self, ScanMsg};
@@ -192,6 +193,9 @@ pub struct Session {
     last_control: Option<String>,
     /// The snapshot recalled last.
     last_snapshot: Option<usize>,
+    /// What each plugin said about its parameters, by (slot, insert).
+    param_cache:
+        std::collections::HashMap<(usize, Option<usize>), Vec<merlin_hosting::ParamInfo>>,
     /// MIDI activity: the message count last seen per input, and until when its light stays on.
     midi_seen: [u32; merlin_engine::MAX_INPUTS],
     midi_lit: [Option<Instant>; merlin_engine::MAX_INPUTS],
@@ -279,6 +283,7 @@ impl Session {
             learn: None,
             last_control: None,
             last_snapshot: None,
+            param_cache: Default::default(),
             midi_seen: Default::default(),
             midi_lit: Default::default(),
             slot_cpu: [SlotCpu::default(); UI_SLOTS],
@@ -1156,6 +1161,7 @@ impl Session {
             return false;
         }
         self.guard.unregister_slot(i);
+        self.forget_params(i, None);
         self.guard.begin_close();
         let _ = self
             .editors
@@ -1787,6 +1793,7 @@ impl Session {
         }
         let id = insert_id(slot, index);
         self.guard.unregister_slot(id);
+        self.forget_params(slot, Some(index));
         self.guard.begin_close();
         let _ = self
             .editors

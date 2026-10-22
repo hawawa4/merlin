@@ -31,6 +31,7 @@ pub enum ActionKind {
     SelectByValue,
     SlotVolume,
     MasterVolume,
+    SlotMacro,
     RecallSnapshot,
     NextSnapshot,
     PrevSnapshot,
@@ -39,7 +40,7 @@ pub enum ActionKind {
 }
 
 impl ActionKind {
-    const ALL: [ActionKind; 13] = [
+    const ALL: [ActionKind; 14] = [
         Self::SelectSlot,
         Self::ToggleLayer,
         Self::ToggleMute,
@@ -48,6 +49,7 @@ impl ActionKind {
         Self::SelectByValue,
         Self::SlotVolume,
         Self::MasterVolume,
+        Self::SlotMacro,
         Self::RecallSnapshot,
         Self::NextSnapshot,
         Self::PrevSnapshot,
@@ -65,6 +67,7 @@ impl ActionKind {
             Self::SelectByValue => "Select the slot given by the number sent",
             Self::SlotVolume => "Volume of a slot (fader or knob)",
             Self::MasterVolume => "Master volume (fader or knob)",
+            Self::SlotMacro => "Macro of a slot (knob or fader)",
             Self::RecallSnapshot => "Recall a snapshot",
             Self::NextSnapshot => "Next snapshot (foot switch)",
             Self::PrevSnapshot => "Previous snapshot (foot switch)",
@@ -76,7 +79,11 @@ impl ActionKind {
     fn needs_slot(self) -> bool {
         matches!(
             self,
-            Self::SelectSlot | Self::ToggleLayer | Self::ToggleMute | Self::SlotVolume
+            Self::SelectSlot
+                | Self::ToggleLayer
+                | Self::ToggleMute
+                | Self::SlotVolume
+                | Self::SlotMacro
         )
     }
 
@@ -93,6 +100,7 @@ impl ActionKind {
             Self::SelectByValue => A::SelectByValue { base },
             Self::SlotVolume => A::SlotVolume { slot },
             Self::MasterVolume => A::MasterVolume,
+            Self::SlotMacro => A::SlotMacro { slot, index: base },
             Self::RecallSnapshot => A::RecallSnapshot { snapshot: slot },
             Self::NextSnapshot => A::NextSnapshot,
             Self::PrevSnapshot => A::PrevSnapshot,
@@ -355,6 +363,14 @@ fn controls(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<
             ui.label("first slot");
             let mut shown = st.new_base + 1;
             ui.add(egui::DragValue::new(&mut shown).range(1..=crate::session::UI_SLOTS));
+            st.new_base = shown - 1;
+        }
+        if st.new_kind == ActionKind::SlotMacro {
+            ui.label("macro");
+            let mut shown = st.new_base + 1;
+            ui.add(
+                egui::DragValue::new(&mut shown).range(1..=merlin_model::MACROS_PER_SLOT),
+            );
             st.new_base = shown - 1;
         }
         if st.new_kind == ActionKind::RecallSnapshot {

@@ -116,6 +116,20 @@ pub enum Action {
     SaveRig,
     OpenRig(PathBuf),
     RenameRig(String),
+    SetMacro(usize, usize, f32),
+    RenameMacro(usize, usize, String),
+    AddMacroParam(
+        usize,
+        usize,
+        Option<usize>,
+        merlin_hosting::ParamInfo,
+    ),
+    AddMacroSampler(usize, usize, merlin_model::SamplerField),
+    RemoveMacroTarget(usize, usize, usize),
+    SetMacroRange(usize, usize, usize, f32, f32),
+    /// Script-only: make macro `k` of a slot drive the first parameter whose name contains the
+    /// text (or `sampler:level`, `sampler:brightness`, ... for a SoundFont).
+    AddMacroParamNamed(usize, usize, String),
     /// Show or leave the Perform view.
     SetPerform(bool),
     /// Lock the Perform view (it cannot be left) or unlock it.
@@ -145,6 +159,7 @@ pub enum DockTab {
     /// The editor of insert `n`.
     Insert(usize),
     Effects,
+    Macros,
 }
 
 /// UI state that is not part of the session.
@@ -161,6 +176,8 @@ pub struct UiState {
     pub query: String,
     /// Search box of the preset list in a SoundFont slot.
     pub preset_query: String,
+    /// Search box of the macro parameter picker.
+    pub macro_query: String,
     pub favs_only: bool,
     pub dir_text: String,
     pub sound_dir_text: String,
@@ -201,6 +218,7 @@ impl UiState {
             settings_tab: SettingsTab::Plugins,
             query: String::new(),
             preset_query: String::new(),
+            macro_query: String::new(),
             favs_only: false,
             dir_text: String::new(),
             sound_dir_text: String::new(),
@@ -261,6 +279,12 @@ pub fn draw(
             && let Some(i) = s.viewing
         {
             fx_panel(ui, s, i, actions);
+            return;
+        }
+        if st.tab == DockTab::Macros
+            && let Some(i) = s.viewing
+        {
+            crate::macro_panel::show(ui, s, st, i, actions);
             return;
         }
         if st.tab == DockTab::Plugin
@@ -869,6 +893,7 @@ fn dock_bar(ui: &mut egui::Ui, s: &Session, st: &UiState, actions: &mut Vec<Acti
             }
         }
         tabs.push((DockTab::Effects, "Effects".to_owned()));
+        tabs.push((DockTab::Macros, "Macros".to_owned()));
         for (tab, label) in tabs {
             if ui.selectable_label(st.tab == tab, label).clicked() {
                 actions.push(Action::Tab(tab));
@@ -887,6 +912,11 @@ fn dock_bar(ui: &mut egui::Ui, s: &Session, st: &UiState, actions: &mut Vec<Acti
             .filter(|&&e| e)
             .count();
             ui.colored_label(COLORS[i], format!("EFFECTS · {} · {on}/4 on", i + 1));
+            return;
+        }
+        if st.tab == DockTab::Macros {
+            let used = s.macros(i).iter().filter(|m| !m.targets.is_empty()).count();
+            ui.colored_label(COLORS[i], format!("MACROS · {} · {used}/8 in use", i + 1));
             return;
         }
         let name = match st.tab {

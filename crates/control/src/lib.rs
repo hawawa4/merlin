@@ -4,7 +4,9 @@
 //! (which slots are loaded, what is selected, the current volumes), get back a list of outcomes.
 //! The app turns those into the same actions the buttons on screen perform.
 
-use merlin_model::{ControlAction, MAX_SLOTS, Mapping, SourceKind, Takeover};
+use merlin_model::{
+    ControlAction, MACROS_PER_SLOT, MAX_SLOTS, Mapping, SourceKind, Takeover,
+};
 
 /// A message from a device, as far as mappings care.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,6 +34,8 @@ pub struct Context {
     pub targets: u16,
     pub volumes: [f32; MAX_SLOTS],
     pub master: f32,
+    /// Where each slot's macros sit.
+    pub macros: [[f32; MACROS_PER_SLOT]; MAX_SLOTS],
     /// How many snapshots the rig has, and the one recalled last.
     pub snapshots: usize,
     pub snapshot: Option<usize>,
@@ -45,6 +49,7 @@ pub enum Outcome {
     ToggleMute(usize),
     SetVolume(usize, f32),
     SetMaster(f32),
+    SetMacro(usize, usize, f32),
     Recall(usize),
     Panic,
 }
@@ -220,6 +225,7 @@ fn fire(action: &ControlAction, inc: &Incoming, ctx: &Context) -> Option<Outcome
 /// A knob or fader following its value, with jump or pick-up.
 fn follow(m: &Mapping, state: &mut State, inc: &Incoming, ctx: &Context) -> Option<Outcome> {
     let x = value_of(&inc.message) as f32 / 127.0;
+    let mut which_macro = None;
     let (slot, current) = match m.action {
         ControlAction::SlotVolume { slot } => {
             let s = slot as usize;
@@ -227,6 +233,14 @@ fn follow(m: &Mapping, state: &mut State, inc: &Incoming, ctx: &Context) -> Opti
                 return None;
             }
             (Some(s), ctx.volumes[s].clamp(0.0, 1.0))
+        }
+        ControlAction::SlotMacro { slot, index } => {
+            let (s, k) = (slot as usize, index as usize);
+            if !loaded(ctx, s) || k >= MACROS_PER_SLOT {
+                return None;
+            }
+            which_macro = Some(k);
+            (Some(s), ctx.macros[s][k].clamp(0.0, 1.0))
         }
         _ => (None, ctx.master.clamp(0.0, 1.0)),
     };
@@ -240,9 +254,10 @@ fn follow(m: &Mapping, state: &mut State, inc: &Incoming, ctx: &Context) -> Opti
         }
         state.picked_up = true;
     }
-    Some(match slot {
-        Some(s) => Outcome::SetVolume(s, x),
-        None => Outcome::SetMaster(x),
+    Some(match (slot, which_macro) {
+        (Some(s), Some(k)) => Outcome::SetMacro(s, k, x),
+        (Some(s), None) => Outcome::SetVolume(s, x),
+        _ => Outcome::SetMaster(x),
     })
 }
 
@@ -259,6 +274,7 @@ mod tests {
             targets: bits(targets),
             volumes: [1.0; MAX_SLOTS],
             master: 1.0,
+            macros: [[0.0; MACROS_PER_SLOT]; MAX_SLOTS],
             snapshots: 0,
             snapshot: None,
         }
@@ -526,5 +542,31 @@ mod tests {
             message: Message::Program { number: 1 },
         };
         assert_eq!(m.handle(&pc, &c), vec![Outcome::Recall(1)]);
+    }
+
+    #[test]
+    fn a_knob_drives_a_macro_with_pickup() {
+        let mut pick = map(
+            None,
+            SourceKind::Cc { number: 40 },
+            ControlAction::SlotMacro { slot: 1, index: 2 },
+        );
+        pick.takeover = Takeover::Pickup;
+        let mut m = Mapper::new(&[pick]);
+        let mut c = ctx(&[0, 1], &[0]);
+        c.macros[1][2] = 0.5;
+        // Far from the macro's position: ignored until the knob gets there.
+        assert!(m.handle(&cc("K", 0, 40, 5), &c).is_empty());
+        assert_eq!(
+            m.handle(&cc("K", 0, 40, 64), &c),
+            vec![Outcome::SetMacro(1, 2, 64.0 / 127.0)]
+        );
+        // A slot with nothing loaded has no macros to move.
+        let mut m = Mapper::new(&[map(
+            None,
+            SourceKind::Cc { number: 40 },
+            ControlAction::SlotMacro { slot: 5, index: 0 },
+        )]);
+        assert!(m.handle(&cc("K", 0, 40, 64), &c).is_empty());
     }
 }

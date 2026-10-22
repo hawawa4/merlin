@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{MAX_SLOTS, MAX_SNAPSHOTS};
+use crate::{MACROS_PER_SLOT, MAX_SLOTS, MAX_SNAPSHOTS};
 
 /// Which message on which device a mapping listens to.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,6 +55,11 @@ pub enum ControlAction {
         slot: u8,
     },
     MasterVolume,
+    /// A knob for one of a slot's macros.
+    SlotMacro {
+        slot: u8,
+        index: u8,
+    },
     /// Recall a snapshot.
     RecallSnapshot {
         snapshot: u8,
@@ -72,7 +77,10 @@ pub enum ControlAction {
 impl ControlAction {
     /// Follows a knob or fader (as opposed to firing once per press).
     pub fn is_continuous(&self) -> bool {
-        matches!(self, Self::SlotVolume { .. } | Self::MasterVolume)
+        matches!(
+            self,
+            Self::SlotVolume { .. } | Self::MasterVolume | Self::SlotMacro { .. }
+        )
     }
 
     fn slot(&self) -> Option<u8> {
@@ -80,7 +88,8 @@ impl ControlAction {
             Self::SelectSlot { slot }
             | Self::ToggleLayer { slot }
             | Self::ToggleMute { slot }
-            | Self::SlotVolume { slot } => Some(slot),
+            | Self::SlotVolume { slot }
+            | Self::SlotMacro { slot, .. } => Some(slot),
             _ => None,
         }
     }
@@ -101,6 +110,9 @@ impl ControlAction {
             }
             Self::SlotVolume { slot } => format!("Volume of slot {}", slot as usize + 1),
             Self::MasterVolume => "Master volume".into(),
+            Self::SlotMacro { slot, index } => {
+                format!("Macro {} of slot {}", index as usize + 1, slot as usize + 1)
+            }
             Self::RecallSnapshot { snapshot } => {
                 format!("Recall snapshot {}", snapshot as usize + 1)
             }
@@ -162,6 +174,7 @@ impl Mapping {
             }
             && match self.action {
                 ControlAction::SelectByValue { base } => (base as usize) < MAX_SLOTS,
+                ControlAction::SlotMacro { index, .. } => (index as usize) < MACROS_PER_SLOT,
                 ControlAction::RecallSnapshot { snapshot: n }
                 | ControlAction::RecallSnapshotByValue { base: n } => (n as usize) < MAX_SNAPSHOTS,
                 _ => true,

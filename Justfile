@@ -14,9 +14,9 @@ default:
 
 # The app. Loads plugins from the standard CLAP folders plus test-assets (Linux and, through
 # our patched Wine, Windows ones). Try: just dev --fresh      just dev --rig my.irig
-# This round: the Perform view. Press "Perform" in the title bar (or F11): big snapshot buttons, one
-# tile per instrument, master fader, panic. "Lock" keeps it from being left until "Unlock" is held for
-# a second. See docs/qa-checklist.md section 5c. The window also opens without taking the focus now.
+# This round: macros. Select a slot, open the "Macros" tab next to Effects, press "+ parameter..." on a
+# macro and pick something to move (a SoundFont offers level, brightness, ...), then drag the knob. Map
+# a controller knob to it in Settings -> Controls. See docs/qa-checklist.md section 5d.
 dev *args:
     cargo build -p merlin --release
     PATH="{{yabridge_dir}}:$PATH" WINELOADER={{patched_wine}} \
@@ -43,7 +43,8 @@ compat *filters:
 
 # Checks MIDI mappings end to end with a pretend controller (needs JACK/PipeWire running).
 e2e-controls:
-    cargo build --release -p merlin -p merlin-audio-io --examples
+    cargo build --release -p merlin
+    cargo build --release -p merlin-audio-io --examples
     python3 tools/e2e_controls.py
 
 # A pretend MIDI keyboard (a JACK MIDI source, like a USB keyboard through PipeWire) for trying the
