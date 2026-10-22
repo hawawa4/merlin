@@ -14,12 +14,14 @@ default:
 
 # The app. Loads plugins from the standard CLAP folders plus test-assets (Linux and, through
 # our patched Wine, Windows ones). Try: just dev --fresh      just dev --rig my.irig
-# This round: MIDI hotplug (plug a keyboard in while it runs; the log says "MIDI device connected").
+# This round: SoundFonts as instruments. Pick one in the browser (badge SoundFont), then choose
+# its sound in the dock's preset list. MuseScore General (SF3) and the system SF2s are found.
 dev *args:
     cargo build -p merlin --release
     PATH="{{yabridge_dir}}:$PATH" WINELOADER={{patched_wine}} \
         target/release/merlin \
-        --plugin-dir {{assets}}/dl/surge-linux --plugin-dir {{assets}}/bridges-vblank/clap {{args}}
+        --plugin-dir {{assets}}/dl/surge-linux --plugin-dir {{assets}}/bridges-vblank/clap \
+        --plugin-dir {{assets}}/sf {{args}}
 
 # Soak run: random switching, layering, notes and editor tabs for SECS seconds with Surge XT,
 # in throwaway state directories. Look at the `state:` lines (xruns, held keys, RSS, threads);
@@ -51,6 +53,7 @@ setup:
     mkdir -p {{assets}}/dl/surge-linux
     [ -f "{{sf3}}" ] || curl -fL -o "{{sf3}}" \
         https://ftp.osuosl.org/pub/musescore/soundfont/MuseScore_General/MuseScore_General.sf3
+    mkdir -p {{assets}}/sf && ln -sf ../MuseScore_General.sf3 {{assets}}/sf/MuseScore_General.sf3
     [ -d "{{surge_clap}}" ] || [ -f "{{surge_clap}}" ] || { \
         curl -fL -o {{assets}}/dl/surge-linux.tar.gz \
             https://github.com/surge-synthesizer/releases-xt/releases/download/1.3.4/surge-xt-linux-1.3.4-pluginsonly.tar.gz; \

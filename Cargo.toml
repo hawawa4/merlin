@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["spikes/*", "crates/*", "app"]
+exclude = ["vendor"]
 
 [workspace.package]
 edition = "2024"
@@ -31,3 +32,8 @@ merlin-scanner = { path = "crates/scanner" }
 
 [profile.release]
 debug = 1
+
+# oxisynth with four small patches (no allocation on note-on, a preset list, an active-voice
+# count; see vendor/oxisynth/PATCHES.md). To be sent upstream.
+[patch.crates-io]
+oxisynth = { path = "vendor/oxisynth" }

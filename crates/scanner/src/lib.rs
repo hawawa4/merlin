@@ -19,6 +19,7 @@ use std::time::UNIX_EPOCH;
 use anyhow::{Context, Result};
 use merlin_hosting::PluginInfo;
 use merlin_hosting::clap::ClapLibrary;
+use merlin_hosting::soundfont::is_soundfont;
 use merlin_hosting::vst3::Vst3Library;
 use serde::{Deserialize, Serialize};
 
@@ -80,12 +81,14 @@ impl Cache {
     }
 }
 
-/// Where plugins usually live (CLAP and VST3).
+/// Where plugins and SoundFonts usually live.
 pub fn default_plugin_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Some(home) = std::env::var_os("HOME") {
         dirs.push(Path::new(&home).join(".clap"));
         dirs.push(Path::new(&home).join(".vst3"));
+        dirs.push(Path::new(&home).join(".local/share/sounds/sf2"));
+        dirs.push(Path::new(&home).join(".local/share/soundfonts"));
     }
     dirs.extend(
         [
@@ -95,6 +98,8 @@ pub fn default_plugin_dirs() -> Vec<PathBuf> {
             "/usr/lib/vst3",
             "/usr/lib64/vst3",
             "/usr/local/lib/vst3",
+            "/usr/share/sounds/sf2",
+            "/usr/share/soundfonts",
         ]
         .into_iter()
         .map(PathBuf::from),
@@ -116,7 +121,7 @@ pub fn find_clap_files(dirs: &[PathBuf]) -> Vec<(PathBuf, bool)> {
                 // A chainloader named like the plugin, with a `.clap-win` link beside it.
                 let windows = p.with_extension("clap-win").exists();
                 out.push((p, windows));
-            } else if p.extension().is_some_and(|e| e == "vst3") {
+            } else if p.extension().is_some_and(|e| e == "vst3") || is_soundfont(&p) {
                 out.push((p, false));
             } else if p.is_dir() && depth < MAX_DEPTH {
                 walk(&p, depth + 1, out);
@@ -148,7 +153,11 @@ pub fn load_vst3(path: &Path) -> Result<Vec<PluginInfo>> {
 
 /// Reads whatever kind of plugin file this is.
 pub fn load_any(path: &Path, windows: bool) -> Result<Vec<PluginInfo>> {
-    if path.extension().is_some_and(|e| e == "vst3") {
+    if is_soundfont(path) {
+        // A SoundFont is a file, not code: it is listed without being decoded.
+        std::fs::metadata(path).with_context(|| format!("scanning {}", path.display()))?;
+        Ok(vec![merlin_hosting::soundfont::info_for(path)])
+    } else if path.extension().is_some_and(|e| e == "vst3") {
         load_vst3(path)
     } else {
         load_clap(path, windows)
@@ -306,6 +315,8 @@ mod tests {
     fn finds_plugins_bridges_and_nested_vendor_folders() {
         let d = tempdir("find");
         std::fs::write(d.join("a.clap"), b"x").unwrap();
+        std::fs::write(d.join("piano.sf2"), b"x").unwrap();
+        std::fs::write(d.join("Strings.SF3"), b"x").unwrap();
         std::fs::write(d.join("b.clap"), b"x").unwrap();
         std::fs::write(d.join("b.clap-win"), b"x").unwrap();
         std::fs::create_dir_all(d.join("vendor/deeper")).unwrap();
@@ -330,10 +341,12 @@ mod tests {
         assert_eq!(
             files,
             vec![
+                ("Strings.SF3".into(), false),
                 ("Synth.vst3".into(), false),
                 ("a.clap".into(), false),
                 ("b.clap".into(), true),
                 ("bundle.clap".into(), false),
+                ("piano.sf2".into(), false),
                 ("vendor/c.clap".into(), false),
                 ("vendor/deeper/d.clap".into(), false),
             ]
@@ -475,6 +488,18 @@ mod tests {
         assert_eq!(plugins[0].id, "org.surge-synth-team.surge-xt");
         assert!(plugins[0].is_instrument());
         assert!(load_clap(Path::new("/nonexistent.clap"), false).is_err());
+    }
+
+    #[test]
+    fn soundfonts_are_listed_without_decoding() {
+        let d = tempdir("sf");
+        let path = d.join("Grand.sf2");
+        std::fs::write(&path, b"not decoded here").unwrap();
+        let plugins = load_any(&path, false).unwrap();
+        assert_eq!(plugins.len(), 1);
+        assert_eq!(plugins[0].format, Format::SoundFont);
+        assert_eq!(plugins[0].name, "Grand");
+        assert!(load_any(&d.join("missing.sf2"), false).is_err());
     }
 
     #[test]

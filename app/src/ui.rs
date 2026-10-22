@@ -21,6 +21,9 @@ pub fn found_label(f: &merlin_scanner::Found) -> String {
     if f.info.format == Format::Vst3 {
         label.push_str(" (VST3)");
     }
+    if f.info.format == Format::SoundFont {
+        label.push_str(" (SoundFont)");
+    }
     if f.windows {
         label.push_str(" (Windows)");
     }
@@ -38,6 +41,9 @@ pub enum Action {
     Mute(usize),
     Zone(usize, u8, u8),
     Volume(usize, f32),
+    /// Pick a SoundFont slot's preset (bank, program).
+    SetPreset(usize, u16, u8),
+    SamplerGain(usize, f32),
     Transpose(usize, i8),
     Fit,
     Scroll(u32, u32),
@@ -102,6 +108,8 @@ pub struct UiState {
     pub settings_open: bool,
     pub settings_tab: SettingsTab,
     pub query: String,
+    /// Search box of the preset list in a SoundFont slot.
+    pub preset_query: String,
     pub favs_only: bool,
     pub dir_text: String,
     pub wine_text: String,
@@ -130,6 +138,7 @@ impl UiState {
             settings_open: false,
             settings_tab: SettingsTab::Plugins,
             query: String::new(),
+            preset_query: String::new(),
             favs_only: false,
             dir_text: String::new(),
             wine_text: String::new(),
@@ -176,6 +185,13 @@ pub fn draw(
             fx_panel(ui, s, i, actions);
             return;
         }
+        if st.tab == DockTab::Plugin
+            && let Some(i) = s.viewing
+            && s.is_sampler(i)
+        {
+            sampler_panel(ui, s, st, i, actions);
+            return;
+        }
         let note = s.viewing.and_then(|i| s.notes[i].as_deref());
         let text = if s.viewing.is_none() {
             "Load an instrument into a slot, then select it"
@@ -188,6 +204,58 @@ pub fn draw(
         };
         ui.centered_and_justified(|ui| ui.label(text));
     });
+}
+
+/// A SoundFont slot's panel: the preset list (bank and program), a search box, the level.
+fn sampler_panel(
+    ui: &mut egui::Ui,
+    s: &Session,
+    st: &mut UiState,
+    i: usize,
+    actions: &mut Vec<Action>,
+) {
+    let (Some(presets), Some(current)) = (s.presets(i), s.preset(i)) else {
+        return;
+    };
+    ui.horizontal(|ui| {
+        ui.label("Search");
+        ui.add(egui::TextEdit::singleline(&mut st.preset_query).desired_width(220.0));
+        if let Some(mut gain) = s.sampler_gain(i) {
+            ui.add_space(12.0);
+            ui.label("level");
+            if ui
+                .add(egui::Slider::new(&mut gain, 0.0..=2.0).fixed_decimals(2))
+                .on_hover_text("Output level of this SoundFont (1.00 = the file's own level)")
+                .changed()
+            {
+                actions.push(Action::SamplerGain(i, gain));
+            }
+        }
+        let now = presets
+            .iter()
+            .find(|p| (p.bank, p.program) == current)
+            .map_or("", |p| p.name.as_str());
+        ui.add_space(12.0);
+        ui.colored_label(COLORS[i], format!("now: {now}"));
+    });
+    ui.separator();
+    let query = st.preset_query.trim().to_lowercase();
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            for p in presets {
+                if !query.is_empty() && !p.name.to_lowercase().contains(&query) {
+                    continue;
+                }
+                let label = format!("{:>3}:{:<3}  {}", p.bank, p.program, p.name);
+                if ui
+                    .selectable_label((p.bank, p.program) == current, label)
+                    .clicked()
+                {
+                    actions.push(Action::SetPreset(i, p.bank, p.program));
+                }
+            }
+        });
 }
 
 fn header(ui: &mut egui::Ui, s: &mut Session, st: &UiState, actions: &mut Vec<Action>) {
@@ -319,6 +387,7 @@ fn unit(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, i: usize, actions:
             r.name,
             match r.format {
                 Format::Vst3 => "VST3",
+                Format::SoundFont => "SF",
                 _ => "CLAP",
             },
             if r.windows { "·WIN" } else { "" }

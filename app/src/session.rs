@@ -481,7 +481,12 @@ impl Session {
             proxy: Mutex::new(self.proxy.clone()),
             slot: i,
         });
-        let plugin: Box<dyn PluginHandle> = if path.extension().is_some_and(|e| e == "vst3") {
+        let plugin: Box<dyn PluginHandle> = if merlin_hosting::soundfont::is_soundfont(path)
+        {
+            Box::new(merlin_hosting::soundfont::SoundFontPlugin::open(
+                path,
+            )?)
+        } else if path.extension().is_some_and(|e| e == "vst3") {
             Box::new(Vst3Library::load(path)?.create(id, waker)?)
         } else {
             Box::new(ClapLibrary::load(path)?.create(id, waker)?)
@@ -620,6 +625,14 @@ impl Session {
     pub fn show_editor(&mut self, i: usize) {
         self.viewing = Some(i);
         self.view_id = Some(i);
+        if self.is_sampler(i) {
+            // A SoundFont has a preset panel, not an editor window: clear the dock.
+            self.notes[i] = None;
+            let _ = self
+                .editors
+                .hide(&mut lookup(&mut self.plugins, &mut self.inserts));
+            return;
+        }
         // Known problems with this plugin's editor are shown beside it.
         self.notes[i] = self.rig.slots[i]
             .instrument
@@ -633,6 +646,39 @@ impl Session {
             Ok(o) if o.created => self.say(format!("editor {} created in {:?}", i + 1, o.elapsed)),
             Ok(_) => {}
             Err(e) => self.say(format!("slot {}: no editor: {e:#}", i + 1)),
+        }
+    }
+
+    /// Does this slot hold a sampler with a preset list (a SoundFont) instead of an editor?
+    pub fn is_sampler(&self, i: usize) -> bool {
+        self.plugins[i]
+            .as_ref()
+            .is_some_and(|l| l.plugin.presets().is_some())
+    }
+
+    pub fn presets(&self, i: usize) -> Option<&[merlin_hosting::PresetInfo]> {
+        self.plugins[i].as_ref()?.plugin.presets()
+    }
+
+    pub fn preset(&self, i: usize) -> Option<(u16, u8)> {
+        self.plugins[i].as_ref()?.plugin.preset()
+    }
+
+    pub fn set_preset(&mut self, i: usize, bank: u16, program: u8) {
+        if let Some(l) = self.plugins[i].as_mut() {
+            l.plugin.set_preset(bank, program);
+            self.dirty = true;
+        }
+    }
+
+    pub fn sampler_gain(&self, i: usize) -> Option<f32> {
+        self.plugins[i].as_ref()?.plugin.gain()
+    }
+
+    pub fn set_sampler_gain(&mut self, i: usize, gain: f32) {
+        if let Some(l) = self.plugins[i].as_mut() {
+            l.plugin.set_gain(gain);
+            self.dirty = true;
         }
     }
 

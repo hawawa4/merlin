@@ -40,6 +40,14 @@ pub struct ParamInfo {
     pub read_only: bool,
 }
 
+/// One selectable sound inside an instrument (a SoundFont's bank/program).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PresetInfo {
+    pub bank: u16,
+    pub program: u8,
+    pub name: String,
+}
+
 /// Something a plugin asked of the main thread. The app turns these into its own wakeups.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HostEvent {
@@ -102,6 +110,23 @@ pub trait PluginHandle {
 
     fn save_state(&mut self) -> Result<Vec<u8>>;
     fn load_state(&mut self, data: &[u8]) -> Result<()>;
+
+    /// The sounds this instrument can switch between, for instruments that have a preset list
+    /// instead of an editor (SoundFonts). `None` for everything else.
+    fn presets(&self) -> Option<&[PresetInfo]> {
+        None
+    }
+    /// The selected `(bank, program)`.
+    fn preset(&self) -> Option<(u16, u8)> {
+        None
+    }
+    /// Selects a sound; takes effect on the next audio block.
+    fn set_preset(&mut self, _bank: u16, _program: u8) {}
+    /// Output gain of a sampler, 0..=2 (1 = the instrument's own level).
+    fn gain(&self) -> Option<f32> {
+        None
+    }
+    fn set_gain(&mut self, _gain: f32) {}
 
     /// The plugin's GUI, if it has an embeddable one.
     fn editor(&mut self) -> Option<&mut dyn PluginEditor>;

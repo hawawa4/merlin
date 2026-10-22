@@ -919,6 +919,7 @@ dependencies = [
  "merlin-model",
  "libc",
  "libloading 0.9.0",
+ "oxisynth",
  "rtrb",
  "serde",
  "vst3",
@@ -1631,8 +1632,6 @@ dependencies = [
 [[package]]
 name = "oxisynth"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68d089fc07e074f57ac6698292ce3da05eac1d282b821eb4156d4c7d8e36c6ec"
 dependencies = [
  "bitflags 2.13.2",
  "lewton",

@@ -372,6 +372,14 @@ impl Running {
                 s.set_volume(i, v);
                 Ok(())
             }
+            Action::SetPreset(i, bank, program) => {
+                s.set_preset(i, bank, program);
+                Ok(())
+            }
+            Action::SamplerGain(i, g) => {
+                s.set_sampler_gain(i, g);
+                Ok(())
+            }
             Action::ToggleSettings => {
                 self.ui.settings_open = !self.ui.settings_open;
                 Ok(())
@@ -792,6 +800,11 @@ fn parse_script() -> Vec<(Duration, Action)> {
                 ),
                 "volume" => Action::Volume(slot(words.next())?, words.next()?.parse().ok()?),
                 "transpose" => Action::Transpose(slot(words.next())?, words.next()?.parse().ok()?),
+                "preset" => Action::SetPreset(
+                    slot(words.next())?,
+                    words.next()?.parse().ok()?,
+                    words.next()?.parse().ok()?,
+                ),
                 "settings" => match words.next() {
                     None => Action::ToggleSettings,
                     Some(t) => Action::ShowSettingsTab(match t {
