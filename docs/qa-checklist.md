@@ -135,6 +135,19 @@ Works with any device that sends CC, notes or Program Change (this is the "every
 - [ ] Save the rig, open it again: the mappings (including parameter ones) are still there and still work.
 - [ ] No hardware: `just e2e-controls` now also checks pan, effect switches (flip and latching), click level, tempo and a Surge XT parameter.
 
+## 5m. Launchkey MK3 (your keyboard)
+Plug it in before starting `just dev` (or while it runs: the log says `controller: Launchkey MK3 49 found`). The keys, wheels and pedal work as a keyboard as before; the DAW port is taken as a controller, put into DAW mode, and given a built-in layout. When the app quits the device goes back to normal. No setup needed.
+- [ ] **Lights, first**: load 3-4 instruments. The top pad row lights one pad per loaded slot in that slot's colour; the one that plays pulses. The pads under the faders' buttons (the round buttons below the faders) glow white for loaded slots. Save two snapshots (+ Save snapshot): the bottom pad row lights blue for each, green for the one recalled last. Tell me what you actually see: wrong colours, dark pads, anything that stays lit after the app closes.
+- [ ] **Screen**: top line shows the slot that plays (`1 Piano`), bottom line the snapshot or song part and tempo (`Snap 2 120bpm`). Turn a knob: the screen shows the macro's name and percentage (for the slot that plays). Move a fader: `Volume 1` and the value. Which line is which row, is any text cut off or wrong?
+- [ ] **Pads**: top row selects slot 1-8; bottom row recalls snapshot 1-8. Do the lights follow at once?
+- [ ] **Track left/right** = previous/next slot. **Scene up/down** = previous/next song part (needs a setlist: Setlist screen). **Play** = start/stop the transport, **Click** = click on/off, **Quantise** = tap tempo.
+- [ ] **Knobs 1-8** = macros 1-8 of the slot that plays (set a macro up in the Macros tab first). They pick up: after you change slot, a knob does nothing until it reaches the macro's current value.
+- [ ] **Faders 1-8** = volume of slots 1-8, **fader 9** = master (49/61/88-key models), also with pick-up. The round buttons under them mute slots 1-8 (the light dims), the ninth one is Panic.
+- [ ] Settings > Controls > *Built-in layout of connected controllers* lists all of it. Map one of the same controls yourself (MIDI map mode works with them too): yours wins and the built-in row is crossed out.
+- [ ] Unplug the USB cable and plug it in again: it gets its lights back by itself. Quit the app: pads dark and the keyboard works as before.
+- [ ] `just launchkey-probe`: press and turn every control; the names it prints should match the controls (it also shows the CC numbers). Send me any line that says `CC <n>` without a name, or a name that is wrong.
+- [ ] No hardware: `just e2e-controls` plays a pretend Launchkey MK3 and checks the layout and the lights.
+
 ## 6. Stability
 - [ ] Kill a Windows plugin's Wine process while the app runs: `pgrep -af yabridge-host`, then `kill -9 <pid>` of one. The app should restart itself from the autosave and name the plugin it quarantined (it comes back with *Retry*).
 - [ ] The 2-hour rehearsal: 6–8 instruments including a Windows one, switching and playing for 2 hours. For an unattended version: `just soak 7200 3 --windows "Six Sines"`, then read the `state:` lines (xruns, held keys, RSS, threads). Expect 0 xruns, 0 held keys at the end, memory flat.

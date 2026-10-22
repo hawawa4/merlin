@@ -30,6 +30,42 @@ pub const HARDWARE_INPUTS: usize = MAX_INPUTS - 1;
 const MAX_MIDI_PER_CYCLE: usize = 512;
 const VIRTUAL_QUEUE: usize = 256;
 const CONTROL_QUEUE: usize = 512;
+const DEVICE_QUEUE: usize = 256;
+/// Messages to controllers written per cycle; the rest wait for the next one.
+const MAX_DEVICE_PER_CYCLE: usize = 32;
+/// Controllers the backend can talk to at once (one MIDI output port each).
+pub const DEVICE_OUTPUTS: usize = 2;
+/// Longest message to a controller: a text line is 16 characters plus a header.
+pub const DEVICE_MESSAGE_MAX: usize = 48;
+
+/// One MIDI message for a controller (LEDs, a screen, a mode switch), sent on its own output.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DeviceMessage {
+    /// Which output (0..[`DEVICE_OUTPUTS`]).
+    pub port: u8,
+    len: u8,
+    data: [u8; DEVICE_MESSAGE_MAX],
+}
+
+impl DeviceMessage {
+    /// `None` when it is empty or too long.
+    pub fn new(port: u8, bytes: &[u8]) -> Option<Self> {
+        if bytes.is_empty() || bytes.len() > DEVICE_MESSAGE_MAX || port as usize >= DEVICE_OUTPUTS {
+            return None;
+        }
+        let mut data = [0; DEVICE_MESSAGE_MAX];
+        data[..bytes.len()].copy_from_slice(bytes);
+        Some(Self {
+            port,
+            len: bytes.len() as u8,
+            data,
+        })
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.data[..self.len as usize]
+    }
+}
 
 /// Makes the `jack` crate load PipeWire's libjack instead of jackd2's (S1 finding): `dlopen`
 /// PipeWire's copy by absolute path first, so the soname lookup finds it. A no-op where
@@ -99,6 +135,25 @@ impl InputRole {
             InputRole::Keyboard => 0,
             InputRole::Controller => 1,
         }
+    }
+}
+
+/// The same name for a port we can send to: `Midi-Bridge:Launchkey MK3 49: LKMK3 DAW In
+/// (playback)` -> `Launchkey MK3 49: LKMK3 DAW In`, so it can be matched with the source of the
+/// same device.
+pub fn sink_friendly_name(port: &str) -> String {
+    if let Some(rest) = port.strip_prefix("Midi-Bridge:") {
+        let rest = rest.trim();
+        return match rest.rfind('(') {
+            Some(i) if rest.ends_with(')') && rest[i..].contains("playback") => {
+                rest[..i].trim_end().to_owned()
+            }
+            _ => rest.to_owned(),
+        };
+    }
+    match port.rsplit_once(':') {
+        Some((client, "in" | "input" | "midi_in" | "playback")) => client.to_owned(),
+        _ => port.to_owned(),
     }
 }
 
@@ -257,6 +312,12 @@ impl JackClient {
         let clock_out = client.register_port("midi_out", MidiOut::default())?;
         let click_names = [click_l.name()?, click_r.name()?];
         let clock_name = clock_out.name()?;
+        let device_out = [
+            client.register_port("device_out_1", MidiOut::default())?,
+            client.register_port("device_out_2", MidiOut::default())?,
+        ];
+        let device_names = [device_out[0].name()?, device_out[1].name()?];
+        let (device_tx, device_rx) = rtrb::RingBuffer::new(DEVICE_QUEUE);
 
         let (virtual_midi, virtual_rx) = rtrb::RingBuffer::new(VIRTUAL_QUEUE);
         let roles: Arc<[AtomicU8; HARDWARE_INPUTS]> = Arc::default();
@@ -272,6 +333,8 @@ impl JackClient {
             click_r,
             clock_out,
             clock: Vec::with_capacity(512),
+            device_out,
+            device_rx,
             virtual_rx,
             roles: roles.clone(),
             interest: interest.clone(),
@@ -289,6 +352,8 @@ impl JackClient {
             roles,
             interest,
             control_rx: Some(control_rx),
+            device_tx,
+            device_names,
             out_names,
             click_names,
             clock_name,
@@ -306,6 +371,8 @@ struct Callback {
     click_r: Port<AudioOut>,
     clock_out: Port<MidiOut>,
     clock: Vec<MidiOutEvent>,
+    device_out: [Port<MidiOut>; DEVICE_OUTPUTS],
+    device_rx: rtrb::Consumer<DeviceMessage>,
     virtual_rx: rtrb::Consumer<MidiEvent>,
     /// [`InputRole`] bits per hardware input, set from the main thread.
     roles: Arc<[AtomicU8; HARDWARE_INPUTS]>,
@@ -429,6 +496,17 @@ impl jack::ProcessHandler for Callback {
             });
         }
 
+        // Messages for controllers: every port's buffer is taken each cycle (that clears it).
+        let [pa, pb] = &mut self.device_out;
+        let mut writers = [pa.writer(ps), pb.writer(ps)];
+        for _ in 0..MAX_DEVICE_PER_CYCLE {
+            let Ok(m) = self.device_rx.pop() else { break };
+            let _ = writers[m.port as usize].write(&RawMidi {
+                time: 0,
+                bytes: m.bytes(),
+            });
+        }
+
         let ns = t0.elapsed().as_nanos() as u64;
         self.stats.last_ns.store(ns, Ordering::Relaxed);
         self.stats.max_ns.fetch_max(ns, Ordering::Relaxed);
@@ -453,6 +531,9 @@ pub struct JackBackend {
     /// Our click output pair and the MIDI clock output.
     pub click_names: [String; 2],
     pub clock_name: String,
+    /// Messages for controllers go here; they leave on the matching output of `device_names`.
+    pub device_tx: rtrb::Producer<DeviceMessage>,
+    pub device_names: [String; DEVICE_OUTPUTS],
     pub sample_rate: u32,
 }
 
@@ -535,6 +616,39 @@ impl JackBackend {
                 let _ = c.connect_ports_by_name(src, dst);
             }
         }
+    }
+
+    /// Hardware MIDI input ports (what we can send to) right now, not ours.
+    pub fn hardware_midi_sinks(&self) -> Vec<String> {
+        let c = self.client.as_client();
+        let mut ports = c.ports(None, Some("8 bit raw midi"), PortFlags::IS_INPUT);
+        ports.retain(|p| !self.device_names.contains(p) && !p.starts_with(c.name()));
+        ports
+    }
+
+    /// Sends controller output `n` to this port, and nowhere else (`None`: to nothing).
+    pub fn connect_device_out(&self, n: usize, to: Option<&str>) {
+        let c = self.client.as_client();
+        let Some(src) = self.device_names.get(n) else {
+            return;
+        };
+        if let Some(port) = c.port_by_name(src) {
+            for existing in port.get_connections() {
+                if Some(existing.as_str()) != to {
+                    let _ = c.disconnect_ports_by_name(src, &existing);
+                }
+            }
+            if let Some(dst) = to
+                && !port.is_connected_to(dst).unwrap_or(false)
+            {
+                let _ = c.connect_ports_by_name(src, dst);
+            }
+        }
+    }
+
+    /// Queues a message for a controller; false if the queue is full.
+    pub fn send_to_device(&mut self, message: DeviceMessage) -> bool {
+        self.device_tx.push(message).is_ok()
     }
 
     /// Hardware MIDI output ports right now (not ours).
@@ -628,6 +742,16 @@ mod tests {
         );
         assert_eq!(friendly_name("BLE MIDI 1:out"), "BLE MIDI 1");
         assert_eq!(friendly_name("Fake Keyboard:midi_out_1"), "Fake Keyboard");
+        // A device's output side has the same readable name as its input side.
+        assert_eq!(
+            sink_friendly_name("Midi-Bridge:Launchkey MK3 49: LKMK3 DAW In (playback)"),
+            friendly_name("Midi-Bridge:Launchkey MK3 49: LKMK3 DAW In (capture)")
+        );
+        assert_eq!(sink_friendly_name("Fake Launchkey:in"), "Fake Launchkey");
+        assert!(DeviceMessage::new(0, &[0x9F, 0x0C, 0x7F]).is_some());
+        assert!(DeviceMessage::new(0, &[]).is_none());
+        assert!(DeviceMessage::new(0, &[0; DEVICE_MESSAGE_MAX + 1]).is_none());
+        assert!(DeviceMessage::new(DEVICE_OUTPUTS as u8, &[1]).is_none());
         // Anything unrecognised is kept whole, so two different ports never share a name.
         assert_eq!(friendly_name("synth:keys"), "synth:keys");
         assert_eq!(friendly_name("plain"), "plain");

@@ -1113,6 +1113,7 @@ impl Running {
             self.ask_redraw();
         }
         self.session.poll_midi_hotplug();
+        self.session.update_surfaces();
         self.session.update_loads();
         if self.session.restart_requested {
             // New Windows plugin support is read at startup: come back with it, same rig.

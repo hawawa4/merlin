@@ -38,25 +38,39 @@ CONTROLS = (
 )
 
 
-def run(script, controls, seconds, keep=None, args=()):
-    """Runs the app with the script and the controller; returns the app's output."""
+def run(script, controls, seconds, keep=None, args=(), controller=None, name="Fake Controller", config=None):
+    """Runs the app with the script and the controller; returns the app's output (with `controller`
+    set to another program, its output too: `(app, controller)`)."""
     work = Path(tempfile.mkdtemp(prefix="irig-e2e-"))
     env = dict(os.environ, MERLIN_SCRIPT=script)
     for var, d in (("XDG_DATA_HOME", "data"), ("XDG_STATE_HOME", "state"), ("XDG_CACHE_HOME", "cache"), ("XDG_CONFIG_HOME", "config")):
         env[var] = str(work / d)
+    if config:
+        (work / "config/merlin").mkdir(parents=True)
+        (work / "config/merlin/settings.toml").write_text(config)
     app = subprocess.Popen([str(APP), "--fresh", *args], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
     time.sleep(6)
-    ctl = subprocess.Popen([str(CONTROLLER), "Fake Controller", controls, str(seconds)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    ctl = subprocess.Popen([str(controller or CONTROLLER), name, controls, str(seconds)],
+                           stdout=subprocess.PIPE if controller else subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True)
     try:
         out, _ = app.communicate(timeout=60)
     except subprocess.TimeoutExpired:
         app.kill()
         out, _ = app.communicate()
-    ctl.terminate()
+    ctl_out = ""
+    if controller:
+        # It outlives the app by a moment, to hear what the app said on leaving.
+        try:
+            ctl_out, _ = ctl.communicate(timeout=seconds + 5)
+        except subprocess.TimeoutExpired:
+            ctl.terminate()
+            ctl_out, _ = ctl.communicate()
+    else:
+        ctl.terminate()
     if keep is not None:
         keep(work)
     shutil.rmtree(work, ignore_errors=True)
-    return out
+    return (out, ctl_out) if controller else out
 
 
 def main():
@@ -72,6 +86,7 @@ def main():
     backing_check()
     timeline_check()
     targets_check()
+    launchkey_check()
 
 
 SNAP_FILE = Path(tempfile.gettempdir()) / "irig-e2e-snapshots.irig"
@@ -398,6 +413,71 @@ def targets_check():
         print(out[-3000:])
         sys.exit(1)
     print(f"ok: pan, effect switches (flip and latching), click level, tempo and a plugin parameter follow their controls: {seq[-1]}, {last[6]}")
+
+
+FAKE_LAUNCHKEY = ROOT / "target/release/examples/fake_launchkey"
+LK_NAME = "Launchkey MK3 61 LKMK3 DAW In"
+# The real one (if plugged in) is left alone: the test only talks to the pretend 61-key one.
+LK_CONFIG = """
+[[midi_devices]]
+name = "Launchkey MK3 49: LKMK3 DAW In"
+enabled = false
+
+[[midi_devices]]
+name = "Launchkey MK3 49: LKMK3 MIDI In"
+enabled = false
+"""
+LK_SCRIPT = "; ".join(
+    [
+        "1:load 1 TimGM6mb", "1.2:load 2 TimGM6mb", "1.4:load 3 TimGM6mb", "4:select 1", "4.1:snapshot save",
+        "4.2:macrotarget 1 1 sampler:level",
+    ]
+    + [f"{t}:report" for t in (7.5, 8.5, 9.5, 10.5, 11.5)]
+    + ["14:quit"]
+)
+# Top pad 2 selects slot 2; Track right goes on to slot 3; bottom pad 1 recalls snapshot 1 (slot 1
+# again); fader button 1 mutes slot 1.
+LK_CONTROLS = "1:144 97 100; 2:BF 103 127; 3:144 112 100; 4:BF 37 127"
+
+
+def launchkey_check():
+    out, got = run(LK_SCRIPT, LK_CONTROLS, 12, args=(), controller=FAKE_LAUNCHKEY, name=LK_NAME, config=LK_CONFIG)
+    msgs = [tuple(int(x, 16) for x in line.split()[2:]) for line in got.splitlines() if line.startswith("recv ")]
+    targets = [t.strip() for t in re.findall(r"targets \[([\d, ]*)\]", out)]
+    problems = []
+    if not msgs or msgs[0] != (0x9F, 0x0C, 0x7F):
+        problems.append(f"the first message to the device should enter DAW mode: {msgs[:1]}")
+    # (PipeWire turns a Note On of velocity 0 into a Note Off, which the device takes the same.)
+    if (0x9F, 0x0C, 0x00) not in msgs and not any(m[:2] == (0x8F, 0x0C) for m in msgs):
+        problems.append("the app did not leave DAW mode on quitting")
+    # Pad lights: slot 1 plays (pulsing, channel 3) then goes steady as slot 2, then 3 take over,
+    # and pulses again when it is selected back.
+    want = [(0x92, 96, 5), (0x90, 96, 5), (0x92, 97, 45), (0x92, 98, 21), (0x92, 96, 5)]
+    last = -1
+    for w in want:
+        try:
+            last = msgs.index(w, last + 1)
+        except ValueError:
+            problems.append(f"missing light {w} after message {last}")
+            break
+    snap = (0x90, 112, 21)
+    if snap not in msgs:
+        problems.append("the current snapshot's pad was not lit green")
+    text = [bytes(m[8:-1]).decode() for m in msgs if len(m) > 8 and m[0] == 0xF0 and m[6] == 4 and m[7] == 0]
+    if not any(t.startswith("1 TimGM6mb") for t in text) or not any(t.startswith("2 TimGM6mb") for t in text):
+        problems.append(f"screen lines {text}")
+    knob_names = [bytes(m[8:-1]).decode() for m in msgs if len(m) > 8 and m[0] == 0xF0 and m[6] == 7 and m[7] == 0x38]
+    if not knob_names:
+        problems.append("no name for the first knob")
+    # What the controls did.
+    if targets[:4] != ["2", "3", "1", "1"]:
+        problems.append(f"selected slots {targets}, wanted 2, 3, 1, 1")
+    if problems:
+        print("FAIL (launchkey)\n  " + "\n  ".join(problems))
+        print(out[-2500:])
+        print("\n".join(got.splitlines()[:60]))
+        sys.exit(1)
+    print(f"ok: a Launchkey MK3's pads, buttons and screen follow the rig and drive it ({len(msgs)} messages to the device, targets {targets[:4]})")
 
 
 if __name__ == "__main__":

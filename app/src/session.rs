@@ -26,6 +26,7 @@ mod controls;
 mod macros;
 mod setlist;
 mod snapshots;
+mod surface;
 mod timeline;
 mod transport;
 
@@ -85,8 +86,18 @@ fn midi_policy(
         match prefs.iter().find(|p| p.name == name) {
             Some(p) if !p.enabled => None,
             Some(p) => Some(p.role.into()),
-            None => Some(InputRole::Keyboard),
+            None => Some(default_role(&name).into()),
         }
+    }
+}
+
+/// What a device is for until the user says otherwise: the DAW port of a controller we know is
+/// a controller, everything else a keyboard.
+fn default_role(name: &str) -> crate::settings::DeviceRole {
+    if merlin_control::launchkey::detect(name).is_some() {
+        crate::settings::DeviceRole::Controller
+    } else {
+        crate::settings::DeviceRole::Keyboard
     }
 }
 
@@ -194,6 +205,8 @@ pub struct Session {
     pub settings: Settings,
     scan_rx: Option<mpsc::Receiver<ScanMsg>>,
     mapper: merlin_control::Mapper,
+    /// Controllers with a layout and lights that we drive.
+    surfaces: Vec<surface::ActiveSurface>,
     control_rx: mpsc::Receiver<merlin_audio_io::ControlEvent>,
     control_stop: Arc<std::sync::atomic::AtomicBool>,
     /// The action a control is being learned for, while the user is teaching one.
@@ -307,6 +320,7 @@ impl Session {
             settings: settings.clone(),
             scan_rx: None,
             mapper: Default::default(),
+            surfaces: Vec::new(),
             control_rx,
             control_stop,
             learn: None,
@@ -774,6 +788,7 @@ impl Session {
         if let Some(b) = self.backend.as_ref() {
             self.midi_sources = b.connect_midi_sources(&policy);
         }
+        self.sync_surfaces();
         self.refresh_interest();
     }
 
@@ -811,7 +826,7 @@ impl Session {
             .cloned()
             .unwrap_or(crate::settings::MidiDevicePref {
                 name: name.to_owned(),
-                role: Default::default(),
+                role: default_role(name),
                 enabled: true,
             })
     }
@@ -1951,6 +1966,7 @@ impl Session {
 
     /// Orderly shutdown: autosave, editors, engine, plugins.
     pub fn shutdown(&mut self) {
+        self.release_surfaces();
         self.control_stop
             .store(true, std::sync::atomic::Ordering::Relaxed);
         self.guard.disarm();

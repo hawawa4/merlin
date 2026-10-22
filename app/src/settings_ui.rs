@@ -520,6 +520,40 @@ fn controls(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<
     );
     ui.add_space(8.0);
 
+    // What connected controllers do without any mapping of yours.
+    let built_in = s.profile_mappings();
+    if !built_in.is_empty() {
+        egui::CollapsingHeader::new(format!(
+            "Built-in layout of connected controllers ({})",
+            built_in.len()
+        ))
+        .show(ui, |ui| {
+            ui.label(
+                RichText::new(
+                    "These work until you map the same control yourself (in the list below or with MIDI map): yours then wins and the row is crossed out.",
+                )
+                .small()
+                .weak(),
+            );
+            egui::Grid::new("profile-mappings")
+                .num_columns(3)
+                .spacing([14.0, 2.0])
+                .show(ui, |ui| {
+                    for (m, active) in &built_in {
+                        let text = |t: String| {
+                            let t = RichText::new(t);
+                            if *active { t } else { t.strikethrough().weak() }
+                        };
+                        ui.label(text(m.label.clone().unwrap_or_default()));
+                        ui.label(text(m.source.describe()));
+                        ui.label(text(format!("-> {}", m.action.describe())));
+                        ui.end_row();
+                    }
+                });
+        });
+        ui.add_space(8.0);
+    }
+
     // The list.
     if s.mappings().is_empty() {
         ui.label("No mappings yet.");
@@ -715,6 +749,12 @@ fn midi(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
                 ui.end_row();
             }
         });
+    for (_, what) in s.surface_devices() {
+        ui.colored_label(
+            status_color(Status::Ok),
+            format!("{what}: built-in layout, lights and screen are on (see Controls)"),
+        );
+    }
     ui.add_space(6.0);
     if ui.button("Look for new devices").clicked() {
         actions.push(Action::RefreshMidi);

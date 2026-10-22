@@ -106,6 +106,7 @@ impl Session {
                 self.apply_outcome(outcome);
             }
         }
+        self.update_surfaces();
     }
 
     fn control_context(&mut self) -> Context {

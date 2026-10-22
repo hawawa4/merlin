@@ -4,6 +4,8 @@
 //! (which slots are loaded, what is selected, the current volumes), get back a list of outcomes.
 //! The app turns those into the same actions the buttons on screen perform.
 
+pub mod launchkey;
+
 use std::collections::HashMap;
 
 use merlin_model::{
@@ -100,7 +102,11 @@ struct State {
 /// Holds the mappings and the little state some of them need.
 #[derive(Default)]
 pub struct Mapper {
+    /// What is in force: the user's mappings, then the controller profiles' that they did not
+    /// take over.
     mappings: Vec<Mapping>,
+    user: Vec<Mapping>,
+    profile: Vec<Mapping>,
     state: Vec<State>,
 }
 
@@ -113,13 +119,38 @@ impl Mapper {
 
     /// Replaces the mappings; a mapping that stays keeps its pick-up state.
     pub fn set_mappings(&mut self, mappings: &[Mapping]) {
-        let mut state = vec![State::default(); mappings.len()];
-        for (i, m) in mappings.iter().enumerate() {
+        self.user = mappings.to_vec();
+        self.rebuild();
+    }
+
+    /// Replaces the controller profiles' mappings (what a device does without any setup).
+    pub fn set_profile(&mut self, profile: Vec<Mapping>) {
+        self.profile = profile;
+        self.rebuild();
+    }
+
+    fn rebuild(&mut self) {
+        let taken = |p: &Mapping, u: &Mapping| {
+            u.source.kind == p.source.kind
+                && (u.source.device.is_none() || u.source.device == p.source.device)
+                && (u.source.channel.is_none()
+                    || p.source.channel.is_none()
+                    || u.source.channel == p.source.channel)
+        };
+        let mut all = self.user.clone();
+        all.extend(
+            self.profile
+                .iter()
+                .filter(|p| !self.user.iter().any(|u| taken(p, u)))
+                .cloned(),
+        );
+        let mut state = vec![State::default(); all.len()];
+        for (i, m) in all.iter().enumerate() {
             if let Some(j) = self.mappings.iter().position(|old| old == m) {
                 state[i] = self.state[j];
             }
         }
-        self.mappings = mappings.to_vec();
+        self.mappings = all;
         self.state = state;
     }
 
@@ -133,6 +164,15 @@ impl Mapper {
                 *s = State::default();
             }
         }
+    }
+
+    /// The controller profiles' mappings, each with whether it is in force (the user has not
+    /// mapped the same control).
+    pub fn profile_mappings(&self) -> Vec<(Mapping, bool)> {
+        self.profile
+            .iter()
+            .map(|p| (p.clone(), self.mappings.contains(p)))
+            .collect()
     }
 
     /// The knobs have to be picked up again (the values they control were changed elsewhere).

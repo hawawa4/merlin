@@ -14,9 +14,9 @@ default:
 
 # The app. Loads plugins from the standard CLAP folders plus test-assets (Linux and, through
 # our patched Wine, Windows ones). Try: just dev --fresh      just dev --rig my.irig
-# This round: MIDI map mode, Ableton style. Press "MIDI map" (Ctrl+M), click a control on screen (a volume, mute, a
-# snapshot, an effect switch, the master...), then move or press something on your MIDI device. The "Parameters" tab maps any
-# plugin parameter. `just fake-keyboard` gives you something to learn from. See docs/qa-checklist.md 5l.
+# This round: your Launchkey MK3. Plug it in, then `just dev`: its pads, knobs, faders and buttons work at once and its
+# lights and screen follow the rig (Settings > Controls lists the layout). Load a few instruments, save a couple of
+# snapshots, press pads. `just launchkey-probe` shows what each control sends. See docs/qa-checklist.md 5m.
 dev *args:
     cargo build -p merlin --release
     PATH="{{yabridge_dir}}:$PATH" WINELOADER={{patched_wine}} \
@@ -52,6 +52,10 @@ e2e-controls:
     cargo build --release -p merlin
     cargo build --release -p merlin-audio-io --examples
     python3 tools/e2e_controls.py
+
+# Shows what a Launchkey MK3 sends, named control by control (and puts it in DAW mode meanwhile).
+launchkey-probe seconds="60":
+    python3 tools/launchkey_probe.py {{seconds}}
 
 # A pretend MIDI keyboard (a JACK MIDI source, like a USB keyboard through PipeWire) for trying the
 # MIDI settings without hardware. It plays a scale and unplugs itself after SECONDS.
