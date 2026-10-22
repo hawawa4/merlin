@@ -513,7 +513,7 @@ libjack preload (S1), `build-wine.sh` and the patch set (S4).
 
 ### Phase 6: remaining formats (3–5 weeks)
 
-- **VST2:** FFI from the VeSTige/FST headers. Mainly for Windows VST2-only plugins via yabridge, plus old Linux `.so` plugins.
+- **VST2** ✅: written against the shared binary ABI (`crates/hosting/src/vst2`, no Steinberg header), for native Linux `.so` plugins (`~/.vst`, `~/.lxvst`, `/usr/lib/vst` and friends) and Windows `.dll` plugins through yabridge's VST2 chainloader: bridges are made in the app's own folder (a chainloader `.so` with the `.dll` linked beside it), from the Windows prefix's VST2 folders and from folders you add in Settings > Windows plugins, only for 64-bit DLLs that export `VSTPluginMain`. MIDI in, parameters (applied on the audio thread), chunk state, embedded X11 editors, shell plugins, host tempo and play state for plugins that ask. Tested against a small C plugin built during the tests, and live: CollaB3 (a Windows VST2 organ) plays, shows its editor and comes back from a saved rig. Known gaps: no MIDI out from plugins, no programs list, editors cannot be resized by the host, Pianoteq 6 Stage (Windows) loaded but made no sound in my test (unverified why, possibly its demo or licence).
 - **LV2:** our own lilv + suil FFI. Gtk/Qt UIs embed through suil's X11 wrappers.
 - Optional: SFZ via sfizz.
 

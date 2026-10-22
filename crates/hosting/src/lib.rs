@@ -5,9 +5,11 @@
 
 pub mod builtin;
 pub mod clap;
+pub mod host_time;
 mod midi;
 mod plugin;
 pub mod soundfont;
+pub mod vst2;
 pub mod vst3;
 
 pub use midi::{MidiEvent, MidiKind};

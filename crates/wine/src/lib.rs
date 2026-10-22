@@ -22,6 +22,13 @@ const USER_CLAP_DIRS: &[&str] = &["AppData/Local/Programs/Common/CLAP"];
 /// The same for VST3 plugins.
 const VST3_DIRS: &[&str] = &["Program Files/Common Files/VST3"];
 const USER_VST3_DIRS: &[&str] = &["AppData/Local/Programs/Common/VST3"];
+/// Where Windows installers put VST2 plugins (`.dll` files).
+const VST2_DIRS: &[&str] = &[
+    "Program Files/VstPlugins",
+    "Program Files/Steinberg/VstPlugins",
+    "Program Files/Common Files/VST2",
+    "Program Files/Common Files/Steinberg/VST2",
+];
 /// How deep below a plugin folder `.clap` files are looked for (vendors use subfolders).
 const MAX_DEPTH: usize = 3;
 /// Suffix of the link that names the real Windows plugin beside a bridge.
@@ -160,6 +167,23 @@ impl Runtime {
         }
         dirs.retain(|d| d.is_dir());
         dirs
+    }
+
+    /// Where Windows VST2 plugins land in this prefix.
+    pub fn vst2_dirs(&self) -> Vec<PathBuf> {
+        self.plugin_dirs(VST2_DIRS, &[])
+    }
+
+    pub fn vst2_chainloader(&self) -> PathBuf {
+        self.yabridge_dir.join("libyabridge-chainloader-vst2.so")
+    }
+
+    /// Makes (and tidies) the bridges for this prefix's Windows VST2 plugins, and those in
+    /// `extra_dirs` (folders the user pointed at), in `out_dir`.
+    pub fn sync_vst2_bridges(&self, extra_dirs: &[PathBuf], out_dir: &Path) -> Result<SyncReport> {
+        let mut dirs = self.vst2_dirs();
+        dirs.extend(extra_dirs.iter().filter(|d| d.is_dir()).cloned());
+        sync_vst2_bridges(&dirs, &self.vst2_chainloader(), out_dir)
     }
 
     pub fn vst3_chainloader(&self) -> PathBuf {
@@ -486,6 +510,140 @@ pub fn sync_vst3_bridges(
     Ok(report)
 }
 
+/// Does the file contain this text? (A Windows DLL lists its exported names in the clear, so
+/// looking for `VSTPluginMain` tells a VST2 plugin from any other DLL without loading it.)
+fn file_contains(path: &Path, needle: &[u8]) -> bool {
+    use std::io::Read;
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut buf = vec![0u8; 1 << 20];
+    let mut kept = 0;
+    loop {
+        let Ok(n) = f.read(&mut buf[kept..]) else {
+            return false;
+        };
+        if n == 0 {
+            return false;
+        }
+        let end = kept + n;
+        if buf[..end].windows(needle.len()).any(|w| w == needle) {
+            return true;
+        }
+        // Keep the tail so a name split across two reads is still found.
+        kept = (needle.len() - 1).min(end);
+        buf.copy_within(end - kept..end, 0);
+    }
+}
+
+/// Windows VST2 plugins: 64-bit PE files that export `VSTPluginMain`.
+fn find_windows_vst2(
+    root: &Path,
+    dir: &Path,
+    depth: usize,
+    out: &mut Vec<(PathBuf, PathBuf)>,
+    skipped: &mut Vec<(PathBuf, String)>,
+) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut paths: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
+    paths.sort();
+    for p in paths {
+        let is_dll = p.extension().is_some_and(|e| e.eq_ignore_ascii_case("dll"));
+        if is_dll && p.is_file() {
+            match pe_arch(&p) {
+                Some(PeArch::X64) => {
+                    if file_contains(&p, b"VSTPluginMain") {
+                        out.push((p.clone(), p.strip_prefix(root).unwrap_or(&p).to_owned()));
+                    }
+                }
+                Some(PeArch::X86) if file_contains(&p, b"VSTPluginMain") => {
+                    skipped.push((p, "32-bit (yabridge here runs 64-bit plugins)".into()))
+                }
+                _ => {}
+            }
+        } else if p.is_dir() && depth < MAX_DEPTH {
+            find_windows_vst2(root, &p, depth + 1, out, skipped);
+        }
+    }
+}
+
+/// For every 64-bit Windows VST2 plugin below `plugin_dirs`, makes `out_dir/<folder>/<rel>.so`
+/// (a copy of yabridge's VST2 chainloader) and `<rel>.dll` beside it (a link to the real file),
+/// which is how yabridge finds the plugin. Bridges whose DLL has gone are removed.
+pub fn sync_vst2_bridges(
+    plugin_dirs: &[PathBuf],
+    chainloader: &Path,
+    out_dir: &Path,
+) -> Result<SyncReport> {
+    if !chainloader.is_file() {
+        bail!(
+            "yabridge's VST2 chainloader is missing: {}",
+            chainloader.display()
+        );
+    }
+    let wanted_bytes = std::fs::read(chainloader)?;
+    let mut report = SyncReport::default();
+    let mut wanted: Vec<PathBuf> = Vec::new();
+    for dir in plugin_dirs {
+        let (mut found, mut skipped) = (Vec::new(), Vec::new());
+        find_windows_vst2(dir, dir, 0, &mut found, &mut skipped);
+        report.skipped.extend(skipped);
+        let folder = dir.file_name().map(PathBuf::from).unwrap_or_default();
+        for (real, rel) in found {
+            let link = out_dir.join(&folder).join(&rel);
+            let bridge = link.with_extension("so");
+            wanted.push(bridge.clone());
+            if let Some(parent) = bridge.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let same_bridge = std::fs::read(&bridge).is_ok_and(|b| b == wanted_bytes);
+            let same_link = std::fs::read_link(&link).is_ok_and(|t| t == real);
+            if same_bridge && same_link {
+                report.unchanged += 1;
+                continue;
+            }
+            let tmp = bridge.with_extension("tmp");
+            std::fs::write(&tmp, &wanted_bytes)?;
+            set_executable(&tmp)?;
+            std::fs::rename(&tmp, &bridge)?;
+            let _ = std::fs::remove_file(&link);
+            std::os::unix::fs::symlink(&real, &link)
+                .with_context(|| format!("cannot link {}", link.display()))?;
+            report.created.push(bridge);
+        }
+    }
+    // A `.dll` link in our folder that points nowhere, with its chainloader copy.
+    let mut stale = Vec::new();
+    collect_dll_links(out_dir, 0, &mut stale);
+    for link in stale {
+        let bridge = link.with_extension("so");
+        if wanted.contains(&bridge) || link.exists() {
+            continue;
+        }
+        let _ = std::fs::remove_file(&link);
+        let _ = std::fs::remove_file(&bridge);
+        report.removed.push(bridge);
+    }
+    Ok(report)
+}
+
+fn collect_dll_links(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let p = e.path();
+        let is_link = e.file_type().is_ok_and(|t| t.is_symlink());
+        if is_link && p.extension().is_some_and(|x| x == "dll") {
+            out.push(p);
+        } else if !is_link && p.is_dir() && depth <= MAX_DEPTH {
+            collect_dll_links(&p, depth + 1, out);
+        }
+    }
+}
+
 fn collect_bundles(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return;
@@ -772,5 +930,42 @@ mod tests {
         std::fs::write(d.join("elf"), b"\x7fELF....").unwrap();
         assert_eq!(pe_arch(&d.join("elf")), None);
         assert_eq!(pe_arch(&d.join("missing")), None);
+    }
+
+    #[test]
+    fn vst2_dlls_are_told_from_other_dlls_and_bridged_beside_a_link() {
+        let (rt, out) = fixture("vst2");
+        std::fs::write(rt.vst2_chainloader(), b"ELF vst2 chainloader").unwrap();
+        let v = rt.prefix.join("drive_c/Program Files/VstPlugins");
+        std::fs::create_dir_all(v.join("ReaPlugs")).unwrap();
+        let plugin = |name: &str, machine: u16, exports: bool| {
+            let mut bytes = pe(machine);
+            if exports {
+                bytes.extend_from_slice(b"..VSTPluginMain..");
+            }
+            std::fs::write(v.join(name), bytes).unwrap();
+        };
+        plugin("Synth.dll", 0x8664, true);
+        plugin("ReaPlugs/reaeq.dll", 0x8664, true);
+        plugin("helper.dll", 0x8664, false); // a DLL that is not a plugin
+        plugin("Old.dll", 0x14c, true); // 32-bit
+        let report = rt.sync_vst2_bridges(&[], &out).unwrap();
+        assert_eq!(report.created.len(), 2, "{report:?}");
+        assert_eq!(report.skipped.len(), 1);
+        let synth = out.join("VstPlugins/Synth.so");
+        assert_eq!(std::fs::read(&synth).unwrap(), b"ELF vst2 chainloader");
+        assert_eq!(
+            std::fs::read_link(out.join("VstPlugins/Synth.dll")).unwrap(),
+            v.join("Synth.dll")
+        );
+        assert!(out.join("VstPlugins/ReaPlugs/reaeq.so").exists());
+        assert!(!out.join("VstPlugins/helper.so").exists());
+        // Again: nothing to do. Remove a DLL: its bridge goes.
+        let again = rt.sync_vst2_bridges(&[], &out).unwrap();
+        assert_eq!((again.created.len(), again.unchanged), (0, 2));
+        std::fs::remove_file(v.join("Synth.dll")).unwrap();
+        let after = rt.sync_vst2_bridges(&[], &out).unwrap();
+        assert_eq!(after.removed.len(), 1);
+        assert!(!synth.exists());
     }
 }

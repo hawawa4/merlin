@@ -11,6 +11,7 @@ use merlin_audio_io::{InputRole, JackBackend, JackClient, MidiSource, friendly_n
 use merlin_embed::{EditorManager, PluginLookup};
 use merlin_engine::{Command, EngineHandle, Filter};
 use merlin_hosting::clap::ClapLibrary;
+use merlin_hosting::vst2::Vst2Library;
 use merlin_hosting::vst3::Vst3Library;
 use merlin_hosting::{EditorSize, HostEvent, MidiEvent, PluginHandle, Waker};
 use merlin_model::{
@@ -371,6 +372,7 @@ impl Session {
         // The bridges we make for the Windows plugins installed in our prefix.
         dirs.push(crate::paths::bridges_dir());
         dirs.push(crate::paths::bridges_vst3_dir());
+        dirs.push(crate::paths::bridges_vst2_dir());
         dirs.dedup();
         self.plugin_dirs = dirs;
     }
@@ -515,7 +517,8 @@ impl Session {
             .context("set the Wine program and the yabridge folder first")?;
         self.windows_status = "looking for Windows plugins...".into();
         let prefixes = self.windows_prefixes();
-        self.start_windows_job(move |_| sync_report(&rt, &prefixes))
+        let extra = self.settings.windows_vst2_dirs.clone();
+        self.start_windows_job(move |_| sync_report(&rt, &prefixes, &extra))
     }
 
     /// Runs a plugin installer (`.exe` or `.msi`) in the Windows prefix, then syncs. The
@@ -530,6 +533,7 @@ impl Session {
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
         self.windows_status = format!("preparing to install {name}...");
         let prefixes = self.windows_prefixes();
+        let extra = self.settings.windows_vst2_dirs.clone();
         self.start_windows_job(move |tx| {
             if !rt.prefix_ready() {
                 let _ = tx.send(WindowsMsg::Status(
@@ -550,7 +554,7 @@ impl Session {
                     "{name} exited with {status}, looking for plugins anyway..."
                 )));
             }
-            sync_report(&rt, &prefixes)
+            sync_report(&rt, &prefixes, &extra)
         })
     }
 
@@ -609,6 +613,25 @@ impl Session {
         }
     }
 
+    /// A folder of Windows VST2 plugins to bridge.
+    pub fn add_windows_vst2_dir(&mut self, dir: PathBuf) -> Result<()> {
+        if dir.as_os_str().is_empty() || self.settings.windows_vst2_dirs.contains(&dir) {
+            return Ok(());
+        }
+        self.settings.windows_vst2_dirs.push(dir);
+        self.save_settings();
+        self.sync_windows_plugins()
+    }
+
+    pub fn remove_windows_vst2_dir(&mut self, index: usize) -> Result<()> {
+        if index < self.settings.windows_vst2_dirs.len() {
+            self.settings.windows_vst2_dirs.remove(index);
+            self.save_settings();
+            return self.sync_windows_plugins();
+        }
+        Ok(())
+    }
+
     pub fn add_sound_dir(&mut self, dir: PathBuf) {
         if !dir.as_os_str().is_empty() && !self.settings.sound_dirs.contains(&dir) {
             self.settings.sound_dirs.push(dir);
@@ -665,6 +688,7 @@ impl Session {
             "{}:{}{}",
             match f.info.format {
                 Format::Vst3 => "vst3",
+                Format::Vst2 => "vst2",
                 _ => "clap",
             },
             f.info.id,
@@ -1037,6 +1061,8 @@ impl Session {
             )?)
         } else if path.extension().is_some_and(|e| e == "vst3") {
             Box::new(Vst3Library::load(path)?.create(id, waker)?)
+        } else if path.extension().is_some_and(|e| e == "so") {
+            Box::new(Vst2Library::load(path)?.create(id, waker)?)
         } else {
             Box::new(ClapLibrary::load(path)?.create(id, waker)?)
         };
@@ -1474,6 +1500,13 @@ impl Session {
             .filter_map(|l| l.plugin.next_deadline())
             .min();
         self.service_backing();
+        // What plugins may ask the host about time.
+        let transport = &self.engine.shared.transport;
+        merlin_hosting::host_time::set_tempo(transport.tempo());
+        merlin_hosting::host_time::set_playing(transport.running());
+        merlin_hosting::host_time::set_beats_per_bar(u32::from(
+            self.rig.transport.beats_per_bar,
+        ));
         // While backing tracks are being re-armed or waited for, look again soon.
         let backing = (self.needs_rearm || self.pending_start.is_some())
             .then(|| now + Duration::from_millis(50));
@@ -2014,7 +2047,11 @@ pub fn read_rig(path: &Path) -> Result<Rig> {
 
 /// Makes the bridges (CLAP and VST3) for every prefix and says what happened, in a sentence.
 /// A plugin that is in two prefixes is bridged from the first.
-fn sync_report(rt: &merlin_wine::Runtime, prefixes: &[PathBuf]) -> Result<String> {
+fn sync_report(
+    rt: &merlin_wine::Runtime,
+    prefixes: &[PathBuf],
+    extra_vst2: &[PathBuf],
+) -> Result<String> {
     let (mut ready, mut new, mut removed) = (0, 0, 0);
     let (mut skipped, mut problems) = (Vec::new(), Vec::new());
     let mut looked = Vec::new();
@@ -2027,6 +2064,11 @@ fn sync_report(rt: &merlin_wine::Runtime, prefixes: &[PathBuf]) -> Result<String
             rt.sync_clap_bridges(&crate::paths::bridges_dir()),
             rt.sync_vst3_bridges(&crate::paths::bridges_vst3_dir()),
         );
+        // The folders the user named are bridged once, with the first prefix.
+        let vst2 = rt.sync_vst2_bridges(
+            if n == 0 { extra_vst2 } else { &[] },
+            &crate::paths::bridges_vst2_dir(),
+        );
         if n == 0 {
             // A broken yabridge shows on the first prefix; say so instead of "0 plugins".
             if let (Err(a), Err(b)) = (&clap, &vst3) {
@@ -2034,7 +2076,7 @@ fn sync_report(rt: &merlin_wine::Runtime, prefixes: &[PathBuf]) -> Result<String
             }
         }
         let mut here = 0;
-        for r in [clap, vst3] {
+        for r in [clap, vst3, vst2] {
             match r {
                 Ok(r) => {
                     here += r.created.len() + r.unchanged;
@@ -2052,7 +2094,7 @@ fn sync_report(rt: &merlin_wine::Runtime, prefixes: &[PathBuf]) -> Result<String
             if !prefix.join("drive_c").is_dir() {
                 "not created yet".to_owned()
             } else if here == 0 {
-                "no plugins in its CLAP or VST3 folders".to_owned()
+                "no plugins in its CLAP, VST3 or VST2 folders".to_owned()
             } else {
                 format!("{here} plugin{}", if here == 1 { "" } else { "s" })
             }

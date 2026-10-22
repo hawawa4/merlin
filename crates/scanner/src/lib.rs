@@ -20,6 +20,7 @@ use anyhow::{Context, Result};
 use merlin_hosting::PluginInfo;
 use merlin_hosting::clap::ClapLibrary;
 use merlin_hosting::soundfont::is_soundfont;
+use merlin_hosting::vst2::Vst2Library;
 use merlin_hosting::vst3::Vst3Library;
 use serde::{Deserialize, Serialize};
 
@@ -87,6 +88,8 @@ pub fn default_plugin_dirs() -> Vec<PathBuf> {
     if let Some(home) = std::env::var_os("HOME") {
         dirs.push(Path::new(&home).join(".clap"));
         dirs.push(Path::new(&home).join(".vst3"));
+        dirs.push(Path::new(&home).join(".vst"));
+        dirs.push(Path::new(&home).join(".lxvst"));
     }
     dirs.extend(
         [
@@ -96,6 +99,11 @@ pub fn default_plugin_dirs() -> Vec<PathBuf> {
             "/usr/lib/vst3",
             "/usr/lib64/vst3",
             "/usr/local/lib/vst3",
+            "/usr/lib/vst",
+            "/usr/lib64/vst",
+            "/usr/local/lib/vst",
+            "/usr/lib/lxvst",
+            "/usr/local/lib/lxvst",
         ]
         .into_iter()
         .map(PathBuf::from),
@@ -121,7 +129,10 @@ pub fn default_sound_dirs() -> Vec<PathBuf> {
 /// `.clap` files and `.vst3` bundles in the folders (and a few levels below), with whether each
 /// is a yabridge bridge. Bundle directories are plugins, not folders to search.
 pub fn find_clap_files(dirs: &[PathBuf]) -> Vec<(PathBuf, bool)> {
-    fn walk(dir: &Path, depth: usize, out: &mut Vec<(PathBuf, bool)>) {
+    /// `.so` files are only taken as VST2 plugins in a folder that is a VST2 folder (`vst`,
+    /// `lxvst`, ...), or when a Windows DLL sits beside them (a yabridge bridge): other `.so`
+    /// files (libraries, LV2 and VST3 internals) must never be loaded as plugins.
+    fn walk(dir: &Path, depth: usize, vst2: bool, out: &mut Vec<(PathBuf, bool)>) {
         let Ok(rd) = std::fs::read_dir(dir) else {
             return;
         };
@@ -138,14 +149,26 @@ pub fn find_clap_files(dirs: &[PathBuf]) -> Vec<(PathBuf, bool)> {
                 out.push((p, windows));
             } else if is_soundfont(&p) {
                 out.push((p, false));
+            } else if p.extension().is_some_and(|e| e == "so") && p.is_file() {
+                let windows = p.with_extension("dll").exists();
+                if windows || vst2 {
+                    out.push((p, windows));
+                }
             } else if p.is_dir() && depth < MAX_DEPTH {
-                walk(&p, depth + 1, out);
+                walk(&p, depth + 1, vst2, out);
             }
         }
     }
     let mut out = Vec::new();
     for d in dirs {
-        walk(d, 0, &mut out);
+        let vst2 = d.components().any(|c| {
+            let n = c.as_os_str().to_string_lossy().to_lowercase();
+            matches!(
+                n.as_str(),
+                "vst" | "lxvst" | ".vst" | ".lxvst" | "vstplugins"
+            )
+        });
+        walk(d, 0, vst2, &mut out);
     }
     out.dedup_by(|a, b| a.0 == b.0);
     out
@@ -166,6 +189,13 @@ pub fn load_vst3(path: &Path) -> Result<Vec<PluginInfo>> {
         .with_context(|| format!("scanning {}", path.display()))
 }
 
+/// Reads a VST2 plugin file (a native `.so`, or a yabridge chainloader) by loading it.
+pub fn load_vst2(path: &Path) -> Result<Vec<PluginInfo>> {
+    Vst2Library::load(path)
+        .and_then(|lib| lib.plugins())
+        .with_context(|| format!("scanning {}", path.display()))
+}
+
 /// Reads whatever kind of plugin file this is.
 pub fn load_any(path: &Path, windows: bool) -> Result<Vec<PluginInfo>> {
     if is_soundfont(path) {
@@ -174,6 +204,8 @@ pub fn load_any(path: &Path, windows: bool) -> Result<Vec<PluginInfo>> {
         Ok(vec![merlin_hosting::soundfont::info_for(path)])
     } else if path.extension().is_some_and(|e| e == "vst3") {
         load_vst3(path)
+    } else if path.extension().is_some_and(|e| e == "so") {
+        load_vst2(path)
     } else {
         load_clap(path, windows)
     }
@@ -324,6 +356,41 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn so_files_are_vst2_plugins_only_in_vst_folders_or_beside_a_dll() {
+        let root = tempdir("vst2-find");
+        let touch = |p: &str| {
+            let path = root.join(p);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, b"x").unwrap();
+        };
+        touch("home/.vst/Synth.so");
+        touch("home/.vst/Vendor/Deep.so");
+        touch("home/lib/libsomething.so"); // a library, not a plugin
+        touch("bridges/Win.so");
+        touch("bridges/Win.dll"); // a bridge
+        touch("home/surge.lv2/libSurge.so"); // an LV2 plugin's library
+        let found = find_clap_files(&[
+            root.join("home/.vst"),
+            root.join("home/lib"),
+            root.join("bridges"),
+            root.join("home"),
+        ]);
+        let names: Vec<_> = found
+            .iter()
+            .map(|(p, w)| (p.file_name().unwrap().to_string_lossy().into_owned(), *w))
+            .collect();
+        assert!(names.contains(&("Synth.so".into(), false)), "{names:?}");
+        assert!(names.contains(&("Deep.so".into(), false)));
+        assert!(names.contains(&("Win.so".into(), true)));
+        assert!(
+            !names
+                .iter()
+                .any(|(n, _)| n == "libsomething.so" || n == "libSurge.so"),
+            "{names:?}"
+        );
     }
 
     #[test]

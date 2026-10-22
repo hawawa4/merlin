@@ -56,6 +56,11 @@ pub fn bridges_vst3_dir() -> PathBuf {
     data_dir().join("bridges").join("vst3")
 }
 
+/// The same for Windows VST2 plugins (a chainloader `.so` with the `.dll` linked beside it).
+pub fn bridges_vst2_dir() -> PathBuf {
+    data_dir().join("bridges").join("vst2")
+}
+
 pub fn settings_file() -> PathBuf {
     config_dir().join("settings.toml")
 }

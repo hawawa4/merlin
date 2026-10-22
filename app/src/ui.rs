@@ -35,6 +35,9 @@ pub fn found_label(f: &merlin_scanner::Found) -> String {
     if f.info.format == Format::Vst3 {
         label.push_str(" (VST3)");
     }
+    if f.info.format == Format::Vst2 {
+        label.push_str(" (VST2)");
+    }
     if f.info.format == Format::SoundFont {
         label.push_str(" (SoundFont)");
     }
@@ -101,6 +104,8 @@ pub enum Action {
     AddDir(String),
     RemoveDir(usize),
     AddSoundDir(String),
+    AddWindowsVst2Dir(String),
+    RemoveWindowsVst2Dir(usize),
     RemoveSoundDir(usize),
     Rescan(bool),
     RetryFile(PathBuf),
@@ -238,6 +243,7 @@ pub struct UiState {
     pub favs_only: bool,
     pub dir_text: String,
     pub sound_dir_text: String,
+    pub vst2_dir_text: String,
     pub wine_text: String,
     pub yab_text: String,
     pub installer_text: String,
@@ -282,6 +288,7 @@ impl UiState {
             favs_only: false,
             dir_text: String::new(),
             sound_dir_text: String::new(),
+            vst2_dir_text: String::new(),
             wine_text: String::new(),
             yab_text: String::new(),
             installer_text: String::new(),
@@ -760,6 +767,7 @@ fn unit(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, i: usize, actions:
             r.name,
             match r.format {
                 Format::Vst3 => "VST3",
+                Format::Vst2 => "VST2",
                 Format::SoundFont => "SF",
                 _ => "CLAP",
             },

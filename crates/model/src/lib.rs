@@ -54,6 +54,8 @@ mod base64_opt {
 pub enum Format {
     Clap,
     Vst3,
+    /// VST 2: native Linux plugins, and Windows ones through yabridge.
+    Vst2,
     /// An instrument or effect that ships inside the app.
     Builtin,
     SoundFont,

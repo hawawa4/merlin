@@ -71,6 +71,8 @@ pub struct Settings {
     pub favorites: Vec<String>,
     /// The two audio outputs of the interface the click goes to; the main outputs when unset.
     pub click_output: Option<[String; 2]>,
+    /// Folders of Windows VST2 plugins (`.dll`) outside the Windows prefix, to bridge.
+    pub windows_vst2_dirs: Vec<PathBuf>,
 }
 
 impl Default for Settings {
@@ -88,6 +90,7 @@ impl Default for Settings {
             autosave_secs: 30,
             favorites: Vec::new(),
             click_output: None,
+            windows_vst2_dirs: Vec::new(),
         }
     }
 }

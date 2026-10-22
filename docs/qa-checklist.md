@@ -108,6 +108,13 @@ Snapshots are saved inside the rig file, so one file holds the whole setup.
 - [ ] Edit a marker while the transport is stopped, press START: the new marker list is used. (Editing while it runs takes effect after the next stop.)
 - [ ] **Next part** marker plus a foot switch mapped to *Next part*: both advance without skipping a part.
 
+## 5j. VST2 plugins
+- [ ] Settings > Windows plugins > *Folders with Windows VST2 plugins*: add your VstPlugins folder. The 64-bit DLLs appear in the browser as `(VST2) (Windows)` after a minute or two (each one is started once to read its name). Load a few: do they play, show their editor, and come back after Save / New / reopen?
+- [ ] Which of your VST2 plugins do NOT work (no sound, no editor, crash)? Send me the names; Pianoteq 6 Stage loaded for me but stayed silent.
+- [ ] A native Linux `.so` VST2 plugin in `~/.vst` or `~/.lxvst`, if you have one: it should appear without any setting.
+- [ ] Kontakt/Reaktor-type plugins that are huge: how long do they take to load, and does the app stay responsive?
+- [ ] An effect (reverb, EQ) as an insert on a slot.
+
 ## 6. Stability
 - [ ] Kill a Windows plugin's Wine process while the app runs: `pgrep -af yabridge-host`, then `kill -9 <pid>` of one. The app should restart itself from the autosave and name the plugin it quarantined (it comes back with *Retry*).
 - [ ] The 2-hour rehearsal: 6–8 instruments including a Windows one, switching and playing for 2 hours. For an unattended version: `just soak 7200 3 --windows "Six Sines"`, then read the `state:` lines (xruns, held keys, RSS, threads). Expect 0 xruns, 0 held keys at the end, memory flat.

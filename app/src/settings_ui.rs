@@ -819,8 +819,10 @@ fn windows_plugins(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &m
     );
     check(
         ui,
-        rt.chainloader().is_file() && rt.vst3_chainloader().is_file(),
-        "yabridge: CLAP and VST3 chainloaders".to_owned(),
+        rt.chainloader().is_file()
+            && rt.vst3_chainloader().is_file()
+            && rt.vst2_chainloader().is_file(),
+        "yabridge: CLAP, VST3 and VST2 chainloaders".to_owned(),
     );
     ui.horizontal(|ui| {
         let ready = rt.prefix_ready();
@@ -885,13 +887,46 @@ fn windows_plugins(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &m
                 }
             });
         });
+    egui::CollapsingHeader::new("Folders with Windows VST2 plugins (.dll)")
+        .default_open(!s.settings.windows_vst2_dirs.is_empty())
+        .show(ui, |ui| {
+            ui.label(
+                RichText::new("VST2 plugins are often kept in one folder (for example a shared VstPlugins folder on another disk). Add it here and the 64-bit plugins in it are bridged; the originals are never touched.")
+                    .small()
+                    .weak(),
+            );
+            for (i, d) in s.settings.windows_vst2_dirs.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    ui.label(d.display().to_string());
+                    if ui.small_button("remove").clicked() {
+                        actions.push(Action::RemoveWindowsVst2Dir(i));
+                    }
+                });
+            }
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut st.vst2_dir_text)
+                        .hint_text("/path/to/VstPlugins")
+                        .desired_width(420.0),
+                );
+                if ui
+                    .add_enabled(
+                        !s.windows_busy() && !st.vst2_dir_text.trim().is_empty(),
+                        egui::Button::new("Add folder"),
+                    )
+                    .clicked()
+                {
+                    actions.push(Action::AddWindowsVst2Dir(std::mem::take(&mut st.vst2_dir_text)));
+                }
+            });
+        });
     if !s.windows_status.is_empty() {
         ui.label(&s.windows_status);
     }
     ui.add_space(4.0);
     ui.label(
         RichText::new(
-            "Only 64-bit CLAP and VST3 plugins are picked up. Plugins with copy protection (iLok and the like) may not run. Prefer a native Linux version when there is one.",
+            "Only 64-bit CLAP, VST3 and VST2 plugins are picked up. Plugins with copy protection (iLok and the like) may not run. Prefer a native Linux version when there is one.",
         )
         .small()
         .weak(),
