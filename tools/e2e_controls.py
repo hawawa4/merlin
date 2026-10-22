@@ -67,6 +67,7 @@ def main():
     snapshots_check()
     macros_check()
     selection_check()
+    setlist_check()
 
 
 SNAP_FILE = Path(tempfile.gettempdir()) / "irig-e2e-snapshots.irig"
@@ -160,6 +161,38 @@ def selection_check():
         print(out[-3000:])
         sys.exit(1)
     print(f"ok: an encoder moves the macro of the slot that plays, and follows the selection: {seq}")
+
+
+SET_SCRIPT = "; ".join(
+    [
+        "1:load 1 TimGM6mb",
+        "4:song add", "4.05:song add", "4.1:song tempo 1 100", "4.15:song tempo 2 90",
+        # Three sounds, told apart by slot 1's volume: A 1.0 and B 0.4 in song 1, C 0.7 in song 2.
+        "4.2:volume 1 1.0", "4.25:part add 1",
+        "4.3:volume 1 0.4", "4.35:part add 1", "4.4:part tempo 1 2 140",
+        "4.5:volume 1 0.7", "4.55:part add 2",
+        "4.6:volume 1 0.0",
+        "4.7:map cc 60 nextpart", "4.71:map cc 61 prevpart", "4.72:map cc 62 nextsong",
+    ]
+    + [f"{t}:report" for t in (7.5, 8.5, 9.5, 10.5, 11.5)]
+    + ["13:quit"]
+)
+SET_CONTROLS = "1:B0 60 127; 2:B0 60 127; 3:B0 60 127; 4:B0 61 127; 5:B0 62 127"
+
+
+def setlist_check():
+    out = run(SET_SCRIPT, SET_CONTROLS, 9)
+    seq = [
+        (float(v), p, int(tempo))
+        for v, p, tempo in re.findall(r"vol1 ([\d.]+),.*position (None|Some\(\(\d+, \d+\)\)), tempo (\d+)", out)
+    ]
+    wanted = [(1.0, "Some((1, 1))", 100), (0.4, "Some((1, 2))", 140), (0.7, "Some((2, 1))", 90),
+              (0.4, "Some((1, 2))", 140), (0.7, "Some((2, 1))", 90)]
+    if seq != wanted:
+        print(f"FAIL (setlist)\n  (volume, position, tempo) {seq}\n  wanted {wanted}")
+        print(out[-3000:])
+        sys.exit(1)
+    print(f"ok: foot switches walk the setlist, each part recalls its snapshot and tempo: {seq}")
 
 
 def controls_check():

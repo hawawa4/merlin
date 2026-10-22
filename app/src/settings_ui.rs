@@ -34,6 +34,10 @@ pub enum ActionKind {
     SlotMacro,
     SelectedMacro,
     SelectedVolume,
+    NextPart,
+    PrevPart,
+    NextSong,
+    PrevSong,
     RecallSnapshot,
     NextSnapshot,
     PrevSnapshot,
@@ -42,7 +46,7 @@ pub enum ActionKind {
 }
 
 impl ActionKind {
-    const ALL: [ActionKind; 16] = [
+    const ALL: [ActionKind; 20] = [
         Self::SelectSlot,
         Self::ToggleLayer,
         Self::ToggleMute,
@@ -54,6 +58,10 @@ impl ActionKind {
         Self::SlotMacro,
         Self::SelectedMacro,
         Self::SelectedVolume,
+        Self::NextPart,
+        Self::PrevPart,
+        Self::NextSong,
+        Self::PrevSong,
         Self::RecallSnapshot,
         Self::NextSnapshot,
         Self::PrevSnapshot,
@@ -74,6 +82,10 @@ impl ActionKind {
             Self::SlotMacro => "Macro of a slot (knob or fader)",
             Self::SelectedMacro => "Macro of the slot that plays (knob or fader)",
             Self::SelectedVolume => "Volume of the slot that plays (fader or knob)",
+            Self::NextPart => "Next part (foot switch)",
+            Self::PrevPart => "Previous part (foot switch)",
+            Self::NextSong => "Next song",
+            Self::PrevSong => "Previous song",
             Self::RecallSnapshot => "Recall a snapshot",
             Self::NextSnapshot => "Next snapshot (foot switch)",
             Self::PrevSnapshot => "Previous snapshot (foot switch)",
@@ -109,6 +121,10 @@ impl ActionKind {
             Self::SlotMacro => A::SlotMacro { slot, index: base },
             Self::SelectedMacro => A::SelectedMacro { index: base },
             Self::SelectedVolume => A::SelectedVolume,
+            Self::NextPart => A::NextPart,
+            Self::PrevPart => A::PrevPart,
+            Self::NextSong => A::NextSong,
+            Self::PrevSong => A::PrevSong,
             Self::RecallSnapshot => A::RecallSnapshot { snapshot: slot },
             Self::NextSnapshot => A::NextSnapshot,
             Self::PrevSnapshot => A::PrevSnapshot,

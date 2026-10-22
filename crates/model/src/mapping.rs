@@ -66,6 +66,12 @@ pub enum ControlAction {
     },
     /// A fader for the volume of whichever slot plays now.
     SelectedVolume,
+    /// Move through the setlist: the next part (then the next song), the one before, or
+    /// straight to the next or previous song.
+    NextPart,
+    PrevPart,
+    NextSong,
+    PrevSong,
     /// Recall a snapshot.
     RecallSnapshot {
         snapshot: u8,
@@ -130,6 +136,10 @@ impl ControlAction {
             Self::RecallSnapshot { snapshot } => {
                 format!("Recall snapshot {}", snapshot as usize + 1)
             }
+            Self::NextPart => "Next part".into(),
+            Self::PrevPart => "Previous part".into(),
+            Self::NextSong => "Next song".into(),
+            Self::PrevSong => "Previous song".into(),
             Self::NextSnapshot => "Next snapshot".into(),
             Self::PrevSnapshot => "Previous snapshot".into(),
             Self::RecallSnapshotByValue { base } => format!(

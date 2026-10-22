@@ -14,9 +14,9 @@ default:
 
 # The app. Loads plugins from the standard CLAP folders plus test-assets (Linux and, through
 # our patched Wine, Windows ones). Try: just dev --fresh      just dev --rig my.irig
-# This round: knob options. Settings -> Controls: a knob mapping has an "options" button (invert, range,
-# curve, endless-encoder kinds) and a takeover of Jump, Pick up or Scale. New actions "Macro / Volume of
-# the slot that plays" follow whatever you select. See docs/qa-checklist.md section 5e.
+# This round: setlist. "Setlist" in the title bar: add songs, then parts (use "Part from the current sound" after
+# setting the rig up the way that part should sound). In Perform: Next / Prev part. Map foot switches in
+# Settings -> Controls. See docs/qa-checklist.md section 5f.
 dev *args:
     cargo build -p merlin --release
     PATH="{{yabridge_dir}}:$PATH" WINELOADER={{patched_wine}} \

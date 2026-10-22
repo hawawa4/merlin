@@ -502,7 +502,7 @@ libjack preload (S1), `build-wine.sh` and the patch set (S4).
 
 ### Phase 5: songs, setlists, backing tracks, i.e. "plan a track" (6–8 weeks)
 
-- **Setlist → Song → Parts.** A part is a snapshot plus overrides. Per-song preloading within a memory budget; slots shared between songs.
+- **Setlist → Song → Parts** ✅ (first slice). The rig holds the songs in playing order; a song has a tempo, beats per bar, a note and parts; a part is a snapshot plus an optional tempo and a cue note. *Setlist* screen (header button) edits them; *Add part from the current sound* saves a snapshot and the part in one go. *Next part / Previous part* (then on to the next song) and *Next / Previous song* are mappable actions and buttons in the Perform view, which also shows the song, part, tempo and cue. Slots are shared by all songs because they are the rig's slots, so per-song preloading is not needed yet. Not done: other part overrides (macros, volumes), and a setlist file shared between rigs.
 - **Transport:** tempo map, count-in, **click on a separate output**, MIDI clock out.
 - **Backing tracks:** disk-streamed stems (symphonia + creek + rubato), per-stem gain and output.
 - **Timeline markers with actions:** switch part, send Program Change or CC to external gear, text cue, jump. Manual advance from a foot switch.

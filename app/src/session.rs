@@ -21,6 +21,7 @@ use std::sync::mpsc;
 
 mod controls;
 mod macros;
+mod setlist;
 mod snapshots;
 
 use crate::scan_worker::{self, ScanMsg};
@@ -193,6 +194,8 @@ pub struct Session {
     last_control: Option<String>,
     /// The snapshot recalled last.
     last_snapshot: Option<usize>,
+    /// The song and part entered last.
+    position: Option<(usize, usize)>,
     /// What each plugin said about its parameters, by (slot, insert).
     param_cache:
         std::collections::HashMap<(usize, Option<usize>), Vec<merlin_hosting::ParamInfo>>,
@@ -283,6 +286,7 @@ impl Session {
             learn: None,
             last_control: None,
             last_snapshot: None,
+            position: None,
             param_cache: Default::default(),
             midi_seen: Default::default(),
             midi_lit: Default::default(),
@@ -1529,6 +1533,7 @@ impl Session {
         self.clear();
         self.rig = new_rig("Untitled");
         self.last_snapshot = None;
+        self.position = None;
         self.sync_mappings();
         let _ = self.engine.send(Command::SetMasterVolume(1.0));
         self.rig_path = None;
@@ -1572,6 +1577,7 @@ impl Session {
         }
         self.rig = rig;
         self.last_snapshot = None;
+        self.position = None;
         self.sync_mappings();
         let _ = self
             .engine

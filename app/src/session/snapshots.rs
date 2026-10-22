@@ -88,6 +88,7 @@ impl Session {
             return;
         }
         self.rig.snapshots.remove(n);
+        self.snapshot_removed(n);
         self.last_snapshot = match self.last_snapshot {
             Some(c) if c == n => None,
             Some(c) if c > n => Some(c - 1),

@@ -18,6 +18,7 @@ mod perform;
 mod quirks;
 mod scan_worker;
 mod session;
+mod setlist_ui;
 mod settings;
 mod settings_ui;
 mod ui;
@@ -529,6 +530,84 @@ impl Running {
                     }
                 }
             }
+            Action::ToggleSetlist => {
+                self.ui.setlist_open = !self.ui.setlist_open;
+                if self.ui.setlist_open {
+                    self.ui.settings_open = false;
+                }
+                Ok(())
+            }
+            Action::AddSong => {
+                if let Some(n) = s.add_song() {
+                    self.ui.edit_song = n;
+                }
+                Ok(())
+            }
+            Action::RemoveSong(n) => {
+                s.remove_song(n);
+                Ok(())
+            }
+            Action::MoveSong(n, down) => {
+                s.move_song(n, down);
+                if self.ui.edit_song == n {
+                    self.ui.edit_song = if down { n + 1 } else { n.saturating_sub(1) };
+                }
+                Ok(())
+            }
+            Action::EditSong(n, edit) => {
+                s.edit_song(n, |song| match edit {
+                    ui::SongEdit::Name(v) => song.name = v,
+                    ui::SongEdit::Tempo(v) => song.tempo = v,
+                    ui::SongEdit::Beats(v) => song.beats_per_bar = v,
+                    ui::SongEdit::Note(v) => song.note = v,
+                });
+                Ok(())
+            }
+            Action::AddPart(n, from_current) => {
+                if from_current {
+                    s.add_part_from_current(n);
+                } else {
+                    s.add_part(n, None);
+                }
+                Ok(())
+            }
+            Action::RemovePart(n, k) => {
+                s.remove_part(n, k);
+                Ok(())
+            }
+            Action::MovePart(n, k, down) => {
+                s.move_part(n, k, down);
+                Ok(())
+            }
+            Action::EditPart(n, k, edit) => {
+                s.edit_part(n, k, |p| match edit {
+                    ui::PartEdit::Name(v) => p.name = v,
+                    ui::PartEdit::Snapshot(v) => p.snapshot = v,
+                    ui::PartEdit::Tempo(v) => p.tempo = v,
+                    ui::PartEdit::Note(v) => p.note = v,
+                });
+                Ok(())
+            }
+            Action::GoTo(n, k) => {
+                s.go_to(n, k);
+                Ok(())
+            }
+            Action::NextPart => {
+                s.next_part();
+                Ok(())
+            }
+            Action::PrevPart => {
+                s.prev_part();
+                Ok(())
+            }
+            Action::NextSong => {
+                s.next_song();
+                Ok(())
+            }
+            Action::PrevSong => {
+                s.prev_song();
+                Ok(())
+            }
             Action::AddSnapshot => {
                 s.add_snapshot();
                 Ok(())
@@ -808,7 +887,7 @@ impl Running {
                 s.say(format!(
                     "state: rig '{}'{}, xruns {xruns}, DSP {dsp:.1}%, held keys {held}, \
                      RSS {rss_mb} MB, threads {threads}, midi {midi}, master {:.2}, vol1 {:.2}, targets {:?}, dock shows {:?}, \
-                     popup {}, slots {}, perform {}, locked {}, macro1 {:.2}, gain1 {:.2}",
+                     popup {}, slots {}, perform {}, locked {}, macro1 {:.2}, gain1 {:.2}, position {:?}, tempo {:.0}",
                     s.rig.name,
                     if s.dirty { " (modified)" } else { "" },
                     s.rig.master_volume,
@@ -820,7 +899,9 @@ impl Running {
                     self.ui.perform,
                     self.ui.locked,
                     s.macro_value(0, 0),
-                    s.sampler_gain(0).unwrap_or(-1.0)
+                    s.sampler_gain(0).unwrap_or(-1.0),
+                    s.position().map(|(a, b)| (a + 1, b + 1)),
+                    s.current_tempo()
                 ));
                 Ok(())
             }
@@ -1152,6 +1233,41 @@ fn parse_script() -> Vec<(Duration, Action)> {
                     slot(words.next())?,
                     words.collect::<Vec<_>>().join(" "),
                 ),
+                // song add | song name N text | song tempo N bpm; part add N | part snapshot N K S;
+                // go S P; nextpart prevpart nextsong prevsong
+                "song" => match words.next()? {
+                    "add" => Action::AddSong,
+                    "name" => {
+                        let n = slot(words.next())?;
+                        Action::EditSong(n, ui::SongEdit::Name(words.collect::<Vec<_>>().join(" ")))
+                    }
+                    "tempo" => Action::EditSong(
+                        slot(words.next())?,
+                        ui::SongEdit::Tempo(words.next()?.parse().ok()?),
+                    ),
+                    _ => return None,
+                },
+                "part" => match words.next()? {
+                    "add" => Action::AddPart(slot(words.next())?, true),
+                    "empty" => Action::AddPart(slot(words.next())?, false),
+                    "snapshot" => Action::EditPart(
+                        slot(words.next())?,
+                        slot(words.next())?,
+                        ui::PartEdit::Snapshot(Some(slot(words.next())?)),
+                    ),
+                    "tempo" => Action::EditPart(
+                        slot(words.next())?,
+                        slot(words.next())?,
+                        ui::PartEdit::Tempo(Some(words.next()?.parse().ok()?)),
+                    ),
+                    _ => return None,
+                },
+                "setlist" => Action::ToggleSetlist,
+                "go" => Action::GoTo(slot(words.next())?, slot(words.next())?),
+                "nextpart" => Action::NextPart,
+                "prevpart" => Action::PrevPart,
+                "nextsong" => Action::NextSong,
+                "prevsong" => Action::PrevSong,
                 // perform on|off, lock on|off, fullscreen
                 "perform" => Action::SetPerform(words.next()? == "on"),
                 "lock" => Action::SetLock(words.next()? == "on"),
@@ -1230,6 +1346,10 @@ fn parse_control_action(
             base: num(words.next())?,
         },
         "snapnext" => A::NextSnapshot,
+        "nextpart" => A::NextPart,
+        "prevpart" => A::PrevPart,
+        "nextsong" => A::NextSong,
+        "prevsong" => A::PrevSong,
         "snapprev" => A::PrevSnapshot,
         "next" => A::NextSlot,
         "prev" => A::PrevSlot,

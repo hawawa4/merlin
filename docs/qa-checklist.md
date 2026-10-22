@@ -74,6 +74,14 @@ Snapshots are saved inside the rig file, so one file holds the whole setup.
 - [ ] *Volume of the slot that plays* behaves the same for one fader.
 - [ ] Save, reopen: options (range, curve, kind) and takeover are kept.
 
+## 5f. Setlist, songs and parts
+- [ ] **Setlist** (title bar) > **+ Add song**. Name it, set a tempo. Set the rig up the way the first part should sound, press **+ Part from the current sound**; change the sound, add another part; add a tempo override on one.
+- [ ] **Go** on a part: the sound and the tempo (shown in Perform) change to that part. The snapshot strip shows the part's snapshot lit.
+- [ ] Reorder songs and parts with **^ v**; delete a part, and delete a snapshot a part uses (the part just shows "no snapshot").
+- [ ] Perform view: **Next part >** and **< Prev part** walk through the song and into the next song; part buttons jump; the song buttons jump to a song. The cue note shows large.
+- [ ] Settings > Controls: *Next part* / *Previous part* on foot switches (or pads): the same walk, from the pedals.
+- [ ] Save, **New**, reopen: songs, parts, tempos and notes are back and still recall the right sounds.
+
 ## 6. Stability
 - [ ] Kill a Windows plugin's Wine process while the app runs: `pgrep -af yabridge-host`, then `kill -9 <pid>` of one. The app should restart itself from the autosave and name the plugin it quarantined (it comes back with *Retry*).
 - [ ] The 2-hour rehearsal: 6–8 instruments including a Windows one, switching and playing for 2 hours. For an unattended version: `just soak 7200 3 --windows "Six Sines"`, then read the `state:` lines (xruns, held keys, RSS, threads). Expect 0 xruns, 0 held keys at the end, memory flat.

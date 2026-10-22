@@ -132,6 +132,10 @@ impl Session {
             Outcome::SetMaster(v) => self.set_master_volume(v),
             Outcome::SetMacro(i, k, v) => self.set_macro(i, k, v),
             Outcome::Recall(n) => self.recall_snapshot(n),
+            Outcome::NextPart => self.next_part(),
+            Outcome::PrevPart => self.prev_part(),
+            Outcome::NextSong => self.next_song(),
+            Outcome::PrevSong => self.prev_song(),
             Outcome::Panic => self.panic(),
         }
     }

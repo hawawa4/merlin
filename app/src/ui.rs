@@ -44,6 +44,24 @@ pub fn found_label(f: &merlin_scanner::Found) -> String {
     label
 }
 
+/// What can change about a song.
+#[derive(Debug)]
+pub enum SongEdit {
+    Name(String),
+    Tempo(f32),
+    Beats(u8),
+    Note(String),
+}
+
+/// What can change about a part.
+#[derive(Debug)]
+pub enum PartEdit {
+    Name(String),
+    Snapshot(Option<usize>),
+    Tempo(Option<f32>),
+    Note(String),
+}
+
 #[derive(Debug)]
 pub enum Action {
     /// Load browser entry `k` into slot `i`.
@@ -131,6 +149,22 @@ pub enum Action {
     /// Script-only: make macro `k` of a slot drive the first parameter whose name contains the
     /// text (or `sampler:level`, `sampler:brightness`, ... for a SoundFont).
     AddMacroParamNamed(usize, usize, String),
+    ToggleSetlist,
+    AddSong,
+    RemoveSong(usize),
+    MoveSong(usize, bool),
+    EditSong(usize, SongEdit),
+    /// Add a part to a song: from the sound as it is now (a new snapshot), or empty.
+    AddPart(usize, bool),
+    RemovePart(usize, usize),
+    MovePart(usize, usize, bool),
+    EditPart(usize, usize, PartEdit),
+    /// Enter part `k` of song `n`.
+    GoTo(usize, usize),
+    NextPart,
+    PrevPart,
+    NextSong,
+    PrevSong,
     /// Show or leave the Perform view.
     SetPerform(bool),
     /// Lock the Perform view (it cannot be left) or unlock it.
@@ -167,6 +201,9 @@ pub enum DockTab {
 pub struct UiState {
     pub tab: DockTab,
     pub settings_open: bool,
+    /// The Setlist screen is showing, and the song being edited in it.
+    pub setlist_open: bool,
+    pub edit_song: usize,
     /// The Perform view is showing.
     pub perform: bool,
     /// Perform view locked: it cannot be left and dropped files are ignored.
@@ -213,6 +250,8 @@ impl UiState {
         Self {
             tab: DockTab::Plugin,
             settings_open: false,
+            setlist_open: false,
+            edit_song: 0,
             perform: false,
             locked: false,
             unlock_since: None,
@@ -258,6 +297,13 @@ pub fn draw(
     }
     egui::Panel::top("header").show(ui, |ui| header(ui, s, st, actions));
     egui::Panel::top("snapshots").show(ui, |ui| snapshot_bar(ui, s, actions));
+    if st.setlist_open && !st.settings_open {
+        egui::CentralPanel::default().show(ui, |ui| {
+            *dock_rect = egui::Rect::NOTHING;
+            crate::setlist_ui::show(ui, s, st, actions);
+        });
+        return;
+    }
     if st.settings_open {
         egui::CentralPanel::default().show(ui, |ui| {
             *dock_rect = egui::Rect::NOTHING;
@@ -543,6 +589,13 @@ fn header(ui: &mut egui::Ui, s: &mut Session, st: &UiState, actions: &mut Vec<Ac
         }
         if ui.button("Settings").clicked() {
             actions.push(Action::ToggleSettings);
+        }
+        if ui
+            .button("Setlist")
+            .on_hover_text("Songs and their parts, in playing order")
+            .clicked()
+        {
+            actions.push(Action::ToggleSetlist);
         }
         if ui
             .button("Perform")

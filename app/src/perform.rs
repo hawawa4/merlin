@@ -22,6 +22,7 @@ pub fn show(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<
     egui::Panel::bottom("perform-master").show(ui, |ui| master(ui, s, actions));
     egui::CentralPanel::default().show(ui, |ui| {
         egui::ScrollArea::vertical().show(ui, |ui| {
+            setlist(ui, s, actions);
             snapshots(ui, s, actions);
             ui.add_space(14.0);
             tiles(ui, s, st, actions);
@@ -124,6 +125,85 @@ fn lock_button(ui: &mut egui::Ui, st: &mut UiState, actions: &mut Vec<Action>) {
     } else {
         st.unlock_since = None;
     }
+}
+
+/// Where the setlist is: the song and its parts, with Previous / Next part and the other songs.
+fn setlist(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
+    if s.songs().is_empty() {
+        return;
+    }
+    let here = s.position();
+    let big = |text: &str| {
+        egui::Button::new(RichText::new(text).size(20.0).strong()).min_size(egui::vec2(150.0, 64.0))
+    };
+    ui.horizontal(|ui| {
+        if ui.add(big("< Prev part")).clicked() {
+            actions.push(Action::PrevPart);
+        }
+        if ui.add(big("Next part >")).clicked() {
+            actions.push(Action::NextPart);
+        }
+        ui.add_space(10.0);
+        match here.and_then(|(n, k)| Some((n, k, s.songs().get(n)?))) {
+            Some((n, k, song)) => {
+                ui.vertical(|ui| {
+                    ui.label(RichText::new(song.label(n)).size(28.0).strong());
+                    if let Some(part) = song.parts.get(k) {
+                        ui.label(
+                            RichText::new(format!(
+                                "{}  ·  {:.0} bpm",
+                                part.label(k),
+                                song.tempo_in(k)
+                            ))
+                            .size(18.0),
+                        );
+                        if !part.note.trim().is_empty() {
+                            ui.label(
+                                RichText::new(&part.note)
+                                    .size(20.0)
+                                    .color(Color32::from_rgb(0xe0, 0xb4, 0x4a)),
+                            );
+                        }
+                    }
+                });
+            }
+            None => {
+                ui.label(RichText::new("Setlist not started").size(20.0).weak());
+            }
+        }
+    });
+    if let Some((n, k)) = here
+        && let Some(song) = s.songs().get(n)
+        && !song.parts.is_empty()
+    {
+        ui.add_space(8.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+            for (i, part) in song.parts.iter().enumerate() {
+                let b = egui::Button::new(RichText::new(part.label(i)).size(18.0))
+                    .min_size(egui::vec2(130.0, 52.0))
+                    .selected(i == k);
+                if ui.add(b).clicked() {
+                    actions.push(Action::GoTo(n, i));
+                }
+            }
+        });
+    }
+    ui.add_space(8.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+        for (i, song) in s.songs().iter().enumerate() {
+            let b = egui::Button::new(
+                RichText::new(format!("{}  {}", i + 1, song.label(i))).size(15.0),
+            )
+            .min_size(egui::vec2(110.0, 36.0))
+            .selected(here.is_some_and(|(n, _)| n == i));
+            if ui.add(b).clicked() {
+                actions.push(Action::GoTo(i, 0));
+            }
+        }
+    });
+    ui.add_space(14.0);
 }
 
 fn snapshots(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {

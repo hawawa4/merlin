@@ -53,6 +53,10 @@ pub enum Outcome {
     SetMaster(f32),
     SetMacro(usize, usize, f32),
     Recall(usize),
+    NextPart,
+    PrevPart,
+    NextSong,
+    PrevSong,
     Panic,
 }
 
@@ -231,6 +235,10 @@ fn fire(action: &ControlAction, inc: &Incoming, ctx: &Context) -> Option<Outcome
                 None => count - 1,
             }))
         }
+        ControlAction::NextPart => Some(Outcome::NextPart),
+        ControlAction::PrevPart => Some(Outcome::PrevPart),
+        ControlAction::NextSong => Some(Outcome::NextSong),
+        ControlAction::PrevSong => Some(Outcome::PrevSong),
         ControlAction::Panic => Some(Outcome::Panic),
         _ => None,
     }

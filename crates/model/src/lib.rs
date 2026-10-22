@@ -15,12 +15,14 @@ mod fx;
 mod macros;
 mod mapping;
 mod migrate;
+mod setlist;
 mod snapshot;
 
 pub use fx::{CompSettings, DelaySettings, EqSettings, FxSettings, ReverbSettings};
 pub use macros::{MACROS_PER_SLOT, MAX_MACRO_TARGETS, Macro, MacroTarget, SamplerField};
 pub use mapping::{ControlAction, Curve, Glue, Mapping, Relative, Source, SourceKind, Takeover};
 pub use migrate::{Migration, migrate};
+pub use setlist::{MAX_PARTS, MAX_SONGS, MAX_TEMPO, MIN_TEMPO, Part, Song};
 pub use snapshot::{MAX_SNAPSHOTS, PresetChoice, SlotSnapshot, Snapshot};
 
 mod base64_opt {
@@ -182,6 +184,8 @@ pub struct Rig {
     pub mappings: Vec<Mapping>,
     /// Saved performance states (which slots play, volumes, effects on or off, presets).
     pub snapshots: Vec<Snapshot>,
+    /// The setlist: songs in playing order.
+    pub songs: Vec<Song>,
 }
 
 impl Default for Rig {
@@ -195,6 +199,7 @@ impl Default for Rig {
             master_volume: 1.0,
             mappings: Vec::new(),
             snapshots: Vec::new(),
+            songs: Vec::new(),
         }
     }
 }
@@ -208,6 +213,7 @@ pub enum RigError {
     BadMacro(usize),
     BadMapping(usize),
     BadSnapshot(usize),
+    BadSong(usize),
     NewerVersion(u32),
     /// No migration path from this format version.
     Unmigratable(u32),
@@ -226,6 +232,7 @@ impl std::fmt::Display for RigError {
             }
             Self::BadMacro(i) => write!(f, "slot {} has an invalid macro", i + 1),
             Self::BadMapping(i) => write!(f, "mapping {} is not valid", i + 1),
+            Self::BadSong(i) => write!(f, "song {} is not valid", i + 1),
             Self::BadSnapshot(i) => write!(f, "snapshot {} is not valid", i + 1),
             Self::NewerVersion(v) => write!(f, "rig format {v} is newer than this app understands"),
             Self::Unmigratable(v) => write!(f, "cannot upgrade rig format {v}"),
@@ -253,6 +260,13 @@ impl Rig {
         }
         if let Some(i) = self.snapshots.iter().position(|s| !s.is_valid()) {
             return Err(RigError::BadSnapshot(i));
+        }
+        if self.songs.len() > MAX_SONGS {
+            return Err(RigError::BadSong(MAX_SONGS));
+        }
+        let snapshots = self.snapshots.len();
+        if let Some(i) = self.songs.iter().position(|s| !s.is_valid(snapshots)) {
+            return Err(RigError::BadSong(i));
         }
         if let Some(&i) = self.selected.iter().find(|&&i| i >= self.slots.len()) {
             return Err(RigError::BadSelection(i));
