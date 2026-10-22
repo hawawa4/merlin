@@ -26,8 +26,8 @@ use crate::{
 /// Voices a slot can play at once.
 const POLYPHONY: u16 = 96;
 /// oxisynth is quiet at FluidSynth's default 0.2: this is "1.0" on our level control, matched by ear
-/// to Surge XT's default patch (+3 dB over the first guess of 0.5).
-const BASE_GAIN: f32 = 0.7;
+/// to Surge XT's default patch (6 dB over the first guess of 0.5; the master limiter catches peaks).
+const BASE_GAIN: f32 = 1.0;
 const STATE_MAGIC: &[u8; 4] = b"ISF1";
 
 /// True for a file this module plays.
