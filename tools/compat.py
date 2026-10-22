@@ -41,6 +41,10 @@ def label(p):
     text = p["name"]
     if p["format"] == "vst3":
         text += " (VST3)"
+    if p["format"] == "vst2":
+        text += " (VST2)"
+    if p["format"] == "lv2":
+        text += " (LV2)"
     if p["format"] == "soundfont":
         text += " (SoundFont)"
     if p["windows"]:
@@ -372,7 +376,7 @@ def write_doc(results):
         "|---|---|---|---|---|---|---|---|---|---|",
     ]
     for r in results:
-        fmt = {"clap": "CLAP", "vst3": "VST3", "soundfont": "SoundFont"}.get(r["format"], r["format"])
+        fmt = {"clap": "CLAP", "vst3": "VST3", "vst2": "VST2", "lv2": "LV2", "soundfont": "SoundFont"}.get(r["format"], r["format"])
         if r["windows"]:
             fmt += " (Windows)"
         lines.append(
