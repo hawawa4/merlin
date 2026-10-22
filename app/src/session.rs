@@ -513,8 +513,10 @@ impl Session {
         }
         self.unload(i);
         let t = Instant::now();
+        let loading = crate::marker::Loading::begin(&found.path, &found.info.id, &found.info.name);
         let loaded = self.create_plugin(i, &found.path, &found.info.id, found.windows)?;
         self.install(i, loaded)?;
+        drop(loading);
         let slot = &mut self.rig.slots[i];
         slot.instrument = Some(PluginRef {
             format: found.info.format,
@@ -956,6 +958,7 @@ impl Session {
 
     fn restore_slot(&mut self, i: usize, r: &PluginRef, state: Option<&[u8]>) -> Result<()> {
         let (path, windows) = self.locate(r)?;
+        let _loading = crate::marker::Loading::begin(&path, &r.id, &r.name);
         let mut loaded = self.create_plugin(i, &path, &r.id, windows)?;
         if let Some(state) = state {
             loaded
@@ -978,6 +981,7 @@ impl Session {
         }
         self.unload_insert(slot, index);
         let t = Instant::now();
+        let loading = crate::marker::Loading::begin(&found.path, &found.info.id, &found.info.name);
         let loaded = self.create_plugin(
             insert_id(slot, index),
             &found.path,
@@ -985,6 +989,7 @@ impl Session {
             found.windows,
         )?;
         self.install_insert(slot, index, loaded)?;
+        drop(loading);
         self.rig.slots[slot].inserts.resize(MAX_INSERTS, None);
         self.rig.slots[slot].inserts[index] = Some(Insert {
             plugin: PluginRef {
@@ -1026,6 +1031,7 @@ impl Session {
 
     fn restore_insert(&mut self, slot: usize, index: usize, ins: &Insert) -> Result<()> {
         let (path, windows) = self.locate(&ins.plugin)?;
+        let _loading = crate::marker::Loading::begin(&path, &ins.plugin.id, &ins.plugin.name);
         let mut loaded =
             self.create_plugin(insert_id(slot, index), &path, &ins.plugin.id, windows)?;
         if let Some(state) = &ins.state {
@@ -1179,9 +1185,16 @@ pub fn write_rig(rig: &Rig, path: &Path) -> Result<()> {
 }
 
 pub fn read_rig(path: &Path) -> Result<Rig> {
-    let rig: Rig = serde_json::from_slice(&std::fs::read(path)?)
-        .with_context(|| format!("reading {}", path.display()))?;
-    rig.validate()?;
+    let bytes = std::fs::read(path)?;
+    let (rig, migrated) =
+        Rig::from_json(&bytes).with_context(|| format!("reading {}", path.display()))?;
+    if migrated {
+        // Keep the old file next to the upgraded one, in case the new version is a mistake.
+        let backup = path.with_extension("irig.bak");
+        if !backup.exists() {
+            let _ = std::fs::write(&backup, &bytes);
+        }
+    }
     Ok(rig)
 }
 

@@ -12,8 +12,10 @@ pub const MAX_SLOTS: usize = 16;
 pub const RIG_VERSION: u32 = 1;
 
 mod fx;
+mod migrate;
 
 pub use fx::{CompSettings, DelaySettings, EqSettings, FxSettings, ReverbSettings};
+pub use migrate::{Migration, migrate};
 
 mod base64_opt {
     use base64::Engine as _;
@@ -189,6 +191,10 @@ pub enum RigError {
     BadFilter(usize),
     TooManyInserts(usize),
     NewerVersion(u32),
+    /// No migration path from this format version.
+    Unmigratable(u32),
+    /// Not a rig file.
+    Parse(String),
 }
 
 impl std::fmt::Display for RigError {
@@ -201,6 +207,8 @@ impl std::fmt::Display for RigError {
                 write!(f, "slot {} has more than {MAX_INSERTS} inserts", i + 1)
             }
             Self::NewerVersion(v) => write!(f, "rig format {v} is newer than this app understands"),
+            Self::Unmigratable(v) => write!(f, "cannot upgrade rig format {v}"),
+            Self::Parse(e) => write!(f, "not a valid rig file: {e}"),
         }
     }
 }

@@ -441,7 +441,7 @@ libjack preload (S1), `build-wine.sh` and the patch set (S4).
 8. ✅ Scanner: cache, background scan with one child process per file and a timeout (`merlin-scan`), failed files with Retry, quarantine list; searchable browser with favourites and drag-and-drop. VST3-specific `moduleinfo.json` and SoundFont scanning later.
 9. ✅ Rack UI, keyboard map, Settings panel (plugin folders, audio buffer size, MIDI inputs, Windows plugin paths) and the performance check with the exact fix for each problem. MIDI device roles and hotplug (ALSA sequencer) later.
 10. ◐ Windows plugins work through a manually configured Wine (`just dev` wires our patched build); the managed runtime and "Install Windows plugin…" are Phase 2.
-11. ◐ Save/open rig, autosave with crash recovery, missing-plugin placeholders ✅; crash marker for safe mode and rig migration ☐.
+11. ◐ Save/open rig, autosave with crash recovery, missing-plugin placeholders ✅; crash marker ✅ (a plugin that kills the app while loading is quarantined on the next start and the rest of the rig comes back); rig migrations ✅ (a step chain with a backup of the old file; none needed yet, format 1 is current).
 
 **Exit:**
 - A 2-hour rehearsal with 6–8 instruments, including at least one Windows plugin, all editors embedded.

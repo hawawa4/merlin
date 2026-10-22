@@ -10,6 +10,7 @@
 mod browser;
 mod guard;
 mod keyboard;
+mod marker;
 mod paths;
 mod perf;
 mod quirks;
@@ -156,6 +157,8 @@ impl App {
             painter.max_texture_side(),
         );
 
+        // A plugin that took the app down while loading must not do it again.
+        let interrupted = marker::quarantine_interrupted_load();
         let mut session = Session::new(
             xid,
             window.scale_factor(),
@@ -173,6 +176,12 @@ impl App {
             session.say(format!(
                 "{name} crashed and was quarantined; the app restarted from the autosave. \
                  Use Retry on its slot to try it again."
+            ));
+        }
+        if let Some(name) = interrupted {
+            session.say(format!(
+                "{name} crashed the app while loading and is quarantined; the rest of the rig \
+                 is restored. Use Retry on its slot to try it again."
             ));
         }
         let start_rig = match (&self.args.rig, self.args.fresh) {
