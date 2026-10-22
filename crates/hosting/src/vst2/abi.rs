@@ -89,6 +89,7 @@ pub const MASTER_AUTOMATE: i32 = 0;
 pub const MASTER_VERSION: i32 = 1;
 pub const MASTER_CURRENT_ID: i32 = 2;
 pub const MASTER_IDLE: i32 = 3;
+pub const MASTER_WANT_MIDI: i32 = 6;
 pub const MASTER_GET_TIME: i32 = 7;
 pub const MASTER_PROCESS_EVENTS: i32 = 8;
 pub const MASTER_IO_CHANGED: i32 = 13;

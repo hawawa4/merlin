@@ -110,7 +110,7 @@ Snapshots are saved inside the rig file, so one file holds the whole setup.
 
 ## 5j. VST2 plugins
 - [ ] Settings > Windows plugins > *Folders with Windows VST2 plugins*: add your VstPlugins folder. The 64-bit DLLs appear in the browser as `(VST2) (Windows)` after a minute or two (each one is started once to read its name). Load a few: do they play, show their editor, and come back after Save / New / reopen?
-- [ ] Which of your VST2 plugins do NOT work (no sound, no editor, crash)? Send me the names; Pianoteq 6 Stage loaded for me but stayed silent.
+- [ ] Which of your VST2 plugins do NOT work (no sound, no editor, crash)? Send me the names. (Pianoteq 6 Stage shows its Activation window in the app's own Windows environment, which is its licence check, not a bug: activate it there once.)
 - [ ] A native Linux `.so` VST2 plugin in `~/.vst` or `~/.lxvst`, if you have one: it should appear without any setting.
 - [ ] Kontakt/Reaktor-type plugins that are huge: how long do they take to load, and does the app stay responsive?
 - [ ] An effect (reverb, EQ) as an insert on a slot.

@@ -84,6 +84,8 @@ pub unsafe extern "C" fn callback(
     };
     match opcode {
         MASTER_VERSION => 2400,
+        // Deprecated, but old plugins ask it before they take MIDI: yes.
+        MASTER_WANT_MIDI => 1,
         MASTER_CURRENT_ID => isize::try_from(SHELL_ID.with(Cell::get)).unwrap_or(0),
         MASTER_IDLE | MASTER_UPDATE_DISPLAY => {
             if let Some(c) = ctx {
