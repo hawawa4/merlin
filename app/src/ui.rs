@@ -89,6 +89,13 @@ pub enum Action {
     Unquarantine(PathBuf, String),
     SetBuffer(u32),
     RefreshMidi,
+    /// Teach a control: the next one the user moves or presses is mapped to this.
+    LearnControl(merlin_model::ControlAction),
+    CancelLearn,
+    RemoveMapping(usize),
+    SetTakeover(usize, merlin_model::Takeover),
+    /// Script-only: add a mapping without a device (`map cc 20 select 2`).
+    AddMapping(merlin_model::Mapping),
     /// What a MIDI device is for, and whether it is used (device name, role, on).
     SetMidiDevice(String, crate::settings::DeviceRole, bool),
     SaveWine(String, String),
@@ -143,6 +150,10 @@ pub struct UiState {
     pub wine_text: String,
     pub yab_text: String,
     pub installer_text: String,
+    /// The mapping being composed on the Controls tab: what kind of action, and its numbers.
+    pub new_kind: crate::settings_ui::ActionKind,
+    pub new_slot: usize,
+    pub new_base: usize,
     /// What a file being dragged over the window would do, while one is.
     pub drag_hint: Option<(String, bool)>,
     pub perf: Option<(std::time::Instant, Vec<perf::Check>)>,
@@ -176,6 +187,9 @@ impl UiState {
             wine_text: String::new(),
             yab_text: String::new(),
             installer_text: String::new(),
+            new_kind: Default::default(),
+            new_slot: 0,
+            new_base: 0,
             drag_hint: None,
             perf: None,
             peaks_shown: [0.0; UI_SLOTS],

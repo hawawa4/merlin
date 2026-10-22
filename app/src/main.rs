@@ -422,6 +422,26 @@ impl Running {
                 Ok(())
             }
             Action::SetBuffer(n) => s.set_buffer_size(n),
+            Action::LearnControl(action) => {
+                s.start_learn(action);
+                Ok(())
+            }
+            Action::CancelLearn => {
+                s.cancel_learn();
+                Ok(())
+            }
+            Action::RemoveMapping(i) => {
+                s.remove_mapping(i);
+                Ok(())
+            }
+            Action::SetTakeover(i, t) => {
+                s.set_mapping_takeover(i, t);
+                Ok(())
+            }
+            Action::AddMapping(m) => {
+                s.add_mapping(m);
+                Ok(())
+            }
             Action::SetMidiDevice(name, role, on) => {
                 s.set_midi_device(&name, role, on);
                 Ok(())
@@ -672,10 +692,12 @@ impl Running {
                 let (rss_mb, threads) = own_memory();
                 s.say(format!(
                     "state: rig '{}'{}, xruns {xruns}, DSP {dsp:.1}%, held keys {held}, \
-                     RSS {rss_mb} MB, threads {threads}, midi {midi}, targets {:?}, dock shows {:?}, \
+                     RSS {rss_mb} MB, threads {threads}, midi {midi}, master {:.2}, vol1 {:.2}, targets {:?}, dock shows {:?}, \
                      popup {}, slots {}",
                     s.rig.name,
                     if s.dirty { " (modified)" } else { "" },
+                    s.rig.master_volume,
+                    s.rig.slots[0].volume,
                     s.targets.iter().map(|i| i + 1).collect::<Vec<_>>(),
                     s.editors.shown().map(|i| i + 1),
                     self.ui.popup_open,
@@ -906,6 +928,7 @@ fn parse_script() -> Vec<(Duration, Action)> {
                     Some(t) => Action::ShowSettingsTab(match t {
                         "audio" => settings_ui::SettingsTab::Audio,
                         "midi" => settings_ui::SettingsTab::Midi,
+                        "controls" => settings_ui::SettingsTab::Controls,
                         "windows" => settings_ui::SettingsTab::Windows,
                         "perf" => settings_ui::SettingsTab::Performance,
                         _ => settings_ui::SettingsTab::Plugins,
@@ -935,6 +958,37 @@ fn parse_script() -> Vec<(Duration, Action)> {
                 "fx" => Action::FxPreset(slot(words.next())?, words.next()?.to_string()),
                 "install" => Action::InstallWindows(words.collect::<Vec<_>>().join(" ")),
                 "sync" => Action::SyncWindows,
+                // map <cc N | note N | program> <action> [pickup]: any device, any channel
+                "map" => {
+                    use merlin_model::{Mapping, Source, SourceKind, Takeover};
+                    let kind = match words.next()? {
+                        "cc" => SourceKind::Cc {
+                            number: words.next()?.parse().ok()?,
+                        },
+                        "note" => SourceKind::Note {
+                            key: words.next()?.parse().ok()?,
+                        },
+                        "program" => SourceKind::Program,
+                        _ => return None,
+                    };
+                    let action = parse_control_action(&mut words)?;
+                    let takeover = if words.next() == Some("pickup") {
+                        Takeover::Pickup
+                    } else {
+                        Takeover::Jump
+                    };
+                    Action::AddMapping(Mapping {
+                        source: Source {
+                            device: None,
+                            channel: None,
+                            kind,
+                        },
+                        action,
+                        takeover,
+                    })
+                }
+                // learn <action>: the next control the user (or the test controller) sends
+                "learn" => Action::LearnControl(parse_control_action(&mut words)?),
                 // midi <keyboard|controller|off> <device name>
                 "midi" => {
                     let role = words.next()?;
@@ -967,6 +1021,37 @@ fn parse_script() -> Vec<(Duration, Action)> {
             Some((at, action))
         })
         .collect()
+}
+
+/// `select 2`, `layer 3`, `mute 1`, `volume 1`, `byvalue 1`, `master`, `next`, `prev`, `panic`
+/// (slots counted from 1), for the script's `map` and `learn`.
+fn parse_control_action(
+    words: &mut std::str::SplitWhitespace<'_>,
+) -> Option<merlin_model::ControlAction> {
+    use merlin_model::ControlAction as A;
+    let num = |w: Option<&str>| w?.parse::<u8>().ok()?.checked_sub(1);
+    Some(match words.next()? {
+        "select" => A::SelectSlot {
+            slot: num(words.next())?,
+        },
+        "layer" => A::ToggleLayer {
+            slot: num(words.next())?,
+        },
+        "mute" => A::ToggleMute {
+            slot: num(words.next())?,
+        },
+        "volume" => A::SlotVolume {
+            slot: num(words.next())?,
+        },
+        "byvalue" => A::SelectByValue {
+            base: num(words.next())?,
+        },
+        "master" => A::MasterVolume,
+        "next" => A::NextSlot,
+        "prev" => A::PrevSlot,
+        "panic" => A::Panic,
+        _ => return None,
+    })
 }
 
 fn main() -> Result<()> {

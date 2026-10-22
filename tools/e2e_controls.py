@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""End-to-end check of MIDI mappings with a pretend controller (no hardware, needs JACK/PipeWire).
+
+    just e2e-controls
+
+Starts the app with three SoundFont slots and mappings for a foot switch (next, previous), a
+button (select slot 2), Program Change (slot by number), a fader with pick-up and the master
+volume, and a "Fake Controller" that presses them in turn. The app reports its state every
+second; the sequence of selected slots and volumes must be what the mappings say.
+"""
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+APP = ROOT / "target/release/merlin"
+CONTROLLER = ROOT / "target/release/examples/fake_controller"
+
+SCRIPT = "; ".join(
+    [
+        "1:load 1 TimGM6mb", "1.2:load 2 TimGM6mb", "1.4:load 3 TimGM6mb",
+        "4:map cc 20 select 2", "4.1:map cc 21 next", "4.2:map cc 22 prev",
+        "4.3:map program byvalue 1", "4.4:map cc 7 volume 1 pickup", "4.5:map cc 9 master",
+        "5:select 1",
+    ]
+    + [f"{t}:report" for t in (7.5, 8.5, 9.5, 10.5, 11.5, 12.5, 13.5, 14.5, 15.5, 16.5, 17.5)]
+    + ["18:quit"]
+)
+# What the controller sends, one thing per second (data bytes in decimal).
+CONTROLS = (
+    "1:B0 20 127; 2:B0 20 0; 3:B0 21 127; 4:B0 22 127; 5:C0 0; 6:C0 2; "
+    "7:B0 7 10; 8:B0 7 64; 9:B0 7 127; 10:B0 7 64; 11:B0 9 64"
+)
+
+
+def main():
+    for p in (APP, CONTROLLER):
+        if not p.exists():
+            sys.exit(f"missing {p}: cargo build --release -p merlin -p merlin-audio-io --examples")
+    work = Path(tempfile.mkdtemp(prefix="irig-e2e-"))
+    env = dict(os.environ, MERLIN_SCRIPT=SCRIPT)
+    for var, d in (("XDG_DATA_HOME", "data"), ("XDG_STATE_HOME", "state"), ("XDG_CACHE_HOME", "cache"), ("XDG_CONFIG_HOME", "config")):
+        env[var] = str(work / d)
+    app = subprocess.Popen([str(APP), "--fresh"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+    time.sleep(6)
+    ctl = subprocess.Popen([str(CONTROLLER), "Fake Controller", CONTROLS, "13"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        out, _ = app.communicate(timeout=60)
+    except subprocess.TimeoutExpired:
+        app.kill()
+        out, _ = app.communicate()
+    ctl.terminate()
+    shutil.rmtree(work, ignore_errors=True)
+
+    states = re.findall(r"master ([\d.]+), vol1 ([\d.]+), targets \[([\d, ]*)\]", out)
+    seq = [(float(m), float(v), t.strip()) for m, v, t in states]
+    # The slot that plays, after each control (the reports run a second apart, the controller's
+    # messages too, so the sequence has them in order, with repeats while nothing happens).
+    slots = []
+    for _, _, t in seq:
+        if not slots or slots[-1] != t:
+            slots.append(t)
+    wanted = ["2", "3", "2", "1", "3"]
+    problems = []
+    if slots != wanted:
+        problems.append(f"selected slots {slots}, wanted {wanted}")
+    vols = [v for _, v, _ in seq]
+    masters = [m for m, _, _ in seq]
+    # The fader sits at 1.0; it is ignored until it passes that, then follows (64/127 = 0.50).
+    if not (vols[0] == 1.0 and abs(vols[-1] - 64 / 127) < 0.01 and all(v == 1.0 or abs(v - 64 / 127) < 0.01 for v in vols)):
+        problems.append(f"fader (pick-up) volumes {vols}")
+    if not (masters[0] == 1.0 and abs(masters[-1] - 64 / 127) < 0.01):
+        problems.append(f"master {masters}")
+    if problems:
+        print("FAIL\n  " + "\n  ".join(problems))
+        print(out[-3000:])
+        sys.exit(1)
+    print(f"ok: slots {slots}, fader {sorted(set(vols))}, master {sorted(set(masters))}")
+
+
+if __name__ == "__main__":
+    main()

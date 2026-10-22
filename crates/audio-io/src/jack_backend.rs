@@ -25,6 +25,7 @@ pub const HARDWARE_INPUTS: usize = MAX_INPUTS - 1;
 
 const MAX_MIDI_PER_CYCLE: usize = 512;
 const VIRTUAL_QUEUE: usize = 256;
+const CONTROL_QUEUE: usize = 512;
 
 /// Makes the `jack` crate load PipeWire's libjack instead of jackd2's (S1 finding): `dlopen`
 /// PipeWire's copy by absolute path first, so the soname lookup finds it. A no-op where
@@ -122,6 +123,62 @@ pub fn friendly_name(port: &str) -> String {
     }
 }
 
+/// A control message the audio thread hands to the main thread: from a controller device, or
+/// from a keyboard when something is mapped to it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ControlEvent {
+    /// Engine input (1 and up), which says which device sent it.
+    pub input: u8,
+    /// Status byte and two data bytes.
+    pub data: [u8; 3],
+}
+
+/// What the main thread wants to hear about from keyboards. Messages that are mapped to
+/// something never reach the instruments.
+#[derive(Default)]
+pub struct InputInterest {
+    cc: [AtomicU64; 2],
+    notes: [AtomicU64; 2],
+    program: AtomicBool,
+}
+
+impl InputInterest {
+    fn bit(words: &[AtomicU64; 2], n: u8) -> bool {
+        words[(n >> 6) as usize & 1].load(Ordering::Relaxed) & (1 << (n & 63)) != 0
+    }
+
+    fn set(words: &[AtomicU64; 2], n: u8) {
+        words[(n >> 6) as usize & 1].fetch_or(1 << (n & 63), Ordering::Relaxed);
+    }
+
+    pub fn clear(&self) {
+        for w in self.cc.iter().chain(&self.notes) {
+            w.store(0, Ordering::Relaxed);
+        }
+        self.program.store(false, Ordering::Relaxed);
+    }
+
+    pub fn add_cc(&self, n: u8) {
+        Self::set(&self.cc, n);
+    }
+
+    pub fn add_note(&self, n: u8) {
+        Self::set(&self.notes, n);
+    }
+
+    pub fn add_program(&self) {
+        self.program.store(true, Ordering::Relaxed);
+    }
+}
+
+/// [`InputInterest`] for every hardware input, plus "learning": while the user teaches a
+/// mapping, every control message is reported.
+#[derive(Default)]
+pub struct Interest {
+    pub inputs: [InputInterest; HARDWARE_INPUTS],
+    pub learning: AtomicBool,
+}
+
 /// Counters the callback publishes.
 #[derive(Default)]
 pub struct Stats {
@@ -193,6 +250,8 @@ impl JackClient {
 
         let (virtual_midi, virtual_rx) = rtrb::RingBuffer::new(VIRTUAL_QUEUE);
         let roles: Arc<[AtomicU8; HARDWARE_INPUTS]> = Arc::default();
+        let interest: Arc<Interest> = Arc::default();
+        let (control_tx, control_rx) = rtrb::RingBuffer::new(CONTROL_QUEUE);
         let stats = Arc::new(Stats::default());
         let callback = Callback {
             engine,
@@ -201,6 +260,8 @@ impl JackClient {
             out_r,
             virtual_rx,
             roles: roles.clone(),
+            interest: interest.clone(),
+            control_tx,
             events: Vec::with_capacity(MAX_MIDI_PER_CYCLE),
             stats: stats.clone(),
             ftz_set: false,
@@ -212,6 +273,8 @@ impl JackClient {
             virtual_midi,
             midi_names,
             roles,
+            interest,
+            control_rx: Some(control_rx),
             out_names,
             sample_rate: self.sample_rate,
         })
@@ -226,6 +289,8 @@ struct Callback {
     virtual_rx: rtrb::Consumer<MidiEvent>,
     /// [`InputRole`] bits per hardware input, set from the main thread.
     roles: Arc<[AtomicU8; HARDWARE_INPUTS]>,
+    interest: Arc<Interest>,
+    control_tx: rtrb::Producer<ControlEvent>,
     events: Vec<MidiEvent>,
     stats: Arc<Stats>,
     ftz_set: bool,
@@ -274,11 +339,37 @@ impl jack::ProcessHandler for Callback {
                     continue;
                 }
                 self.stats.midi_activity[i + 1].fetch_add(1, Ordering::Relaxed);
-                if controller {
-                    continue;
-                }
                 let mut data = [0u8; 3];
                 data[..raw.bytes.len()].copy_from_slice(raw.bytes);
+                // Notes, control changes and program changes can be mapped to actions: those
+                // are reported to the main thread, and a mapped one does not play anything.
+                let wanted = &self.interest.inputs[i];
+                let learning = self.interest.learning.load(Ordering::Relaxed);
+                let (reported, consumed) = match data[0] & 0xF0 {
+                    0x80 | 0x90 => {
+                        let mapped = InputInterest::bit(&wanted.notes, data[1]);
+                        (controller || mapped || learning, controller || mapped)
+                    }
+                    0xB0 => {
+                        let mapped = InputInterest::bit(&wanted.cc, data[1]);
+                        (controller || mapped || learning, controller || mapped)
+                    }
+                    0xC0 => {
+                        let mapped = wanted.program.load(Ordering::Relaxed);
+                        (controller || mapped || learning, controller || mapped)
+                    }
+                    // Pitch bend, aftertouch: a controller's are of no use to an instrument.
+                    _ => (false, controller),
+                };
+                if reported {
+                    let _ = self.control_tx.push(ControlEvent {
+                        input: i as u8 + 1,
+                        data,
+                    });
+                }
+                if consumed {
+                    continue;
+                }
                 push_sorted(
                     &mut self.events,
                     &self.stats,
@@ -312,6 +403,9 @@ pub struct JackBackend {
     /// JACK port names of our MIDI inputs, index = engine input - 1.
     pub midi_names: Vec<String>,
     roles: Arc<[AtomicU8; HARDWARE_INPUTS]>,
+    /// What keyboards should report; the main thread fills it from the mappings.
+    pub interest: Arc<Interest>,
+    control_rx: Option<rtrb::Consumer<ControlEvent>>,
     pub out_names: [String; 2],
     pub sample_rate: u32,
 }
@@ -343,6 +437,11 @@ impl JackBackend {
     /// DSP load reported by the server, percent.
     pub fn cpu_load(&self) -> f32 {
         self.client.as_client().cpu_load()
+    }
+
+    /// The queue of control messages. Taken once, by whoever forwards them to the main thread.
+    pub fn take_control(&mut self) -> Option<rtrb::Consumer<ControlEvent>> {
+        self.control_rx.take()
     }
 
     /// True once after ports appeared or disappeared since the last call: time to look for new

@@ -42,6 +42,11 @@ compat *filters:
         python3 tools/compat.py {{filters}} -- \
         --plugin-dir {{assets}}/dl/surge-linux --plugin-dir {{assets}}/sf
 
+# Checks MIDI mappings end to end with a pretend controller (needs JACK/PipeWire running).
+e2e-controls:
+    cargo build --release -p merlin -p merlin-audio-io --examples
+    python3 tools/e2e_controls.py
+
 # A pretend MIDI keyboard (a JACK MIDI source, like a USB keyboard through PipeWire) for trying the
 # MIDI settings without hardware. It plays a scale and unplugs itself after SECONDS.
 fake-keyboard name="Fake Keyboard" seconds="60":

@@ -12,9 +12,11 @@ pub const MAX_SLOTS: usize = 16;
 pub const RIG_VERSION: u32 = 1;
 
 mod fx;
+mod mapping;
 mod migrate;
 
 pub use fx::{CompSettings, DelaySettings, EqSettings, FxSettings, ReverbSettings};
+pub use mapping::{ControlAction, Mapping, Source, SourceKind, Takeover};
 pub use migrate::{Migration, migrate};
 
 mod base64_opt {
@@ -169,6 +171,8 @@ pub struct Rig {
     /// Does a slot that gains focus inherit a pedal that is already down? (plan §4.4)
     pub inherit_pedal: bool,
     pub master_volume: f32,
+    /// What MIDI controls do in this rig.
+    pub mappings: Vec<Mapping>,
 }
 
 impl Default for Rig {
@@ -180,6 +184,7 @@ impl Default for Rig {
             selected: Vec::new(),
             inherit_pedal: false,
             master_volume: 1.0,
+            mappings: Vec::new(),
         }
     }
 }
@@ -190,6 +195,7 @@ pub enum RigError {
     BadSelection(usize),
     BadFilter(usize),
     TooManyInserts(usize),
+    BadMapping(usize),
     NewerVersion(u32),
     /// No migration path from this format version.
     Unmigratable(u32),
@@ -206,6 +212,7 @@ impl std::fmt::Display for RigError {
             Self::TooManyInserts(i) => {
                 write!(f, "slot {} has more than {MAX_INSERTS} inserts", i + 1)
             }
+            Self::BadMapping(i) => write!(f, "mapping {} is not valid", i + 1),
             Self::NewerVersion(v) => write!(f, "rig format {v} is newer than this app understands"),
             Self::Unmigratable(v) => write!(f, "cannot upgrade rig format {v}"),
             Self::Parse(e) => write!(f, "not a valid rig file: {e}"),
@@ -223,6 +230,9 @@ impl Rig {
         }
         if self.slots.len() > MAX_SLOTS {
             return Err(RigError::TooManySlots(self.slots.len()));
+        }
+        if let Some(i) = self.mappings.iter().position(|m| !m.is_valid()) {
+            return Err(RigError::BadMapping(i));
         }
         if let Some(&i) = self.selected.iter().find(|&&i| i >= self.slots.len()) {
             return Err(RigError::BadSelection(i));

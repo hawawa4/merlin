@@ -466,12 +466,12 @@ libjack preload (S1), `build-wine.sh` and the patch set (S4).
 
 ### Phase 3: control and snapshots (4–6 weeks)
 
-- MIDI learn.
+- MIDI learn ✅ (Settings → Controls: pick an action, press Learn, move a control; the mapping is saved in the rig).
 - Controller profiles (device → logical controls).
 - Mappings as source → glue → target:
   - Glue: absolute/relative with auto-detected encoding, toggle/trigger, range/curve, takeover modes (Jump, Pickup, Pickup-tolerant, Scale).
   - Scopes: global → rig → slot.
-- **Switch instruments by CC, Program Change or note**, with next/prev on a foot switch.
+- **Switch instruments by CC, Program Change or note**, with next/prev on a foot switch ✅ (select, layer, mute, next, previous, slot-by-number, slot volume and master volume faders with jump or pick-up, panic; mapped controls no longer play an instrument; tested end to end with a pretend controller, `just e2e-controls`). Still to do in this group: toggle/range/curve glue, relative encoders, takeover scale modes, global and per-slot scopes.
 - 8 macros per slot.
 - **Snapshots:** active slots, zones, volumes, FX on/off, macros, SoundFont presets. Recalled by Program Change or a button.
 - **Perform view** and lock mode.

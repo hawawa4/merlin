@@ -910,6 +910,7 @@ dependencies = [
  "egui-wgpu",
  "egui-winit",
  "merlin-audio-io",
+ "merlin-control",
  "merlin-embed",
  "merlin-engine",
  "merlin-hosting",
@@ -918,6 +919,7 @@ dependencies = [
  "merlin-wine",
  "libc",
  "pollster",
+ "rtrb",
  "serde",
  "serde_json",
  "toml",
@@ -937,6 +939,13 @@ dependencies = [
  "jack",
  "libc",
  "rtrb",
+]
+
+[[package]]
+name = "merlin-control"
+version = "0.0.0"
+dependencies = [
+ "merlin-model",
 ]
 
 [[package]]

@@ -30,6 +30,7 @@ merlin-audio-io = { path = "crates/audio-io" }
 merlin-embed = { path = "crates/embed" }
 merlin-scanner = { path = "crates/scanner" }
 merlin-wine = { path = "crates/wine" }
+merlin-control = { path = "crates/control" }
 
 [profile.release]
 debug = 1

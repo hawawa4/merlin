@@ -19,6 +19,8 @@ use merlin_model::{
 use merlin_scanner::{Cache, Entry, Found, Quarantine};
 use std::sync::mpsc;
 
+mod controls;
+
 use crate::scan_worker::{self, ScanMsg};
 use winit::event_loop::EventLoopProxy;
 
@@ -39,6 +41,8 @@ pub enum UserEvent {
     Font,
     /// The Windows plugin installer or sync has news.
     Windows,
+    /// A control message arrived from a MIDI device.
+    Control,
 }
 
 /// Progress of the Windows plugin job (installer, sync) running on a worker thread.
@@ -179,6 +183,12 @@ pub struct Session {
     cli_dirs: Vec<PathBuf>,
     pub settings: Settings,
     scan_rx: Option<mpsc::Receiver<ScanMsg>>,
+    mapper: merlin_control::Mapper,
+    control_rx: mpsc::Receiver<merlin_audio_io::ControlEvent>,
+    control_stop: Arc<std::sync::atomic::AtomicBool>,
+    /// The action a control is being learned for, while the user is teaching one.
+    learn: Option<merlin_model::ControlAction>,
+    last_control: Option<String>,
     /// MIDI activity: the message count last seen per input, and until when its light stays on.
     midi_seen: [u32; merlin_engine::MAX_INPUTS],
     midi_lit: [Option<Instant>; merlin_engine::MAX_INPUTS],
@@ -231,7 +241,12 @@ impl Session {
         let client = JackClient::open("merlin", Some(settings.frames))?;
         let sample_rate = client.sample_rate;
         let (engine, handle) = merlin_engine::new(sample_rate as f32, MAX_BLOCK);
-        let backend = client.start(engine)?;
+        let mut backend = client.start(engine)?;
+        let (control_tx, control_rx) = mpsc::channel();
+        let control_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        if let Some(queue) = backend.take_control() {
+            controls::spawn_pump(queue, control_tx, proxy.clone(), control_stop.clone());
+        }
         let outputs = backend.connect_outputs();
         let midi_sources = backend.connect_midi_sources(&midi_policy(&settings.midi_devices));
         let (font_tx, font_rx) = mpsc::channel();
@@ -255,6 +270,11 @@ impl Session {
             cli_dirs,
             settings: settings.clone(),
             scan_rx: None,
+            mapper: Default::default(),
+            control_rx,
+            control_stop,
+            learn: None,
+            last_control: None,
             midi_seen: Default::default(),
             midi_lit: Default::default(),
             slot_cpu: [SlotCpu::default(); UI_SLOTS],
@@ -680,6 +700,7 @@ impl Session {
         if let Some(b) = self.backend.as_ref() {
             self.midi_sources = b.connect_midi_sources(&policy);
         }
+        self.refresh_interest();
     }
 
     /// Every MIDI device the system offers, connected or not, for the settings list.
@@ -1351,6 +1372,10 @@ impl Session {
                 self.poll_windows();
                 return;
             }
+            UserEvent::Control => {
+                self.poll_control();
+                return;
+            }
         };
         match e {
             HostEvent::MainThreadCallback => {
@@ -1492,6 +1517,7 @@ impl Session {
     pub fn new_rig(&mut self) {
         self.clear();
         self.rig = new_rig("Untitled");
+        self.sync_mappings();
         let _ = self.engine.send(Command::SetMasterVolume(1.0));
         self.rig_path = None;
         self.dirty = false;
@@ -1533,6 +1559,7 @@ impl Session {
             slot.inserts.resize(MAX_INSERTS, None);
         }
         self.rig = rig;
+        self.sync_mappings();
         let _ = self
             .engine
             .send(Command::SetMasterVolume(self.rig.master_volume));
@@ -1821,6 +1848,8 @@ impl Session {
 
     /// Orderly shutdown: autosave, editors, engine, plugins.
     pub fn shutdown(&mut self) {
+        self.control_stop
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         self.guard.disarm();
         self.autosave(Duration::ZERO, true);
         self.editors

@@ -14,8 +14,76 @@ pub enum SettingsTab {
     Plugins,
     Audio,
     Midi,
+    Controls,
     Windows,
     Performance,
+}
+
+/// The kinds of action a mapping can have, for the picker.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ActionKind {
+    #[default]
+    SelectSlot,
+    ToggleLayer,
+    ToggleMute,
+    NextSlot,
+    PrevSlot,
+    SelectByValue,
+    SlotVolume,
+    MasterVolume,
+    Panic,
+}
+
+impl ActionKind {
+    const ALL: [ActionKind; 9] = [
+        Self::SelectSlot,
+        Self::ToggleLayer,
+        Self::ToggleMute,
+        Self::NextSlot,
+        Self::PrevSlot,
+        Self::SelectByValue,
+        Self::SlotVolume,
+        Self::MasterVolume,
+        Self::Panic,
+    ];
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::SelectSlot => "Select a slot",
+            Self::ToggleLayer => "Layer a slot on or off",
+            Self::ToggleMute => "Mute a slot on or off",
+            Self::NextSlot => "Next slot (foot switch)",
+            Self::PrevSlot => "Previous slot (foot switch)",
+            Self::SelectByValue => "Select the slot given by the number sent",
+            Self::SlotVolume => "Volume of a slot (fader or knob)",
+            Self::MasterVolume => "Master volume (fader or knob)",
+            Self::Panic => "Panic (all notes off)",
+        }
+    }
+
+    fn needs_slot(self) -> bool {
+        matches!(
+            self,
+            Self::SelectSlot | Self::ToggleLayer | Self::ToggleMute | Self::SlotVolume
+        )
+    }
+
+    /// The action with the numbers the user picked (slots from 1 on screen, 0-based inside).
+    fn build(self, slot: usize, base: usize) -> merlin_model::ControlAction {
+        use merlin_model::ControlAction as A;
+        let (slot, base) = (slot.min(255) as u8, base.min(255) as u8);
+        match self {
+            Self::SelectSlot => A::SelectSlot { slot },
+            Self::ToggleLayer => A::ToggleLayer { slot },
+            Self::ToggleMute => A::ToggleMute { slot },
+            Self::NextSlot => A::NextSlot,
+            Self::PrevSlot => A::PrevSlot,
+            Self::SelectByValue => A::SelectByValue { base },
+            Self::SlotVolume => A::SlotVolume { slot },
+            Self::MasterVolume => A::MasterVolume,
+            Self::Panic => A::Panic,
+        }
+    }
 }
 
 fn status_color(s: Status) -> Color32 {
@@ -35,6 +103,7 @@ pub fn show(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<
             (SettingsTab::Plugins, "Plugins"),
             (SettingsTab::Audio, "Audio"),
             (SettingsTab::Midi, "MIDI devices"),
+            (SettingsTab::Controls, "Controls"),
             (SettingsTab::Windows, "Windows plugins"),
             (SettingsTab::Performance, "Performance check"),
         ] {
@@ -53,6 +122,7 @@ pub fn show(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<
             SettingsTab::Plugins => plugins(ui, s, st, actions),
             SettingsTab::Audio => audio(ui, s, actions),
             SettingsTab::Midi => midi(ui, s, actions),
+            SettingsTab::Controls => controls(ui, s, st, actions),
             SettingsTab::Windows => windows(ui, s, st, actions),
             SettingsTab::Performance => performance(ui, s, st),
         });
@@ -234,6 +304,109 @@ fn sound_folders(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut
             actions.push(Action::AddSoundDir(std::mem::take(&mut st.sound_dir_text)));
         }
     });
+}
+
+/// What the MIDI controls do: the list of mappings, and teaching a new one by moving a control.
+fn controls(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
+    use merlin_model::Takeover;
+    ui.strong("Controls");
+    ui.label(
+        RichText::new(
+            "Teach the app what your pedals, pads, knobs and faders do: pick an action, press Learn, then press or move the control. Mappings belong to the rig and are saved with it. A control that is mapped no longer plays an instrument.",
+        )
+        .small()
+        .weak(),
+    );
+    ui.add_space(6.0);
+
+    // Composing a new mapping.
+    ui.horizontal(|ui| {
+        egui::ComboBox::from_id_salt("new-mapping-kind")
+            .width(300.0)
+            .selected_text(st.new_kind.name())
+            .show_ui(ui, |ui| {
+                for k in ActionKind::ALL {
+                    ui.selectable_value(&mut st.new_kind, k, k.name());
+                }
+            });
+        if st.new_kind.needs_slot() {
+            ui.label("slot");
+            let mut shown = st.new_slot + 1;
+            ui.add(egui::DragValue::new(&mut shown).range(1..=crate::session::UI_SLOTS));
+            st.new_slot = shown - 1;
+        }
+        if st.new_kind == ActionKind::SelectByValue {
+            ui.label("first slot");
+            let mut shown = st.new_base + 1;
+            ui.add(egui::DragValue::new(&mut shown).range(1..=crate::session::UI_SLOTS));
+            st.new_base = shown - 1;
+        }
+        match s.learning() {
+            Some(_) => {
+                ui.colored_label(
+                    status_color(Status::Warn),
+                    "Press or move a control on your device…",
+                );
+                if ui.button("Cancel").clicked() {
+                    actions.push(Action::CancelLearn);
+                }
+            }
+            None => {
+                if ui.button("Learn…").clicked() {
+                    actions.push(Action::LearnControl(
+                        st.new_kind.build(st.new_slot, st.new_base),
+                    ));
+                }
+            }
+        }
+    });
+    ui.add_space(2.0);
+    ui.label(
+        RichText::new(match s.last_control() {
+            Some(m) => format!("Last message received: {m}"),
+            None => "No control messages yet: press something on your device.".to_owned(),
+        })
+        .small()
+        .weak(),
+    );
+    ui.add_space(8.0);
+
+    // The list.
+    if s.mappings().is_empty() {
+        ui.label("No mappings yet.");
+    }
+    egui::Grid::new("mappings")
+        .num_columns(4)
+        .spacing([14.0, 6.0])
+        .show(ui, |ui| {
+            for (i, m) in s.mappings().iter().enumerate() {
+                ui.label(RichText::new(m.source.describe()).strong());
+                ui.label(format!("-> {}", m.action.describe()));
+                if m.action.is_continuous() {
+                    let mut t = m.takeover;
+                    egui::ComboBox::from_id_salt(("takeover", i))
+                        .selected_text(match t {
+                            Takeover::Jump => "Jump",
+                            Takeover::Pickup => "Pick up",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut t, Takeover::Jump, "Jump")
+                                .on_hover_text("The value jumps to wherever the knob is");
+                            ui.selectable_value(&mut t, Takeover::Pickup, "Pick up")
+                                .on_hover_text("The knob does nothing until it reaches the current value, so it never makes a jump");
+                        });
+                    if t != m.takeover {
+                        actions.push(Action::SetTakeover(i, t));
+                    }
+                } else {
+                    ui.label("");
+                }
+                if ui.small_button("remove").clicked() {
+                    actions.push(Action::RemoveMapping(i));
+                }
+                ui.end_row();
+            }
+        });
 }
 
 fn midi(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
