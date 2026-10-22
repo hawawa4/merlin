@@ -538,7 +538,7 @@ libjack preload (S1), `build-wine.sh` and the patch set (S4).
 - **SoundFonts:** GeneralUser GS, FluidR3, MuseScore_General (SF3).
 - Results feed the published Wine/yabridge compatibility matrix.
 
-**Soak tests:** hours of random switching, MIDI floods and editor switching; track xruns, stuck notes and memory growth.
+**Soak tests** (`just soak SECS SEED [--windows NAME]`, a seeded random script against the real app and plugins, reporting xruns, held keys, memory and threads): hours of random switching, MIDI floods and editor switching; track xruns, stuck notes and memory growth.
 
 **Hardware:** the dev machine plus one low-end x86 laptop, at least 2 USB audio interfaces and 2 MIDI keyboards.
 

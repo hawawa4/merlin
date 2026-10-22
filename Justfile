@@ -21,6 +21,20 @@ dev *args:
         target/release/merlin \
         --plugin-dir {{assets}}/dl/surge-linux --plugin-dir {{assets}}/bridges-vblank/clap {{args}}
 
+# Soak run: random switching, layering, notes and editor tabs for SECS seconds with Surge XT,
+# in throwaway state directories. Look at the `state:` lines (xruns, held keys, RSS, threads);
+# the last one must show 0 held keys. Seed varies the run; add `--windows "Six Sines"` for Wine.
+soak secs="180" seed="1" *args:
+    cargo build -p merlin --release
+    rm -rf /tmp/merlin-soak && mkdir -p /tmp/merlin-soak
+    XDG_STATE_HOME=/tmp/merlin-soak/state XDG_CACHE_HOME=/tmp/merlin-soak/cache \
+        XDG_CONFIG_HOME=/tmp/merlin-soak/config \
+        PATH="{{yabridge_dir}}:$PATH" WINELOADER={{patched_wine}} \
+        MERLIN_SCRIPT="$(python3 tools/soak.py {{secs}} {{seed}} {{args}})" \
+        target/release/merlin --fresh \
+        --plugin-dir {{assets}}/dl/surge-linux --plugin-dir {{assets}}/bridges-vblank/clap \
+        2>&1 | grep -E "state:|error|crash|quarantin|panick" || true
+
 # The S5 rack spike (the old `just dev`)
 s5-dev preload="Surge XT; Surge XT (Windows); Six Sines (Windows)": (s5 preload)
 

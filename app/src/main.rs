@@ -117,6 +117,19 @@ fn own_cpu_ticks() -> u64 {
     get(11) + get(12)
 }
 
+/// Resident memory in MB and the thread count, from `/proc/self/status` (soak runs watch these).
+fn own_memory() -> (u64, u64) {
+    let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+    let field = |name: &str| {
+        status
+            .lines()
+            .find_map(|l| l.strip_prefix(name))
+            .and_then(|v| v.split_whitespace().next()?.parse::<u64>().ok())
+            .unwrap_or(0)
+    };
+    (field("VmRSS:") / 1024, field("Threads:"))
+}
+
 fn ticks_per_second() -> f64 {
     // SAFETY: sysconf is always safe to call.
     unsafe { libc::sysconf(libc::_SC_CLK_TCK) as f64 }
@@ -566,8 +579,17 @@ impl Running {
                         )
                     })
                     .unwrap_or_default();
+                let held = s
+                    .engine
+                    .shared
+                    .held
+                    .iter()
+                    .filter(|h| h.load(std::sync::atomic::Ordering::Relaxed) != 0)
+                    .count();
+                let (rss_mb, threads) = own_memory();
                 s.say(format!(
-                    "state: rig '{}'{}, xruns {xruns}, DSP {dsp:.1}%, targets {:?}, dock shows {:?}, \
+                    "state: rig '{}'{}, xruns {xruns}, DSP {dsp:.1}%, held keys {held}, \
+                     RSS {rss_mb} MB, threads {threads}, targets {:?}, dock shows {:?}, \
                      popup {}, slots {}",
                     s.rig.name,
                     if s.dirty { " (modified)" } else { "" },
