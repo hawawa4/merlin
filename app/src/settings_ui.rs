@@ -87,6 +87,8 @@ fn plugins(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<A
             actions.push(Action::AddDir(std::mem::take(&mut st.dir_text)));
         }
     });
+    ui.add_space(12.0);
+    sound_folders(ui, s, st, actions);
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         ui.add_enabled_ui(!s.scanning(), |ui| {
@@ -189,6 +191,49 @@ fn audio(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
         b.stats.max_ns.load(Ordering::Relaxed) as f64 / 1000.0,
     ));
     ui.label(format!("Outputs: {}", b.out_names.join(", ")));
+}
+
+/// Where SoundFonts are looked for, with how many each folder holds.
+fn sound_folders(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
+    use merlin_model::Format;
+    let count = |dir: &std::path::Path| {
+        s.found
+            .iter()
+            .filter(|f| f.info.format == Format::SoundFont && f.path.starts_with(dir))
+            .count()
+    };
+    ui.strong("Sound folders (SoundFonts)");
+    ui.label(
+        RichText::new("Every .sf2 and .sf3 in these folders appears in the browser as an instrument. You can also drop a SoundFont file on the window.")
+            .small()
+            .weak(),
+    );
+    for d in merlin_scanner::default_sound_dirs() {
+        ui.label(
+            RichText::new(format!("{}  ({} found)", d.display(), count(&d)))
+                .small()
+                .weak(),
+        );
+    }
+    ui.add_space(4.0);
+    for (i, d) in s.settings.sound_dirs.iter().enumerate() {
+        ui.horizontal(|ui| {
+            ui.label(format!("{}  ({} found)", d.display(), count(d)));
+            if ui.small_button("remove").clicked() {
+                actions.push(Action::RemoveSoundDir(i));
+            }
+        });
+    }
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::TextEdit::singleline(&mut st.sound_dir_text)
+                .hint_text("/path/to/more/soundfonts")
+                .desired_width(360.0),
+        );
+        if ui.button("Add folder").clicked() && !st.sound_dir_text.trim().is_empty() {
+            actions.push(Action::AddSoundDir(std::mem::take(&mut st.sound_dir_text)));
+        }
+    });
 }
 
 fn midi(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {

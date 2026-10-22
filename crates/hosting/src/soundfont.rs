@@ -16,19 +16,19 @@ use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow, bail};
 use merlin_model::Format;
-use oxisynth::{MidiEvent as OxiEvent, Synth, SynthDescriptor};
+use oxisynth::{GeneratorType, MidiEvent as OxiEvent, Synth, SynthDescriptor};
 
 use crate::{
     Io, MidiEvent, MidiKind, ParamInfo, PluginEditor, PluginHandle, PluginInfo, PluginProcessor,
-    PresetInfo, ProcessStatus,
+    PresetInfo, ProcessStatus, SamplerTone,
 };
 
-/// Voices a slot can play at once.
-const POLYPHONY: u16 = 96;
 /// oxisynth is quiet at FluidSynth's default 0.2: this is "1.0" on our level control, matched by ear
 /// to Surge XT's default patch (6 dB over the first guess of 0.5; the master limiter catches peaks).
 const BASE_GAIN: f32 = 1.0;
-const STATE_MAGIC: &[u8; 4] = b"ISF1";
+/// State formats: v1 had the preset and the level, v2 adds the tone controls.
+const STATE_V1: &[u8; 4] = b"ISF1";
+const STATE_V2: &[u8; 4] = b"ISF2";
 
 /// True for a file this module plays.
 pub fn is_soundfont(path: &Path) -> bool {
@@ -164,6 +164,35 @@ struct Shared {
     preset: AtomicU32,
     /// `f32` bits.
     gain: AtomicU32,
+    /// The [`SamplerTone`] fields as `f32` bits (attack, release, cutoff, resonance, fine tune).
+    tone: [AtomicU32; 5],
+    polyphony: AtomicU32,
+}
+
+impl Shared {
+    fn tone(&self) -> SamplerTone {
+        let f = |i: usize| f32::from_bits(self.tone[i].load(Ordering::Relaxed));
+        SamplerTone {
+            attack: f(0),
+            release: f(1),
+            cutoff: f(2),
+            resonance: f(3),
+            fine_tune: f(4),
+            polyphony: self.polyphony.load(Ordering::Relaxed) as u16,
+        }
+    }
+
+    fn set_tone(&self, t: SamplerTone) {
+        let t = t.clamped();
+        for (slot, v) in
+            self.tone
+                .iter()
+                .zip([t.attack, t.release, t.cutoff, t.resonance, t.fine_tune])
+        {
+            slot.store(v.to_bits(), Ordering::Relaxed);
+        }
+        self.polyphony.store(t.polyphony as u32, Ordering::Relaxed);
+    }
 }
 
 fn pack(bank: u16, program: u8) -> u32 {
@@ -185,6 +214,8 @@ impl SoundFontPlugin {
             shared: Arc::new(Shared {
                 preset: AtomicU32::new(pack(bank, program)),
                 gain: AtomicU32::new(1.0f32.to_bits()),
+                tone: Default::default(),
+                polyphony: AtomicU32::new(SamplerTone::DEFAULT_POLYPHONY as u32),
             }),
             font,
         })
@@ -204,7 +235,8 @@ impl PluginHandle for SoundFontPlugin {
         let mut synth = Synth::new(SynthDescriptor {
             sample_rate: sample_rate as f32,
             gain: BASE_GAIN * f32::from_bits(self.shared.gain.load(Ordering::Relaxed)),
-            polyphony: POLYPHONY,
+            // Room for the most voices the tone control allows; the limit is set from the tone.
+            polyphony: SamplerTone::MAX_POLYPHONY,
             // The slot has its own reverb and chorus-free chain; these would only add CPU.
             reverb_active: false,
             chorus_active: false,
@@ -218,6 +250,7 @@ impl PluginHandle for SoundFontPlugin {
             shared: self.shared.clone(),
             applied: u32::MAX,
             applied_gain: f32::NAN,
+            applied_tone: None,
             channel: 0,
             pending_bank: None,
         };
@@ -234,26 +267,43 @@ impl PluginHandle for SoundFontPlugin {
 
     fn save_state(&mut self) -> Result<Vec<u8>> {
         let p = self.shared.preset.load(Ordering::Relaxed);
-        let mut v = STATE_MAGIC.to_vec();
+        let mut v = STATE_V2.to_vec();
         v.extend_from_slice(&((p >> 8) as u16).to_le_bytes());
         v.push(p as u8);
         v.extend_from_slice(&self.shared.gain.load(Ordering::Relaxed).to_le_bytes());
+        for t in &self.shared.tone {
+            v.extend_from_slice(&t.load(Ordering::Relaxed).to_le_bytes());
+        }
+        v.extend_from_slice(&(self.shared.polyphony.load(Ordering::Relaxed) as u16).to_le_bytes());
         Ok(v)
     }
 
     fn load_state(&mut self, data: &[u8]) -> Result<()> {
-        if data.len() != 11 || &data[..4] != STATE_MAGIC {
+        let v2 = data.len() == 33 && &data[..4] == STATE_V2;
+        let v1 = data.len() == 11 && &data[..4] == STATE_V1;
+        if !v1 && !v2 {
             bail!("not a SoundFont slot state");
         }
         let bank = u16::from_le_bytes([data[4], data[5]]);
         let program = data[6];
-        let gain = f32::from_le_bytes([data[7], data[8], data[9], data[10]]);
+        let f =
+            |at: usize| f32::from_le_bytes([data[at], data[at + 1], data[at + 2], data[at + 3]]);
         // A saved preset the file no longer has leaves the default in place.
         if self.font.has(bank, program) {
             self.set_preset(bank, program);
         }
-        if gain.is_finite() {
-            self.set_gain(gain);
+        if f(7).is_finite() {
+            self.set_gain(f(7));
+        }
+        if v2 {
+            self.set_tone(SamplerTone {
+                attack: f(11),
+                release: f(15),
+                cutoff: f(19),
+                resonance: f(23),
+                fine_tune: f(27),
+                polyphony: u16::from_le_bytes([data[31], data[32]]),
+            });
         }
         Ok(())
     }
@@ -285,6 +335,14 @@ impl PluginHandle for SoundFontPlugin {
             .store(gain.clamp(0.0, 2.0).to_bits(), Ordering::Relaxed);
     }
 
+    fn tone(&self) -> Option<SamplerTone> {
+        Some(self.shared.tone())
+    }
+
+    fn set_tone(&mut self, tone: SamplerTone) {
+        self.shared.set_tone(tone);
+    }
+
     fn editor(&mut self) -> Option<&mut dyn PluginEditor> {
         None
     }
@@ -303,6 +361,7 @@ struct Processor {
     /// The preset and gain the synth has now.
     applied: u32,
     applied_gain: f32,
+    applied_tone: Option<(SamplerTone, u8)>,
     /// Where notes go: channel 0, or 9 for a drum kit (bank 128), the one channel oxisynth plays
     /// drums on.
     channel: u8,
@@ -323,6 +382,10 @@ impl Processor {
             self.synth.set_gain(BASE_GAIN * gain);
         }
         let want = self.shared.preset.load(Ordering::Relaxed);
+        let tone = self.shared.tone().clamped();
+        if self.applied_tone != Some((tone, self.channel)) && want == self.applied {
+            self.apply_tone(tone);
+        }
         if want != self.applied {
             self.applied = want;
             let (bank, program) = ((want >> 8) as u16, want as u8);
@@ -344,7 +407,24 @@ impl Processor {
                 channel,
                 program_id: program,
             });
+            // The tone belongs to the slot, not to a preset: put it on the new channel too.
+            self.apply_tone(tone);
         }
+    }
+
+    /// Sets the generator offsets (what NRPN would) that shape every note on the channel.
+    fn apply_tone(&mut self, t: SamplerTone) {
+        let ch = self.channel as usize;
+        let mut set = |g: GeneratorType, v: f32| {
+            let _ = self.synth.set_gen(ch, g, v);
+        };
+        set(GeneratorType::VolEnvAttack, t.attack * 1200.0); // timecents
+        set(GeneratorType::VolEnvRelease, t.release * 1200.0);
+        set(GeneratorType::FilterFc, t.cutoff * 1200.0); // cents
+        set(GeneratorType::FilterQ, t.resonance * 10.0); // centibels
+        set(GeneratorType::FineTune, t.fine_tune); // cents
+        let _ = self.synth.set_polyphony(t.polyphony);
+        self.applied_tone = Some((t, self.channel));
     }
 
     fn event(&mut self, ev: &MidiEvent) {

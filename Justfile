@@ -14,9 +14,9 @@ default:
 
 # The app. Loads plugins from the standard CLAP folders plus test-assets (Linux and, through
 # our patched Wine, Windows ones). Try: just dev --fresh      just dev --rig my.irig
-# This round: drag files onto the window. A Windows installer (.exe/.msi) is installed into the app's
-# Windows environment, a .sf2/.sf3 loads into a free slot, a .irig opens as a rig; a banner shows
-# what the drop would do while you drag. (Settings -> Windows explains it.)
+# This round: SoundFont finishing touches. Select a SoundFont slot: "Shape the sound" has attack,
+# release, brightness, resonance, tuning and voices; drum kits (bank 128) play on their own channel;
+# Settings -> Plugins has a Sound folders section.
 dev *args:
     cargo build -p merlin --release
     PATH="{{yabridge_dir}}:$PATH" WINELOADER={{patched_wine}} \

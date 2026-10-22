@@ -267,7 +267,9 @@ impl Session {
     /// The folders to scan: the standard ones, the ones in the settings, and the command line's.
     fn rebuild_dirs(&mut self) {
         let mut dirs = merlin_scanner::default_plugin_dirs();
+        dirs.extend(merlin_scanner::default_sound_dirs());
         dirs.extend(self.settings.plugin_dirs.iter().cloned());
+        dirs.extend(self.settings.sound_dirs.iter().cloned());
         dirs.extend(self.cli_dirs.iter().cloned());
         // The bridges we make for the Windows plugins installed in our prefix.
         dirs.push(crate::paths::bridges_dir());
@@ -499,18 +501,39 @@ impl Session {
     pub fn add_plugin_dir(&mut self, dir: PathBuf) {
         if !dir.as_os_str().is_empty() && !self.settings.plugin_dirs.contains(&dir) {
             self.settings.plugin_dirs.push(dir);
-            self.save_settings();
-            self.rebuild_dirs();
-            self.start_scan(Vec::new());
+            self.dirs_changed(true);
         }
     }
 
     pub fn remove_plugin_dir(&mut self, index: usize) {
         if index < self.settings.plugin_dirs.len() {
             self.settings.plugin_dirs.remove(index);
-            self.save_settings();
-            self.rebuild_dirs();
-            // Entries from folders that are no longer scanned go away.
+            self.dirs_changed(false);
+        }
+    }
+
+    pub fn add_sound_dir(&mut self, dir: PathBuf) {
+        if !dir.as_os_str().is_empty() && !self.settings.sound_dirs.contains(&dir) {
+            self.settings.sound_dirs.push(dir);
+            self.dirs_changed(true);
+        }
+    }
+
+    pub fn remove_sound_dir(&mut self, index: usize) {
+        if index < self.settings.sound_dirs.len() {
+            self.settings.sound_dirs.remove(index);
+            self.dirs_changed(false);
+        }
+    }
+
+    /// The folder lists changed: save, and look again (new folder) or forget what was in the
+    /// folders that are no longer scanned.
+    fn dirs_changed(&mut self, added: bool) {
+        self.save_settings();
+        self.rebuild_dirs();
+        if added {
+            self.start_scan(Vec::new());
+        } else {
             let dirs = self.plugin_dirs.clone();
             self.entries
                 .retain(|e| dirs.iter().any(|d| e.path.starts_with(d)));
@@ -1033,6 +1056,17 @@ impl Session {
     pub fn set_preset(&mut self, i: usize, bank: u16, program: u8) {
         if let Some(l) = self.plugins[i].as_mut() {
             l.plugin.set_preset(bank, program);
+            self.dirty = true;
+        }
+    }
+
+    pub fn sampler_tone(&self, i: usize) -> Option<merlin_hosting::SamplerTone> {
+        self.plugins[i].as_ref()?.plugin.tone()
+    }
+
+    pub fn set_sampler_tone(&mut self, i: usize, tone: merlin_hosting::SamplerTone) {
+        if let Some(l) = self.plugins[i].as_mut() {
+            l.plugin.set_tone(tone);
             self.dirty = true;
         }
     }

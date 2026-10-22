@@ -81,14 +81,12 @@ impl Cache {
     }
 }
 
-/// Where plugins and SoundFonts usually live.
+/// Where plugins usually live.
 pub fn default_plugin_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Some(home) = std::env::var_os("HOME") {
         dirs.push(Path::new(&home).join(".clap"));
         dirs.push(Path::new(&home).join(".vst3"));
-        dirs.push(Path::new(&home).join(".local/share/sounds/sf2"));
-        dirs.push(Path::new(&home).join(".local/share/soundfonts"));
     }
     dirs.extend(
         [
@@ -98,11 +96,24 @@ pub fn default_plugin_dirs() -> Vec<PathBuf> {
             "/usr/lib/vst3",
             "/usr/lib64/vst3",
             "/usr/local/lib/vst3",
-            "/usr/share/sounds/sf2",
-            "/usr/share/soundfonts",
         ]
         .into_iter()
         .map(PathBuf::from),
+    );
+    dirs
+}
+
+/// Where SoundFonts usually live.
+pub fn default_sound_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(home) = std::env::var_os("HOME") {
+        dirs.push(Path::new(&home).join(".local/share/sounds/sf2"));
+        dirs.push(Path::new(&home).join(".local/share/soundfonts"));
+    }
+    dirs.extend(
+        ["/usr/share/sounds/sf2", "/usr/share/soundfonts"]
+            .into_iter()
+            .map(PathBuf::from),
     );
     dirs
 }

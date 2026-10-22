@@ -12,7 +12,8 @@ pub mod vst3;
 
 pub use midi::{MidiEvent, MidiKind};
 pub use plugin::{
-    EditorSize, HostEvent, ParamInfo, PluginEditor, PluginHandle, PluginInfo, PresetInfo, Waker,
+    EditorSize, HostEvent, ParamInfo, PluginEditor, PluginHandle, PluginInfo, PresetInfo,
+    SamplerTone, Waker,
 };
 
 /// What a processor tells the engine after a block.

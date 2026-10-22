@@ -376,6 +376,10 @@ impl Running {
                 s.set_preset(i, bank, program);
                 Ok(())
             }
+            Action::SamplerTone(i, tone) => {
+                s.set_sampler_tone(i, tone);
+                Ok(())
+            }
             Action::SamplerGain(i, g) => {
                 s.set_sampler_gain(i, g);
                 Ok(())
@@ -395,6 +399,14 @@ impl Running {
             }
             Action::RemoveDir(i) => {
                 s.remove_plugin_dir(i);
+                Ok(())
+            }
+            Action::AddSoundDir(text) => {
+                s.add_sound_dir(PathBuf::from(text.trim()));
+                Ok(())
+            }
+            Action::RemoveSoundDir(i) => {
+                s.remove_sound_dir(i);
                 Ok(())
             }
             Action::Rescan(all) => {

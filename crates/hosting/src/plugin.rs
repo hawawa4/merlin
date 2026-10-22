@@ -48,6 +48,56 @@ pub struct PresetInfo {
     pub name: String,
 }
 
+/// How a sampler's sound is shaped on top of its preset, in musical units. All zeros (and the
+/// default polyphony) leaves the preset as the file made it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SamplerTone {
+    /// Volume envelope attack, in octaves of time (+1 = twice as slow, -1 = twice as fast). Piano
+    /// attacks are about a millisecond, so audible slowing takes many octaves (up to +8 = x256).
+    pub attack: f32,
+    /// Volume envelope release, in octaves of time.
+    pub release: f32,
+    /// Filter cutoff, in octaves (+1 = brighter).
+    pub cutoff: f32,
+    /// Filter resonance added, in dB (0..=24).
+    pub resonance: f32,
+    /// Tuning, in cents (-100..=100).
+    pub fine_tune: f32,
+    /// Notes that can sound at once.
+    pub polyphony: u16,
+}
+
+impl SamplerTone {
+    pub const MAX_POLYPHONY: u16 = 128;
+    pub const DEFAULT_POLYPHONY: u16 = 64;
+
+    /// Brings every value into its range.
+    pub fn clamped(self) -> Self {
+        let f = |v: f32, lo: f32, hi: f32| if v.is_finite() { v.clamp(lo, hi) } else { 0.0 };
+        Self {
+            attack: f(self.attack, -3.0, 8.0),
+            release: f(self.release, -3.0, 4.0),
+            cutoff: f(self.cutoff, -3.0, 3.0),
+            resonance: f(self.resonance, 0.0, 24.0),
+            fine_tune: f(self.fine_tune, -100.0, 100.0),
+            polyphony: self.polyphony.clamp(4, Self::MAX_POLYPHONY),
+        }
+    }
+}
+
+impl Default for SamplerTone {
+    fn default() -> Self {
+        Self {
+            attack: 0.0,
+            release: 0.0,
+            cutoff: 0.0,
+            resonance: 0.0,
+            fine_tune: 0.0,
+            polyphony: Self::DEFAULT_POLYPHONY,
+        }
+    }
+}
+
 /// Something a plugin asked of the main thread. The app turns these into its own wakeups.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HostEvent {
@@ -127,6 +177,11 @@ pub trait PluginHandle {
         None
     }
     fn set_gain(&mut self, _gain: f32) {}
+    /// The sound-shaping controls of a sampler.
+    fn tone(&self) -> Option<SamplerTone> {
+        None
+    }
+    fn set_tone(&mut self, _tone: SamplerTone) {}
 
     /// The plugin's GUI, if it has an embeddable one.
     fn editor(&mut self) -> Option<&mut dyn PluginEditor>;

@@ -8,7 +8,9 @@ use assert_no_alloc::{AllocDisabler, assert_no_alloc};
 use merlin_audio_io::{Item, OfflineRenderer};
 use merlin_engine::{Command, SelectMode};
 use merlin_hosting::soundfont::{Font, SoundFontPlugin, info_for, is_soundfont};
-use merlin_hosting::{Io, MidiEvent, PluginHandle, PluginProcessor, ProcessStatus};
+use merlin_hosting::{
+    Io, MidiEvent, PluginHandle, PluginProcessor, ProcessStatus, SamplerTone,
+};
 use merlin_model::Format;
 
 #[global_allocator]
@@ -273,4 +275,218 @@ fn text_files_named_sf2_are_refused_cleanly() {
         .to_string();
     assert!(err.contains("not a SoundFont"), "{err}");
     let _ = std::fs::remove_file(junk);
+}
+
+/// Renders a C major chord on the piano with `tone` and returns the audio.
+fn chord(path: &Path, tone: SamplerTone, blocks: usize) -> Vec<f32> {
+    let mut plugin = SoundFontPlugin::open(path).unwrap();
+    plugin.set_tone(tone);
+    let mut p = plugin.activate(SR, BLOCK as u32).unwrap();
+    let on = [60, 64, 67].map(|k| MidiEvent::note_on(0, 0, k, 100));
+    let mut out = block(&mut *p, &on).0;
+    for _ in 1..blocks {
+        out.extend(block(&mut *p, &[]).0);
+    }
+    out
+}
+
+fn rms(v: &[f32]) -> f32 {
+    (v.iter().map(|x| x * x).sum::<f32>() / v.len().max(1) as f32).sqrt()
+}
+
+/// Brightness: how much of the energy is in fast changes (the rms of the sample-to-sample
+/// difference relative to the rms).
+fn brightness(v: &[f32]) -> f32 {
+    let d: Vec<f32> = v.windows(2).map(|w| w[1] - w[0]).collect();
+    rms(&d) / rms(v).max(1e-9)
+}
+
+#[test]
+fn the_tone_controls_change_the_sound() {
+    let Some(path) = sf2() else { return };
+    let plain = chord(&path, SamplerTone::default(), 200);
+    assert!(rms(&plain) > 0.005);
+
+    let dark = chord(
+        &path,
+        SamplerTone {
+            cutoff: -2.0,
+            ..Default::default()
+        },
+        200,
+    );
+    assert!(
+        brightness(&dark) < brightness(&plain) * 0.8,
+        "a lower cutoff is darker: {} vs {}",
+        brightness(&dark),
+        brightness(&plain)
+    );
+
+    // A slower attack: the first 20 ms are quieter.
+    let first = |v: &[f32]| rms(&v[..960]);
+    let slow = chord(
+        &path,
+        SamplerTone {
+            attack: 6.0,
+            ..Default::default()
+        },
+        200,
+    );
+    assert!(
+        first(&slow) < first(&plain) * 0.7,
+        "{} vs {}",
+        first(&slow),
+        first(&plain)
+    );
+
+    // A tuning offset moves the pitch: the waveform no longer lines up with the plain one.
+    let sharp = chord(
+        &path,
+        SamplerTone {
+            fine_tune: 100.0,
+            ..Default::default()
+        },
+        100,
+    );
+    assert_ne!(&sharp[..2000], &plain[..2000]);
+
+    // A longer release keeps the sound after note-off; a shorter one lets it go sooner.
+    let tail = |release: f32| {
+        let mut plugin = SoundFontPlugin::open(&path).unwrap();
+        plugin.set_tone(SamplerTone {
+            release,
+            ..Default::default()
+        });
+        let mut p = plugin.activate(SR, BLOCK as u32).unwrap();
+        block(&mut *p, &[MidiEvent::note_on(0, 0, 60, 100)]);
+        for _ in 0..100 {
+            block(&mut *p, &[]);
+        }
+        block(&mut *p, &[MidiEvent::note_off(0, 0, 60)]);
+        let mut v = Vec::new();
+        for _ in 0..40 {
+            v.extend(block(&mut *p, &[]).0);
+        }
+        rms(&v[v.len() / 2..])
+    };
+    assert!(
+        tail(-3.0) < tail(2.0),
+        "release changes the tail: {} vs {}",
+        tail(-3.0),
+        tail(2.0)
+    );
+}
+
+#[test]
+fn tone_values_are_kept_in_range_and_saved_in_the_state() {
+    let Some(path) = sf2() else { return };
+    let wild = SamplerTone {
+        attack: 99.0,
+        release: f32::NAN,
+        cutoff: -99.0,
+        resonance: 500.0,
+        fine_tune: 1e9,
+        polyphony: 0,
+    };
+    let c = wild.clamped();
+    assert_eq!(
+        (c.attack, c.release, c.cutoff, c.resonance),
+        (8.0, 0.0, -3.0, 24.0)
+    );
+    assert_eq!((c.fine_tune, c.polyphony), (100.0, 4));
+
+    let mut a = SoundFontPlugin::open(&path).unwrap();
+    let tone = SamplerTone {
+        attack: 1.0,
+        release: -1.0,
+        cutoff: 0.5,
+        resonance: 6.0,
+        fine_tune: -20.0,
+        polyphony: 32,
+    };
+    a.set_tone(tone);
+    let state = a.save_state().unwrap();
+    let mut b = SoundFontPlugin::open(&path).unwrap();
+    b.load_state(&state).unwrap();
+    assert_eq!(b.tone(), Some(tone));
+    // States from before the tone controls still load, with the default tone.
+    let mut old = b"ISF1".to_vec();
+    old.extend_from_slice(&[0, 0, 24]);
+    old.extend_from_slice(&1.0f32.to_le_bytes());
+    let mut c = SoundFontPlugin::open(&path).unwrap();
+    c.load_state(&old).unwrap();
+    assert_eq!(c.preset(), Some((0, 24)));
+    assert_eq!(c.tone(), Some(SamplerTone::default()));
+}
+
+#[test]
+fn changing_the_tone_while_playing_does_not_allocate() {
+    let Some(path) = sf2() else { return };
+    let mut plugin = SoundFontPlugin::open(&path).unwrap();
+    let mut p = plugin.activate(SR, BLOCK as u32).unwrap();
+    let (mut l, mut r) = (vec![0.0f32; BLOCK], vec![0.0f32; BLOCK]);
+    let mut run = |events: &[MidiEvent]| {
+        assert_no_alloc(|| {
+            p.process(
+                &mut Io {
+                    input: None,
+                    out_l: &mut l,
+                    out_r: &mut r,
+                },
+                events,
+            )
+        })
+    };
+    run(&[
+        MidiEvent::note_on(0, 0, 60, 100),
+        MidiEvent::note_on(0, 0, 64, 100),
+    ]);
+    for round in 0..60 {
+        let x = (round % 7) as f32 - 3.0;
+        plugin.set_tone(SamplerTone {
+            attack: x,
+            release: -x,
+            cutoff: x / 2.0,
+            resonance: (round % 24) as f32,
+            fine_tune: x * 10.0,
+            polyphony: 8 + (round % 100) as u16,
+        });
+        run(&[MidiEvent::note_on(5, 0, 40 + (round % 40) as u8, 90)]);
+        run(&[]);
+    }
+}
+
+#[test]
+fn drum_kits_play_on_their_own_channel() {
+    let Some(path) = sf2() else { return };
+    let mut plugin = SoundFontPlugin::open(&path).unwrap();
+    let Some(kit) = plugin
+        .presets()
+        .unwrap()
+        .iter()
+        .find(|p| p.bank == 128)
+        .cloned()
+    else {
+        return; // this font has no drum kit
+    };
+    plugin.set_preset(kit.bank, kit.program);
+    let mut p = plugin.activate(SR, BLOCK as u32).unwrap();
+    let mut out = block(&mut *p, &[MidiEvent::note_on(0, 0, 38, 110)]).0;
+    for _ in 0..30 {
+        out.extend(block(&mut *p, &[]).0);
+    }
+    assert!(
+        peak(&out) > 0.02,
+        "a snare from the drum kit {:?}: {}",
+        kit.name,
+        peak(&out)
+    );
+    // Back to a melodic preset: the notes follow it to channel 0.
+    plugin.set_preset(0, 0);
+    let mut v = block(&mut *p, &[]).0;
+    v.extend(block(&mut *p, &[MidiEvent::note_on(0, 0, 60, 100)]).0);
+    for _ in 0..30 {
+        v.extend(block(&mut *p, &[]).0);
+    }
+    assert!(peak(&v) > 0.02);
 }

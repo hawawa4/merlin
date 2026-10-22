@@ -14,6 +14,8 @@ pub const DEFAULT_RUNTIME_URL: &str =
 pub struct Settings {
     /// Extra folders to look for `.clap` plugins (the standard ones are always searched).
     pub plugin_dirs: Vec<PathBuf>,
+    /// Extra folders to look for SoundFonts (`.sf2`, `.sf3`); the standard ones are always searched.
+    pub sound_dirs: Vec<PathBuf>,
     /// Audio buffer size asked of PipeWire.
     pub frames: u32,
     /// Most plugin editors kept alive at once.
@@ -35,6 +37,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             plugin_dirs: Vec::new(),
+            sound_dirs: Vec::new(),
             frames: 128,
             editor_cache: 8,
             wine_loader: None,

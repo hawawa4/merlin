@@ -58,6 +58,7 @@ pub enum Action {
     /// Pick a SoundFont slot's preset (bank, program).
     SetPreset(usize, u16, u8),
     SamplerGain(usize, f32),
+    SamplerTone(usize, merlin_hosting::SamplerTone),
     Transpose(usize, i8),
     Fit,
     Scroll(u32, u32),
@@ -81,6 +82,8 @@ pub enum Action {
     ShowSettingsTab(SettingsTab),
     AddDir(String),
     RemoveDir(usize),
+    AddSoundDir(String),
+    RemoveSoundDir(usize),
     Rescan(bool),
     RetryFile(PathBuf),
     Unquarantine(PathBuf, String),
@@ -134,6 +137,7 @@ pub struct UiState {
     pub preset_query: String,
     pub favs_only: bool,
     pub dir_text: String,
+    pub sound_dir_text: String,
     pub wine_text: String,
     pub yab_text: String,
     pub installer_text: String,
@@ -166,6 +170,7 @@ impl UiState {
             preset_query: String::new(),
             favs_only: false,
             dir_text: String::new(),
+            sound_dir_text: String::new(),
             wine_text: String::new(),
             yab_text: String::new(),
             installer_text: String::new(),
@@ -234,6 +239,86 @@ pub fn draw(
     });
 }
 
+/// The sliders of a sampler's tone. Returns the new tone when one was touched.
+fn tone_controls(
+    ui: &mut egui::Ui,
+    tone: merlin_hosting::SamplerTone,
+) -> Option<merlin_hosting::SamplerTone> {
+    let mut t = tone;
+    let times = |v: f64| format!("x{:.2}", 2f64.powf(v));
+    egui::Grid::new("sampler-tone")
+        .num_columns(2)
+        .spacing([12.0, 4.0])
+        .show(ui, |ui| {
+            ui.label("Attack");
+            ui.add(
+                egui::Slider::new(&mut t.attack, -3.0..=8.0)
+                    .custom_formatter(|v, _| times(v))
+                    .custom_parser(|s| {
+                        s.trim_start_matches('x')
+                            .parse::<f64>()
+                            .ok()
+                            .map(|m| m.log2())
+                    }),
+            )
+            .on_hover_text(
+                "How slowly notes fade in, relative to the sound's own attack (x1 = as made)",
+            );
+            ui.end_row();
+            ui.label("Release");
+            ui.add(
+                egui::Slider::new(&mut t.release, -3.0..=4.0)
+                    .custom_formatter(|v, _| times(v))
+                    .custom_parser(|s| {
+                        s.trim_start_matches('x')
+                            .parse::<f64>()
+                            .ok()
+                            .map(|m| m.log2())
+                    }),
+            )
+            .on_hover_text("How long notes ring after the key comes up (x1 = as made)");
+            ui.end_row();
+            ui.label("Brightness");
+            ui.add(
+                egui::Slider::new(&mut t.cutoff, -3.0..=3.0)
+                    .suffix(" oct")
+                    .fixed_decimals(1),
+            )
+            .on_hover_text("Filter cutoff in octaves: lower is darker, higher is brighter");
+            ui.end_row();
+            ui.label("Resonance");
+            ui.add(
+                egui::Slider::new(&mut t.resonance, 0.0..=24.0)
+                    .suffix(" dB")
+                    .fixed_decimals(0),
+            )
+            .on_hover_text("Emphasis at the filter cutoff");
+            ui.end_row();
+            ui.label("Tuning");
+            ui.add(
+                egui::Slider::new(&mut t.fine_tune, -100.0..=100.0)
+                    .suffix(" cents")
+                    .fixed_decimals(0),
+            )
+            .on_hover_text(
+                "Fine tuning, 100 cents is a semitone (use the slot's tr for whole semitones)",
+            );
+            ui.end_row();
+            ui.label("Voices");
+            let mut voices = t.polyphony as u32;
+            ui.add(egui::Slider::new(&mut voices, 4..=128))
+                .on_hover_text(
+                    "How many notes can sound at once; the oldest are cut when it is exceeded",
+                );
+            t.polyphony = voices as u16;
+            ui.end_row();
+        });
+    if ui.small_button("Reset").clicked() {
+        t = merlin_hosting::SamplerTone::default();
+    }
+    (t != tone).then_some(t)
+}
+
 /// A SoundFont slot's panel: the preset list (bank and program), a search box, the level.
 fn sampler_panel(
     ui: &mut egui::Ui,
@@ -266,6 +351,17 @@ fn sampler_panel(
         ui.add_space(12.0);
         ui.colored_label(COLORS[i], format!("now: {now}"));
     });
+    if let Some(tone) = s.sampler_tone(i) {
+        egui::CollapsingHeader::new("Shape the sound")
+            .default_open(false)
+            .show(ui, |ui| {
+                if let Some(new) = tone_controls(ui, tone)
+                    && new != tone
+                {
+                    actions.push(Action::SamplerTone(i, new));
+                }
+            });
+    }
     ui.separator();
     let query = st.preset_query.trim().to_lowercase();
     egui::ScrollArea::vertical()
