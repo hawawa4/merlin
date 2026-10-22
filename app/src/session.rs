@@ -234,6 +234,7 @@ impl Session {
         dirs.extend(self.cli_dirs.iter().cloned());
         // The bridges we make for the Windows plugins installed in our prefix.
         dirs.push(crate::paths::bridges_dir());
+        dirs.push(crate::paths::bridges_vst3_dir());
         dirs.dedup();
         self.plugin_dirs = dirs;
     }
@@ -1489,17 +1490,47 @@ pub fn read_rig(path: &Path) -> Result<Rig> {
     Ok(rig)
 }
 
-/// Makes the bridges and says what happened, in a sentence.
+/// Makes the bridges (CLAP and VST3) and says what happened, in a sentence.
 fn sync_report(rt: &merlin_wine::Runtime) -> Result<String> {
-    let out = crate::paths::bridges_dir();
-    let r = rt.sync_clap_bridges(&out)?;
-    let total = r.created.len() + r.unchanged;
-    Ok(format!(
-        "{total} Windows plugin{} ready ({} new, {} removed)",
-        if total == 1 { "" } else { "s" },
-        r.created.len(),
-        r.removed.len()
-    ))
+    let clap = rt.sync_clap_bridges(&crate::paths::bridges_dir());
+    let vst3 = rt.sync_vst3_bridges(&crate::paths::bridges_vst3_dir());
+    if let (Err(a), Err(b)) = (&clap, &vst3) {
+        return Err(anyhow!("{a:#}; {b:#}"));
+    }
+    let (mut ready, mut new, mut removed, mut skipped) = (0, 0, 0, Vec::new());
+    let mut problems = Vec::new();
+    for r in [clap, vst3] {
+        match r {
+            Ok(r) => {
+                ready += r.created.len() + r.unchanged;
+                new += r.created.len();
+                removed += r.removed.len();
+                skipped.extend(r.skipped);
+            }
+            Err(e) => problems.push(format!("{e:#}")),
+        }
+    }
+    let mut text = format!(
+        "{ready} Windows plugin{} ready ({new} new, {removed} removed)",
+        if ready == 1 { "" } else { "s" }
+    );
+    if !skipped.is_empty() {
+        let list: Vec<String> = skipped
+            .iter()
+            .map(|(p, why)| {
+                format!(
+                    "{} ({why})",
+                    p.file_name()
+                        .map_or_else(String::new, |n| n.to_string_lossy().into_owned())
+                )
+            })
+            .collect();
+        text.push_str(&format!("; skipped: {}", list.join(", ")));
+    }
+    if !problems.is_empty() {
+        text.push_str(&format!("; {}", problems.join("; ")));
+    }
+    Ok(text)
 }
 
 const _: () = assert!(UI_SLOTS <= MAX_SLOTS);

@@ -320,8 +320,8 @@ fn windows_plugins(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &m
     );
     check(
         ui,
-        rt.chainloader().is_file(),
-        "yabridge: CLAP chainloader".to_owned(),
+        rt.chainloader().is_file() && rt.vst3_chainloader().is_file(),
+        "yabridge: CLAP and VST3 chainloaders".to_owned(),
     );
     ui.horizontal(|ui| {
         let ready = rt.prefix_ready();
@@ -373,7 +373,7 @@ fn windows_plugins(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &m
     ui.add_space(4.0);
     ui.label(
         RichText::new(
-            "Only 64-bit CLAP plugins are picked up for now. Plugins with copy protection (iLok and the like) may not run. Prefer a native Linux version when there is one.",
+            "Only 64-bit CLAP and VST3 plugins are picked up. Plugins with copy protection (iLok and the like) may not run. Prefer a native Linux version when there is one.",
         )
         .small()
         .weak(),

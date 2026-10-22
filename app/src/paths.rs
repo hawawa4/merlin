@@ -46,6 +46,11 @@ pub fn bridges_dir() -> PathBuf {
     data_dir().join("bridges").join("clap")
 }
 
+/// The same for Windows VST3 plugins (merged bundles).
+pub fn bridges_vst3_dir() -> PathBuf {
+    data_dir().join("bridges").join("vst3")
+}
+
 pub fn settings_file() -> PathBuf {
     config_dir().join("settings.toml")
 }

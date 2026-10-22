@@ -108,7 +108,7 @@ pub fn default_plugin_dirs() -> Vec<PathBuf> {
 }
 
 /// `.clap` files and `.vst3` bundles in the folders (and a few levels below), with whether each
-/// is a yabridge bridge (CLAP only). Bundle directories are plugins, not folders to search.
+/// is a yabridge bridge. Bundle directories are plugins, not folders to search.
 pub fn find_clap_files(dirs: &[PathBuf]) -> Vec<(PathBuf, bool)> {
     fn walk(dir: &Path, depth: usize, out: &mut Vec<(PathBuf, bool)>) {
         let Ok(rd) = std::fs::read_dir(dir) else {
@@ -121,7 +121,11 @@ pub fn find_clap_files(dirs: &[PathBuf]) -> Vec<(PathBuf, bool)> {
                 // A chainloader named like the plugin, with a `.clap-win` link beside it.
                 let windows = p.with_extension("clap-win").exists();
                 out.push((p, windows));
-            } else if p.extension().is_some_and(|e| e == "vst3") || is_soundfont(&p) {
+            } else if p.extension().is_some_and(|e| e == "vst3") {
+                // A bridge to a Windows plugin is a merged bundle with the Windows module inside.
+                let windows = p.join("Contents/x86_64-win").is_dir();
+                out.push((p, windows));
+            } else if is_soundfont(&p) {
                 out.push((p, false));
             } else if p.is_dir() && depth < MAX_DEPTH {
                 walk(&p, depth + 1, out);
@@ -327,6 +331,7 @@ mod tests {
         std::fs::create_dir_all(d.join("bundle.clap/inner")).unwrap();
         std::fs::write(d.join("bundle.clap/inner/e.clap"), b"x").unwrap();
         std::fs::create_dir_all(d.join("Synth.vst3/Contents/x86_64-linux")).unwrap();
+        std::fs::create_dir_all(d.join("Bridged.vst3/Contents/x86_64-win")).unwrap();
         std::fs::write(d.join("Synth.vst3/Contents/x86_64-linux/inner.clap"), b"x").unwrap();
 
         let files: Vec<(String, bool)> = find_clap_files(std::slice::from_ref(&d))
@@ -341,6 +346,7 @@ mod tests {
         assert_eq!(
             files,
             vec![
+                ("Bridged.vst3".into(), true),
                 ("Strings.SF3".into(), false),
                 ("Synth.vst3".into(), false),
                 ("a.clap".into(), false),

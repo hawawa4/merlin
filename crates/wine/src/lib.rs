@@ -17,6 +17,9 @@ use anyhow::{Context, Result, anyhow, bail};
 const CLAP_DIRS: &[&str] = &["Program Files/Common Files/CLAP"];
 /// Per-user install locations, below `drive_c/users/<name>/`.
 const USER_CLAP_DIRS: &[&str] = &["AppData/Local/Programs/Common/CLAP"];
+/// The same for VST3 plugins.
+const VST3_DIRS: &[&str] = &["Program Files/Common Files/VST3"];
+const USER_VST3_DIRS: &[&str] = &["AppData/Local/Programs/Common/VST3"];
 /// How deep below a plugin folder `.clap` files are looked for (vendors use subfolders).
 const MAX_DEPTH: usize = 3;
 /// Suffix of the link that names the real Windows plugin beside a bridge.
@@ -137,15 +140,33 @@ impl Runtime {
 
     /// Where Windows CLAP plugins land in this prefix.
     pub fn clap_dirs(&self) -> Vec<PathBuf> {
+        self.plugin_dirs(CLAP_DIRS, USER_CLAP_DIRS)
+    }
+
+    /// Where Windows VST3 plugins land in this prefix.
+    pub fn vst3_dirs(&self) -> Vec<PathBuf> {
+        self.plugin_dirs(VST3_DIRS, USER_VST3_DIRS)
+    }
+
+    fn plugin_dirs(&self, system: &[&str], per_user: &[&str]) -> Vec<PathBuf> {
         let c = self.prefix.join("drive_c");
-        let mut dirs: Vec<PathBuf> = CLAP_DIRS.iter().map(|d| c.join(d)).collect();
+        let mut dirs: Vec<PathBuf> = system.iter().map(|d| c.join(d)).collect();
         if let Ok(users) = std::fs::read_dir(c.join("users")) {
             for u in users.flatten() {
-                dirs.extend(USER_CLAP_DIRS.iter().map(|d| u.path().join(d)));
+                dirs.extend(per_user.iter().map(|d| u.path().join(d)));
             }
         }
         dirs.retain(|d| d.is_dir());
         dirs
+    }
+
+    pub fn vst3_chainloader(&self) -> PathBuf {
+        self.yabridge_dir.join("libyabridge-chainloader-vst3.so")
+    }
+
+    /// Makes (and tidies) the bridges for this prefix's Windows VST3 plugins in `out_dir`.
+    pub fn sync_vst3_bridges(&self, out_dir: &Path) -> Result<SyncReport> {
+        sync_vst3_bridges(&self.vst3_dirs(), &self.vst3_chainloader(), out_dir)
     }
 
     /// Makes (and tidies) the bridges for this prefix's Windows CLAP plugins in `out_dir`.
@@ -187,6 +208,8 @@ pub struct SyncReport {
     pub unchanged: usize,
     /// Bridges removed because their Windows plugin is gone.
     pub removed: Vec<PathBuf>,
+    /// Windows plugins that cannot be bridged, with the reason.
+    pub skipped: Skipped,
 }
 
 fn find_windows_claps(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
@@ -278,6 +301,201 @@ fn collect_links(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
             out.push(p);
         } else if !is_link && p.is_dir() && depth < MAX_DEPTH {
             collect_links(&p, depth + 1, out);
+        }
+    }
+}
+
+/// Which kind of Windows binary a file is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PeArch {
+    X64,
+    X86,
+    Other,
+}
+
+/// Reads the machine type from a PE file's header. `None` if it is not a PE file.
+pub fn pe_arch(path: &Path) -> Option<PeArch> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut dos = [0u8; 64];
+    f.read_exact(&mut dos).ok()?;
+    if &dos[..2] != b"MZ" {
+        return None;
+    }
+    let pe_at = u32::from_le_bytes(dos[60..64].try_into().ok()?) as u64;
+    f.seek(SeekFrom::Start(pe_at)).ok()?;
+    let mut hdr = [0u8; 6];
+    f.read_exact(&mut hdr).ok()?;
+    if &hdr[..4] != b"PE\0\0" {
+        return None;
+    }
+    Some(match u16::from_le_bytes([hdr[4], hdr[5]]) {
+        0x8664 => PeArch::X64,
+        0x014c => PeArch::X86,
+        _ => PeArch::Other,
+    })
+}
+
+/// A Windows VST3 plugin found in a prefix.
+struct Vst3Module {
+    /// The `X.vst3` file or bundle folder, as installed.
+    installed: PathBuf,
+    /// The DLL: the file itself, or `X.vst3/Contents/x86_64-win/X.vst3` inside a bundle.
+    module: PathBuf,
+    /// The folder it was in, below the search folder (vendors group their plugins).
+    subdir: PathBuf,
+    resources: Option<PathBuf>,
+}
+
+fn find_windows_vst3(
+    root: &Path,
+    dir: &Path,
+    depth: usize,
+    out: &mut Vec<Vst3Module>,
+    skipped: &mut Vec<(PathBuf, String)>,
+) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut paths: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
+    paths.sort();
+    for p in paths {
+        let is_vst3 = p.extension().is_some_and(|e| e == "vst3");
+        if is_vst3 {
+            let name = p.file_name().map(PathBuf::from).unwrap_or_default();
+            let subdir = dir.strip_prefix(root).unwrap_or(Path::new("")).to_owned();
+            let (module, resources) = if p.is_dir() {
+                let win64 = p.join("Contents/x86_64-win").join(&name);
+                if !win64.exists() {
+                    let why = if p.join("Contents/x86-win").exists() {
+                        "32-bit only (yabridge here runs 64-bit plugins)"
+                    } else {
+                        "not a Windows VST3 bundle"
+                    };
+                    skipped.push((p.clone(), why.into()));
+                    continue;
+                }
+                let res = p.join("Contents/Resources");
+                (win64, res.is_dir().then_some(res))
+            } else {
+                (p.clone(), None)
+            };
+            match pe_arch(&module) {
+                Some(PeArch::X64) => out.push(Vst3Module {
+                    installed: p,
+                    module,
+                    subdir,
+                    resources,
+                }),
+                Some(PeArch::X86) => {
+                    skipped.push((p, "32-bit (yabridge here runs 64-bit plugins)".into()))
+                }
+                _ => skipped.push((p, "not a Windows plugin".into())),
+            }
+        } else if p.is_dir() && depth < MAX_DEPTH {
+            find_windows_vst3(root, &p, depth + 1, out, skipped);
+        }
+    }
+}
+
+/// What [`sync_vst3_bridges`] could not use, with the reason.
+pub type Skipped = Vec<(PathBuf, String)>;
+
+/// For every 64-bit Windows VST3 plugin below `plugin_dirs`, makes a merged bundle in `out_dir`
+/// the way `yabridgectl sync` does: `X.vst3/Contents/x86_64-linux/X.so` (a copy of yabridge's
+/// VST3 chainloader) and `X.vst3/Contents/x86_64-win/X.vst3` (a link to the Windows plugin).
+/// Bundles whose Windows plugin has gone are removed.
+pub fn sync_vst3_bridges(
+    plugin_dirs: &[PathBuf],
+    chainloader: &Path,
+    out_dir: &Path,
+) -> Result<SyncReport> {
+    if !chainloader.is_file() {
+        bail!(
+            "yabridge's VST3 chainloader is missing: {}",
+            chainloader.display()
+        );
+    }
+    let wanted_bytes = std::fs::read(chainloader)?;
+    let mut report = SyncReport::default();
+    let mut wanted: Vec<PathBuf> = Vec::new();
+
+    for dir in plugin_dirs {
+        let (mut found, mut skipped) = (Vec::new(), Vec::new());
+        find_windows_vst3(dir, dir, 0, &mut found, &mut skipped);
+        report.skipped.extend(skipped);
+        for m in found {
+            let name = m
+                .installed
+                .file_name()
+                .map(PathBuf::from)
+                .unwrap_or_default();
+            let bundle = out_dir.join(&m.subdir).join(&name);
+            let so = bundle
+                .join("Contents/x86_64-linux")
+                .join(name.with_extension("so"));
+            let link = bundle.join("Contents/x86_64-win").join(&name);
+            wanted.push(bundle.clone());
+            std::fs::create_dir_all(so.parent().unwrap())?;
+            std::fs::create_dir_all(link.parent().unwrap())?;
+            let same_so = std::fs::read(&so).is_ok_and(|b| b == wanted_bytes);
+            let same_link = std::fs::read_link(&link).is_ok_and(|t| t == m.module);
+            if let Some(res) = &m.resources {
+                let rl = bundle.join("Contents/Resources");
+                if std::fs::read_link(&rl).is_ok_and(|t| &t == res) {
+                } else {
+                    let _ = std::fs::remove_file(&rl);
+                    let _ = std::os::unix::fs::symlink(res, &rl);
+                }
+            }
+            if same_so && same_link {
+                report.unchanged += 1;
+                continue;
+            }
+            let tmp = so.with_extension("tmp");
+            std::fs::write(&tmp, &wanted_bytes)?;
+            set_executable(&tmp)?;
+            std::fs::rename(&tmp, &so)?;
+            let _ = std::fs::remove_file(&link);
+            std::os::unix::fs::symlink(&m.module, &link)
+                .with_context(|| format!("cannot link {}", link.display()))?;
+            report.created.push(bundle);
+        }
+    }
+
+    // Our bundles whose Windows plugin is gone: the `x86_64-win` link points nowhere.
+    let mut stale = Vec::new();
+    collect_bundles(out_dir, 0, &mut stale);
+    for bundle in stale {
+        if wanted.contains(&bundle) {
+            continue;
+        }
+        let dangling = std::fs::read_dir(bundle.join("Contents/x86_64-win"))
+            .map(|rd| {
+                rd.flatten()
+                    .any(|e| e.file_type().is_ok_and(|t| t.is_symlink()) && !e.path().exists())
+            })
+            .unwrap_or(false);
+        if dangling {
+            let _ = std::fs::remove_dir_all(&bundle);
+            report.removed.push(bundle);
+        }
+    }
+    Ok(report)
+}
+
+fn collect_bundles(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let p = e.path();
+        if e.file_type().is_ok_and(|t| t.is_dir()) {
+            if p.extension().is_some_and(|x| x == "vst3") {
+                out.push(p);
+            } else if depth < MAX_DEPTH {
+                collect_bundles(&p, depth + 1, out);
+            }
         }
     }
 }
@@ -454,5 +672,103 @@ mod tests {
             rt.ensure_prefix(Duration::from_secs(1)).is_ok(),
             "an existing prefix is left alone"
         );
+    }
+
+    /// A minimal PE file with the given machine type.
+    fn pe(machine: u16) -> Vec<u8> {
+        let mut v = vec![0u8; 0x80];
+        v[0] = b'M';
+        v[1] = b'Z';
+        v[60..64].copy_from_slice(&0x40u32.to_le_bytes());
+        v[0x40..0x44].copy_from_slice(b"PE\0\0");
+        v[0x44..0x46].copy_from_slice(&machine.to_le_bytes());
+        v
+    }
+
+    fn vst3_fixture(name: &str) -> (Runtime, PathBuf) {
+        let (rt, out) = fixture(name);
+        std::fs::write(rt.vst3_chainloader(), b"ELF vst3 chainloader").unwrap();
+        let v = rt.prefix.join("drive_c/Program Files/Common Files/VST3");
+        std::fs::create_dir_all(v.join("u-he")).unwrap();
+        // A single-file (legacy) module, one in a vendor folder, a bundle, a 32-bit one, junk.
+        std::fs::write(v.join("Podolski(x64).vst3"), pe(0x8664)).unwrap();
+        std::fs::write(v.join("u-he/Diva.vst3"), pe(0x8664)).unwrap();
+        std::fs::create_dir_all(v.join("Bundle.vst3/Contents/x86_64-win")).unwrap();
+        std::fs::write(
+            v.join("Bundle.vst3/Contents/x86_64-win/Bundle.vst3"),
+            pe(0x8664),
+        )
+        .unwrap();
+        std::fs::create_dir_all(v.join("Bundle.vst3/Contents/Resources")).unwrap();
+        std::fs::write(v.join("Old32.vst3"), pe(0x014c)).unwrap();
+        std::fs::write(v.join("Fake.vst3"), b"not a dll").unwrap();
+        std::fs::write(v.join("Podolski.data.lnk"), b"x").unwrap();
+        (rt, out.join("vst3"))
+    }
+
+    #[test]
+    fn windows_vst3_plugins_get_merged_bundles() {
+        let (rt, out) = vst3_fixture("vst3");
+        let report = rt.sync_vst3_bridges(&out).unwrap();
+        assert_eq!(report.created.len(), 3, "{report:?}");
+        let so = out.join("Podolski(x64).vst3/Contents/x86_64-linux/Podolski(x64).so");
+        assert_eq!(std::fs::read(&so).unwrap(), b"ELF vst3 chainloader");
+        let link = out.join("Podolski(x64).vst3/Contents/x86_64-win/Podolski(x64).vst3");
+        assert!(
+            std::fs::read_link(&link)
+                .unwrap()
+                .starts_with(rt.prefix.join("drive_c"))
+        );
+        assert!(link.exists());
+        // Vendor folders are kept, bundles link their DLL and their Resources.
+        assert!(
+            out.join("u-he/Diva.vst3/Contents/x86_64-linux/Diva.so")
+                .exists()
+        );
+        let b = out.join("Bundle.vst3/Contents");
+        assert!(b.join("x86_64-win/Bundle.vst3").exists());
+        assert!(b.join("Resources").exists());
+        // Not bridged, and why.
+        let names: Vec<_> = report
+            .skipped
+            .iter()
+            .map(|(p, _)| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["Fake.vst3", "Old32.vst3"]);
+        assert!(report.skipped[1].1.contains("32-bit"));
+        assert!(!out.join("Old32.vst3").exists());
+    }
+
+    #[test]
+    fn vst3_sync_is_repeatable_and_tidies_up() {
+        let (rt, out) = vst3_fixture("vst3again");
+        rt.sync_vst3_bridges(&out).unwrap();
+        let again = rt.sync_vst3_bridges(&out).unwrap();
+        assert_eq!((again.created.len(), again.unchanged), (0, 3));
+        std::fs::remove_file(
+            rt.prefix
+                .join("drive_c/Program Files/Common Files/VST3/u-he/Diva.vst3"),
+        )
+        .unwrap();
+        let after = rt.sync_vst3_bridges(&out).unwrap();
+        assert_eq!(after.removed, vec![out.join("u-he/Diva.vst3")]);
+        assert!(!out.join("u-he/Diva.vst3").exists());
+        assert!(out.join("Podolski(x64).vst3").exists());
+    }
+
+    #[test]
+    fn reads_the_machine_type_of_pe_files() {
+        let d = tempdir("pe");
+        for (name, machine, want) in [
+            ("a", 0x8664, PeArch::X64),
+            ("b", 0x014c, PeArch::X86),
+            ("c", 0xaa64, PeArch::Other),
+        ] {
+            std::fs::write(d.join(name), pe(machine)).unwrap();
+            assert_eq!(pe_arch(&d.join(name)), Some(want));
+        }
+        std::fs::write(d.join("elf"), b"\x7fELF....").unwrap();
+        assert_eq!(pe_arch(&d.join("elf")), None);
+        assert_eq!(pe_arch(&d.join("missing")), None);
     }
 }
