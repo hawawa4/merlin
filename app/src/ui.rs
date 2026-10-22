@@ -77,6 +77,8 @@ pub enum Action {
     InstallWindows(String),
     /// Make bridges for the Windows plugins already in the prefix.
     SyncWindows,
+    /// Download and install the Wine + yabridge runtime, then restart.
+    InstallRuntime,
     ToggleFavorite(usize),
     /// Load browser entry `k` into a free slot.
     BrowserLoad(usize),

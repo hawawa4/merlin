@@ -430,6 +430,7 @@ impl Running {
                 s.install_windows_plugin(path)
             }
             Action::SyncWindows => s.sync_windows_plugins(),
+            Action::InstallRuntime => s.install_runtime(),
             Action::ToggleFavorite(k) => {
                 if let Some(f) = s.found.get(k).cloned() {
                     s.toggle_favorite(&f);
@@ -675,6 +676,13 @@ impl Running {
             self.ask_redraw();
         }
         self.session.poll_midi_hotplug();
+        if self.session.restart_requested {
+            // New Windows plugin support is read at startup: come back with it, same rig.
+            self.session.restart_requested = false;
+            self.session.shutdown();
+            let err = guard::restart_from_autosave(None);
+            self.session.say(format!("could not restart: {err}"));
+        }
         self.session
             .autosave(Duration::from_secs(self.settings.autosave_secs), false);
     }
@@ -844,6 +852,7 @@ fn parse_script() -> Vec<(Duration, Action)> {
                 "fx" => Action::FxPreset(slot(words.next())?, words.next()?.to_string()),
                 "install" => Action::InstallWindows(words.collect::<Vec<_>>().join(" ")),
                 "sync" => Action::SyncWindows,
+                "runtime" => Action::InstallRuntime,
                 "fit" => Action::Fit,
                 "on" => Action::NoteOn(words.next()?.parse().ok()?),
                 "off" => Action::NoteOff(words.next()?.parse().ok()?),
@@ -876,6 +885,10 @@ fn main() -> Result<()> {
     };
     // Windows plugins: yabridge's chainloader finds Wine and its host binary through these.
     // SAFETY: set before any other thread exists.
+    // The downloaded runtime fills in what neither the settings nor the environment name.
+    let managed = (settings.wine_loader.is_none() && std::env::var_os("WINELOADER").is_none())
+        .then(|| merlin_wine::runtime::installed(&paths::runtime_dir()))
+        .flatten();
     unsafe {
         if let Some(w) = &settings.wine_loader {
             std::env::set_var("WINELOADER", w);
@@ -883,6 +896,11 @@ fn main() -> Result<()> {
         if let Some(y) = &settings.yabridge_dir {
             let path = std::env::var("PATH").unwrap_or_default();
             std::env::set_var("PATH", format!("{}:{path}", y.display()));
+        }
+        if let Some(m) = &managed {
+            let path = std::env::var("PATH").unwrap_or_default();
+            std::env::set_var("WINELOADER", &m.wine);
+            std::env::set_var("PATH", format!("{}:{path}", m.yabridge_dir.display()));
         }
     }
     merlin_audio_io::preload_pipewire_jack();

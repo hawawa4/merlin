@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+pub mod runtime;
+
 use anyhow::{Context, Result, anyhow, bail};
 
 /// Folders (relative to a prefix's `drive_c`) where Windows installers put CLAP plugins.

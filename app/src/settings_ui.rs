@@ -235,33 +235,11 @@ fn midi(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
 }
 
 fn windows(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
-    ui.strong("Wine and yabridge");
-    ui.label(
-        RichText::new("Windows plugins run through Wine and yabridge. A bundled, tested runtime will replace these paths; until then they can be set by hand. Changes apply after restarting the app.")
-            .small()
-            .weak(),
-    );
-    ui.add_space(6.0);
-    for (label, text) in [
-        ("Wine program", &mut st.wine_text),
-        ("yabridge folder", &mut st.yab_text),
-    ] {
-        ui.horizontal(|ui| {
-            ui.label(label);
-            ui.add(egui::TextEdit::singleline(text).desired_width(460.0));
-            let path = std::path::Path::new(text.as_str());
-            if text.is_empty() {
-                ui.label(RichText::new("not set").weak());
-            } else if path.exists() {
-                ui.colored_label(status_color(Status::Ok), "found");
-            } else {
-                ui.colored_label(status_color(Status::Fail), "does not exist");
-            }
-        });
-    }
-    if ui.button("Save").clicked() {
-        actions.push(Action::SaveWine(st.wine_text.clone(), st.yab_text.clone()));
-    }
+    windows_support(ui, s, actions);
+    ui.add_space(8.0);
+    egui::CollapsingHeader::new("Advanced: use my own Wine and yabridge")
+        .default_open(false)
+        .show(ui, |ui| own_wine(ui, st, actions));
     ui.add_space(12.0);
     windows_plugins(ui, s, st, actions);
     ui.add_space(8.0);
@@ -288,16 +266,79 @@ fn windows(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<A
     }
 }
 
+/// "Windows plugin support": the Wine + yabridge pair the app downloads and keeps itself.
+fn windows_support(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
+    ui.strong("Windows plugin support");
+    match (s.installed_runtime(), s.windows_runtime()) {
+        (Some(r), _) => {
+            ui.horizontal(|ui| {
+                ui.colored_label(status_color(Status::Ok), "installed");
+                ui.label(&r.id);
+            });
+        }
+        (None, Some(_)) => {
+            ui.label("Using a Wine and yabridge that were already set up on this machine.");
+        }
+        (None, None) => {
+            ui.label(
+                RichText::new(
+                    "Windows plugins need Wine and yabridge. The app downloads a tested pair (about 40 MB) and keeps it in its own folder; your system Wine is never touched.",
+                )
+                .small()
+                .weak(),
+            );
+            let busy = s.windows_busy();
+            if ui
+                .add_enabled(!busy, egui::Button::new("Download Windows plugin support"))
+                .clicked()
+            {
+                actions.push(Action::InstallRuntime);
+            }
+            if !s.windows_status.is_empty() {
+                ui.label(&s.windows_status);
+            }
+        }
+    }
+}
+
+/// The paths of a Wine and a yabridge the user set up themselves.
+fn own_wine(ui: &mut egui::Ui, st: &mut UiState, actions: &mut Vec<Action>) {
+    ui.label(
+        RichText::new("Overrides the downloaded pair. Changes apply after restarting the app.")
+            .small()
+            .weak(),
+    );
+    ui.add_space(6.0);
+    for (label, text) in [
+        ("Wine program", &mut st.wine_text),
+        ("yabridge folder", &mut st.yab_text),
+    ] {
+        ui.horizontal(|ui| {
+            ui.label(label);
+            ui.add(egui::TextEdit::singleline(text).desired_width(460.0));
+            let path = std::path::Path::new(text.as_str());
+            if text.is_empty() {
+                ui.label(RichText::new("not set").weak());
+            } else if path.exists() {
+                ui.colored_label(status_color(Status::Ok), "found");
+            } else {
+                ui.colored_label(status_color(Status::Fail), "does not exist");
+            }
+        });
+    }
+    if ui.button("Save").clicked() {
+        actions.push(Action::SaveWine(st.wine_text.clone(), st.yab_text.clone()));
+    }
+}
+
 /// Installing Windows plugins and what the Wine setup looks like (a small "Wine doctor").
 fn windows_plugins(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
     ui.strong("Windows plugins");
     let Some(rt) = s.windows_runtime() else {
         ui.label(
-            RichText::new(
-                "Set the Wine program and the yabridge folder above to install Windows plugins.",
-            )
-            .small()
-            .weak(),
+            RichText::new("Download Windows plugin support above to use Windows plugins.")
+                .small()
+                .weak(),
         );
         return;
     };

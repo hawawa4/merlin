@@ -5,6 +5,10 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+/// A release named `runtime` on the project's repository holds the current archive and manifest.
+pub const DEFAULT_RUNTIME_URL: &str =
+    "https://github.com/hawawa4/linuxclap/releases/download/runtime/runtime-manifest.json";
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -19,6 +23,8 @@ pub struct Settings {
     pub yabridge_dir: Option<PathBuf>,
     /// Where Windows plugins are installed; the managed prefix when unset.
     pub wine_prefix: Option<PathBuf>,
+    /// The manifest of the Wine + yabridge runtime to download; [`DEFAULT_RUNTIME_URL`] when unset.
+    pub runtime_url: Option<String>,
     /// Seconds between autosaves; 0 turns autosave off.
     pub autosave_secs: u64,
     /// Browser favourites, as `Session::favorite_key` makes them.
@@ -34,6 +40,7 @@ impl Default for Settings {
             wine_loader: None,
             yabridge_dir: None,
             wine_prefix: None,
+            runtime_url: None,
             autosave_secs: 30,
             favorites: Vec::new(),
         }

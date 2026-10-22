@@ -24,6 +24,16 @@ dev *args:
         target/release/merlin \
         --plugin-dir {{assets}}/dl/surge-linux --plugin-dir {{assets}}/sf {{args}}
 
+# Packs the Wine + yabridge pair into dist/runtime/ (a 40 MB .tar.zst and runtime-manifest.json),
+# the files "Download Windows plugin support" fetches. To publish them, put both in a GitHub
+# release tagged `runtime` on the repository, e.g.
+#   gh release create runtime dist/runtime/* --title "Windows plugin support"   (first time)
+#   gh release upload runtime dist/runtime/* --clobber                           (later)
+# To try the download without publishing: serve the folder (`python3 -m http.server -d dist/runtime`)
+# and set runtime_url = "http://127.0.0.1:8000/runtime-manifest.json" in settings.toml.
+package-runtime:
+    tools/package-runtime.sh
+
 # Soak run: random switching, layering, notes and editor tabs for SECS seconds with Surge XT,
 # in throwaway state directories. Look at the `state:` lines (xruns, held keys, RSS, threads);
 # the last one must show 0 held keys. Seed varies the run; add `--windows "Six Sines"` for Wine.

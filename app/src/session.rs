@@ -138,6 +138,12 @@ pub struct Session {
     /// A scan was asked for while one was running: run it next, forgetting these files.
     scan_again: Option<Vec<PathBuf>>,
     windows_rx: Option<mpsc::Receiver<WindowsMsg>>,
+    /// The running job is the runtime download: restart into it when it succeeds.
+    restart_after_job: bool,
+    /// Set by the runtime job when what it installed is not what this process runs with.
+    runtime_changed: Arc<std::sync::atomic::AtomicBool>,
+    /// Set when the app should restart itself (main does it on its next tick).
+    pub restart_requested: bool,
     /// What the Windows job is doing, or how the last one ended (for the Settings tab).
     pub windows_status: String,
     font_tx: mpsc::Sender<FontMsg>,
@@ -196,6 +202,9 @@ impl Session {
             scan_rx: None,
             scan_again: None,
             windows_rx: None,
+            restart_after_job: false,
+            runtime_changed: Arc::default(),
+            restart_requested: false,
             windows_status: String::new(),
             font_tx,
             font_rx,
@@ -250,16 +259,23 @@ impl Session {
     pub fn windows_runtime(&self) -> Option<merlin_wine::Runtime> {
         // The settings win; otherwise what the environment already says (`just dev` sets
         // WINELOADER and puts yabridge on the PATH).
+        let managed = merlin_wine::runtime::installed(&crate::paths::runtime_dir());
         let wine = self
             .settings
             .wine_loader
             .clone()
-            .or_else(|| std::env::var_os("WINELOADER").map(PathBuf::from))?;
-        let yabridge_dir = self.settings.yabridge_dir.clone().or_else(|| {
-            let path = std::env::var_os("PATH")?;
-            std::env::split_paths(&path)
-                .find(|d| d.join("libyabridge-chainloader-clap.so").is_file())
-        })?;
+            .or_else(|| std::env::var_os("WINELOADER").map(PathBuf::from))
+            .or_else(|| managed.as_ref().map(|m| m.wine.clone()))?;
+        let yabridge_dir = self
+            .settings
+            .yabridge_dir
+            .clone()
+            .or_else(|| {
+                let path = std::env::var_os("PATH")?;
+                std::env::split_paths(&path)
+                    .find(|d| d.join("libyabridge-chainloader-clap.so").is_file())
+            })
+            .or_else(|| managed.as_ref().map(|m| m.yabridge_dir.clone()))?;
         Some(merlin_wine::Runtime {
             wine,
             yabridge_dir,
@@ -316,6 +332,60 @@ impl Session {
             .context("cannot start the Windows plugin job")?;
         self.windows_rx = Some(rx);
         Ok(())
+    }
+
+    /// The downloaded runtime, if there is one.
+    pub fn installed_runtime(&self) -> Option<merlin_wine::runtime::Installed> {
+        merlin_wine::runtime::installed(&crate::paths::runtime_dir())
+    }
+
+    /// Downloads the Wine + yabridge runtime on a worker thread, then restarts the app into it.
+    pub fn install_runtime(&mut self) -> Result<()> {
+        use merlin_wine::runtime::{self, Progress};
+        let url = self
+            .settings
+            .runtime_url
+            .clone()
+            .unwrap_or_else(|| crate::settings::DEFAULT_RUNTIME_URL.to_owned());
+        self.windows_status = "contacting the download server...".into();
+        self.restart_after_job = true;
+        let changed = self.runtime_changed.clone();
+        let started = self.start_windows_job(move |tx| {
+            let last = std::cell::Cell::new(String::new());
+            let say = |text: String| {
+                if last.replace(text.clone()) != text {
+                    let _ = tx.send(WindowsMsg::Status(text));
+                }
+            };
+            let mb = |b: u64| b / (1 << 20);
+            let installed = runtime::install(&url, &crate::paths::runtime_dir(), &|p| match p {
+                Progress::Manifest => say("contacting the download server...".into()),
+                Progress::Downloading { done, total } => {
+                    say(format!("downloading: {} of {} MB", mb(done), mb(total)))
+                }
+                Progress::Verifying => say("checking the download...".into()),
+                Progress::Unpacking => say("unpacking...".into()),
+            })?;
+            // Wine is chosen at startup: a restart is needed unless this process already runs
+            // with exactly this runtime.
+            let in_use = std::env::var_os("WINELOADER").is_some_and(|w| w == installed.wine);
+            changed.store(!in_use, Ordering::Relaxed);
+            Ok(if in_use {
+                format!(
+                    "Windows plugin support {} is installed and in use",
+                    installed.id
+                )
+            } else {
+                format!(
+                    "Windows plugin support {} installed; restarting",
+                    installed.id
+                )
+            })
+        });
+        if started.is_err() {
+            self.restart_after_job = false;
+        }
+        started
     }
 
     /// Makes the bridges for the Windows plugins in the prefix, then scans them.
@@ -378,7 +448,14 @@ impl Session {
         }
         let Some(result) = finished else { return };
         self.windows_rx = None;
+        let restart = std::mem::take(&mut self.restart_after_job)
+            && self.runtime_changed.load(Ordering::Relaxed);
         match result {
+            Ok(text) if restart => {
+                self.windows_status = text.clone();
+                self.say(text);
+                self.restart_requested = true;
+            }
             Ok(text) => {
                 self.windows_status = text.clone();
                 self.say(format!("Windows plugins: {text}"));

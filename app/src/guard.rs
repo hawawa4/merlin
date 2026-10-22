@@ -192,9 +192,17 @@ fn recover(info: &HostInfo) {
     // Other bridged plugins' hosts would otherwise outlive us (the PID stays the same after exec).
     kill_children();
 
-    let Ok(exe) = std::env::current_exe() else {
-        eprintln!("cannot find our own executable to restart");
-        std::process::exit(1);
+    let err = restart_from_autosave(Some(&info.name));
+    eprintln!("restart failed: {err}");
+    std::process::exit(1);
+}
+
+/// Replaces this process with a fresh one that restores the autosave. Only returns (with the
+/// error) if that failed. `recovered` names a plugin that was just quarantined.
+pub fn restart_from_autosave(recovered: Option<&str>) -> std::io::Error {
+    let exe = match std::env::current_exe() {
+        Ok(e) => e,
+        Err(e) => return e,
     };
     // The saved rig named on the command line is older than the autosave: drop it.
     let mut args: Vec<String> = Vec::new();
@@ -209,12 +217,12 @@ fn recover(info: &HostInfo) {
         }
     }
     args.push("--recover".into());
-    let err = std::process::Command::new(exe)
-        .args(args)
-        .env("MERLIN_RECOVERED", &info.name)
-        .exec();
-    eprintln!("restart failed: {err}");
-    std::process::exit(1);
+    let mut cmd = std::process::Command::new(exe);
+    cmd.args(args);
+    if let Some(name) = recovered {
+        cmd.env("MERLIN_RECOVERED", name);
+    }
+    cmd.exec()
 }
 
 static GUARD: OnceLock<Arc<Guard>> = OnceLock::new();

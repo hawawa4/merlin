@@ -36,6 +36,11 @@ pub fn data_dir() -> PathBuf {
     xdg("XDG_DATA_HOME", ".local/share").join("merlin")
 }
 
+/// The downloaded Wine + yabridge pair ("Windows plugin support").
+pub fn runtime_dir() -> PathBuf {
+    data_dir().join("runtime")
+}
+
 /// The Wine prefix our Windows plugins live in.
 pub fn wine_prefix() -> PathBuf {
     data_dir().join("wineprefix")
