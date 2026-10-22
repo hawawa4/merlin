@@ -38,6 +38,9 @@ pub fn found_label(f: &merlin_scanner::Found) -> String {
     if f.info.format == Format::Vst2 {
         label.push_str(" (VST2)");
     }
+    if f.info.format == Format::Lv2 {
+        label.push_str(" (LV2)");
+    }
     if f.info.format == Format::SoundFont {
         label.push_str(" (SoundFont)");
     }
@@ -768,6 +771,7 @@ fn unit(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, i: usize, actions:
             match r.format {
                 Format::Vst3 => "VST3",
                 Format::Vst2 => "VST2",
+                Format::Lv2 => "LV2",
                 Format::SoundFont => "SF",
                 _ => "CLAP",
             },

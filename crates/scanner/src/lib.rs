@@ -19,6 +19,7 @@ use std::time::UNIX_EPOCH;
 use anyhow::{Context, Result};
 use merlin_hosting::PluginInfo;
 use merlin_hosting::clap::ClapLibrary;
+use merlin_hosting::lv2::Lv2Library;
 use merlin_hosting::soundfont::is_soundfont;
 use merlin_hosting::vst2::Vst2Library;
 use merlin_hosting::vst3::Vst3Library;
@@ -91,6 +92,7 @@ pub fn default_plugin_dirs() -> Vec<PathBuf> {
         dirs.push(Path::new(&home).join(".vst"));
         dirs.push(Path::new(&home).join(".lxvst"));
     }
+    dirs.extend(merlin_hosting::lv2::default_dirs());
     dirs.extend(
         [
             "/usr/lib/clap",
@@ -147,6 +149,9 @@ pub fn find_clap_files(dirs: &[PathBuf]) -> Vec<(PathBuf, bool)> {
                 // A bridge to a Windows plugin is a merged bundle with the Windows module inside.
                 let windows = p.join("Contents/x86_64-win").is_dir();
                 out.push((p, windows));
+            } else if p.extension().is_some_and(|e| e == "lv2") && p.is_dir() {
+                // An LV2 bundle: a folder with a manifest, not a folder to search.
+                out.push((p, false));
             } else if is_soundfont(&p) {
                 out.push((p, false));
             } else if p.extension().is_some_and(|e| e == "so") && p.is_file() {
@@ -196,6 +201,13 @@ pub fn load_vst2(path: &Path) -> Result<Vec<PluginInfo>> {
         .with_context(|| format!("scanning {}", path.display()))
 }
 
+/// Reads an LV2 bundle's plugins from its Turtle files (nothing is loaded).
+pub fn load_lv2(path: &Path) -> Result<Vec<PluginInfo>> {
+    Lv2Library::open(path)
+        .map(|lib| lib.plugins())
+        .with_context(|| format!("scanning {}", path.display()))
+}
+
 /// Reads whatever kind of plugin file this is.
 pub fn load_any(path: &Path, windows: bool) -> Result<Vec<PluginInfo>> {
     if is_soundfont(path) {
@@ -206,13 +218,21 @@ pub fn load_any(path: &Path, windows: bool) -> Result<Vec<PluginInfo>> {
         load_vst3(path)
     } else if path.extension().is_some_and(|e| e == "so") {
         load_vst2(path)
+    } else if path.extension().is_some_and(|e| e == "lv2") {
+        load_lv2(path)
     } else {
         load_clap(path, windows)
     }
 }
 
 fn stamp(path: &Path) -> Option<(u64, u64)> {
-    let m = std::fs::metadata(path).ok()?;
+    // An LV2 bundle is a folder; its manifest is what changes when it is updated.
+    let path = if path.extension().is_some_and(|e| e == "lv2") && path.is_dir() {
+        path.join("manifest.ttl")
+    } else {
+        path.to_owned()
+    };
+    let m = std::fs::metadata(&path).ok()?;
     // For a bridge, the Windows plugin behind it is what changes; its link target's metadata
     // follows symlinks automatically via `metadata`, and the chainloader is the file itself.
     let mtime = m
@@ -372,6 +392,7 @@ mod tests {
         touch("bridges/Win.so");
         touch("bridges/Win.dll"); // a bridge
         touch("home/surge.lv2/libSurge.so"); // an LV2 plugin's library
+        touch("home/surge.lv2/manifest.ttl");
         let found = find_clap_files(&[
             root.join("home/.vst"),
             root.join("home/lib"),

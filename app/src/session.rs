@@ -11,6 +11,7 @@ use merlin_audio_io::{InputRole, JackBackend, JackClient, MidiSource, friendly_n
 use merlin_embed::{EditorManager, PluginLookup};
 use merlin_engine::{Command, EngineHandle, Filter};
 use merlin_hosting::clap::ClapLibrary;
+use merlin_hosting::lv2::Lv2Library;
 use merlin_hosting::vst2::Vst2Library;
 use merlin_hosting::vst3::Vst3Library;
 use merlin_hosting::{EditorSize, HostEvent, MidiEvent, PluginHandle, Waker};
@@ -689,6 +690,7 @@ impl Session {
             match f.info.format {
                 Format::Vst3 => "vst3",
                 Format::Vst2 => "vst2",
+                Format::Lv2 => "lv2",
                 _ => "clap",
             },
             f.info.id,
@@ -1063,6 +1065,13 @@ impl Session {
             Box::new(Vst3Library::load(path)?.create(id, waker)?)
         } else if path.extension().is_some_and(|e| e == "so") {
             Box::new(Vst2Library::load(path)?.create(id, waker)?)
+        } else if path.extension().is_some_and(|e| e == "lv2") {
+            Box::new(Lv2Library::open(path)?.create(
+                id,
+                waker,
+                f64::from(self.sample_rate),
+                MAX_BLOCK as u32,
+            )?)
         } else {
             Box::new(ClapLibrary::load(path)?.create(id, waker)?)
         };

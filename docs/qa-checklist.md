@@ -115,6 +115,12 @@ Snapshots are saved inside the rig file, so one file holds the whole setup.
 - [ ] Kontakt/Reaktor-type plugins that are huge: how long do they take to load, and does the app stay responsive?
 - [ ] An effect (reverb, EQ) as an insert on a slot.
 
+## 5k. LV2 plugins
+- [ ] LV2 plugins in `~/.lv2` or `/usr/lib/lv2` appear in the browser as `(LV2)` without any setting (the first scan reads their description files, quick). Load a few synths and effects: do they play, show their editor, and come back from a saved rig? Tell me which do not (and the message in the log line, e.g. "needs <feature>").
+- [ ] A plugin with a GTK or Qt editor (not X11): it will play but its editor will not open (expected for now).
+- [ ] Insert an LV2 effect on a slot (Effects tab > Load effect...).
+- [ ] The Macros tab > *+ parameter...* on an LV2 plugin lists its control ports (plugins that use only patch parameters list none).
+
 ## 6. Stability
 - [ ] Kill a Windows plugin's Wine process while the app runs: `pgrep -af yabridge-host`, then `kill -9 <pid>` of one. The app should restart itself from the autosave and name the plugin it quarantined (it comes back with *Retry*).
 - [ ] The 2-hour rehearsal: 6–8 instruments including a Windows one, switching and playing for 2 hours. For an unattended version: `just soak 7200 3 --windows "Six Sines"`, then read the `state:` lines (xruns, held keys, RSS, threads). Expect 0 xruns, 0 held keys at the end, memory flat.

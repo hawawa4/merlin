@@ -56,6 +56,8 @@ pub enum Format {
     Vst3,
     /// VST 2: native Linux plugins, and Windows ones through yabridge.
     Vst2,
+    /// LV2.
+    Lv2,
     /// An instrument or effect that ships inside the app.
     Builtin,
     SoundFont,

@@ -6,6 +6,7 @@
 pub mod builtin;
 pub mod clap;
 pub mod host_time;
+pub mod lv2;
 mod midi;
 mod plugin;
 pub mod soundfont;
