@@ -72,6 +72,11 @@ pub enum ControlAction {
     PrevPart,
     NextSong,
     PrevSong,
+    /// Start or stop the transport (count-in and click, MIDI clock).
+    TransportToggle,
+    ClickToggle,
+    /// Tap the tempo with a foot switch or a pad.
+    TapTempo,
     /// Recall a snapshot.
     RecallSnapshot {
         snapshot: u8,
@@ -136,6 +141,9 @@ impl ControlAction {
             Self::RecallSnapshot { snapshot } => {
                 format!("Recall snapshot {}", snapshot as usize + 1)
             }
+            Self::TransportToggle => "Start / stop the transport".into(),
+            Self::ClickToggle => "Click on / off".into(),
+            Self::TapTempo => "Tap tempo".into(),
             Self::NextPart => "Next part".into(),
             Self::PrevPart => "Previous part".into(),
             Self::NextSong => "Next song".into(),

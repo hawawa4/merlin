@@ -530,6 +530,56 @@ impl Running {
                     }
                 }
             }
+            Action::TransportToggle => {
+                s.transport_toggle();
+                Ok(())
+            }
+            Action::TransportStart => {
+                if !s.transport_running() && !s.counting_in() {
+                    s.transport_toggle();
+                }
+                Ok(())
+            }
+            Action::TransportStop => {
+                if s.transport_running() || s.counting_in() {
+                    s.transport_toggle();
+                }
+                Ok(())
+            }
+            Action::SetClickState(on) => {
+                let v = s.rig.transport.click_volume;
+                s.set_click(on, v);
+                Ok(())
+            }
+            Action::ToggleClick => {
+                s.toggle_click();
+                Ok(())
+            }
+            Action::SetClickVolume(v) => {
+                let on = s.rig.transport.click;
+                s.set_click(on, v);
+                Ok(())
+            }
+            Action::TapTempo => {
+                s.tap_tempo();
+                Ok(())
+            }
+            Action::SetTempo(v) => {
+                s.set_tempo(v);
+                Ok(())
+            }
+            Action::SetBeatsPerBar(n) => {
+                s.set_beats_per_bar(n);
+                Ok(())
+            }
+            Action::SetCountIn(n) => {
+                s.set_count_in_bars(n);
+                Ok(())
+            }
+            Action::SetClickOutput(p) => {
+                s.set_click_output(p);
+                Ok(())
+            }
             Action::ToggleSetlist => {
                 self.ui.setlist_open = !self.ui.setlist_open;
                 if self.ui.setlist_open {
@@ -887,7 +937,7 @@ impl Running {
                 s.say(format!(
                     "state: rig '{}'{}, xruns {xruns}, DSP {dsp:.1}%, held keys {held}, \
                      RSS {rss_mb} MB, threads {threads}, midi {midi}, master {:.2}, vol1 {:.2}, targets {:?}, dock shows {:?}, \
-                     popup {}, slots {}, perform {}, locked {}, macro1 {:.2}, gain1 {:.2}, position {:?}, tempo {:.0}",
+                     popup {}, slots {}, perform {}, locked {}, macro1 {:.2}, gain1 {:.2}, position {:?}, tempo {:.0}, transport {} bar {} beat {} beats {}",
                     s.rig.name,
                     if s.dirty { " (modified)" } else { "" },
                     s.rig.master_volume,
@@ -901,7 +951,11 @@ impl Running {
                     s.macro_value(0, 0),
                     s.sampler_gain(0).unwrap_or(-1.0),
                     s.position().map(|(a, b)| (a + 1, b + 1)),
-                    s.current_tempo()
+                    s.current_tempo(),
+                    if s.transport_running() { "running" } else if s.counting_in() { "counting" } else { "stopped" },
+                    s.engine.shared.transport.position().0,
+                    s.engine.shared.transport.position().1,
+                    s.engine.shared.transport.beats_total()
                 ));
                 Ok(())
             }
@@ -940,6 +994,8 @@ impl Running {
         if now >= self.next_status {
             let active = self.ui.peaks_shown.iter().any(|&p| p > 0.002)
                 || self.session.midi_active()
+                || self.session.transport_running()
+                || self.session.counting_in()
                 || self.ui.held_key.is_some()
                 || self
                     .session
@@ -1263,6 +1319,16 @@ fn parse_script() -> Vec<(Duration, Action)> {
                     _ => return None,
                 },
                 "setlist" => Action::ToggleSetlist,
+                // transport (start|stop) ; tempo N ; click on|off ; tap ; countin N
+                "transport" => match words.next()? {
+                    "start" => Action::TransportStart,
+                    "stop" => Action::TransportStop,
+                    _ => return None,
+                },
+                "tempo" => Action::SetTempo(words.next()?.parse().ok()?),
+                "click" => Action::SetClickState(words.next()? == "on"),
+                "tap" => Action::TapTempo,
+                "countin" => Action::SetCountIn(words.next()?.parse().ok()?),
                 "go" => Action::GoTo(slot(words.next())?, slot(words.next())?),
                 "nextpart" => Action::NextPart,
                 "prevpart" => Action::PrevPart,
@@ -1346,6 +1412,9 @@ fn parse_control_action(
             base: num(words.next())?,
         },
         "snapnext" => A::NextSnapshot,
+        "transport" => A::TransportToggle,
+        "click" => A::ClickToggle,
+        "tap" => A::TapTempo,
         "nextpart" => A::NextPart,
         "prevpart" => A::PrevPart,
         "nextsong" => A::NextSong,

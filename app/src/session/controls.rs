@@ -136,6 +136,9 @@ impl Session {
             Outcome::PrevPart => self.prev_part(),
             Outcome::NextSong => self.next_song(),
             Outcome::PrevSong => self.prev_song(),
+            Outcome::TransportToggle => self.transport_toggle(),
+            Outcome::ClickToggle => self.toggle_click(),
+            Outcome::TapTempo => self.tap_tempo(),
             Outcome::Panic => self.panic(),
         }
     }

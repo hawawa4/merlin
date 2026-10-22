@@ -82,6 +82,15 @@ Snapshots are saved inside the rig file, so one file holds the whole setup.
 - [ ] Settings > Controls: *Next part* / *Previous part* on foot switches (or pads): the same walk, from the pedals.
 - [ ] Save, **New**, reopen: songs, parts, tempos and notes are back and still recall the right sounds.
 
+## 5g. Transport, click and MIDI clock
+- [ ] Perform view: press **START**. With count-in 1 bar you hear four clicks (the first higher), the display says "count-in n", then "1 . 1, 1 . 2, ..." as the bars run. **STOP** stops it.
+- [ ] **-**/**+** and **TAP** change the tempo (tap four times); the click follows at once. **CLICK** and its slider mute it and set its level. Count-in off starts straight away.
+- [ ] Settings > Audio > Click output: with a multi-output interface pick two of its outputs: the click leaves the main mix and comes out there only (headphones). Back to "Main outputs" mixes it in again.
+- [ ] Enter a part that has its own tempo (Setlist): the click follows it. Change beats per bar for a song (Setlist) or in Settings > Audio and listen for the accent on beat 1.
+- [ ] MIDI clock: connect the `merlin:clock_out` port to a drum machine or a software that shows incoming tempo (`pw-link merlin:clock_out <port>`); it follows the tempo and starts and stops with START and STOP.
+- [ ] Settings > Controls: *Start / stop*, *Click on / off*, *Tap tempo* on a foot switch or pad.
+- [ ] Close and reopen the rig: tempo, count-in and click settings are back.
+
 ## 6. Stability
 - [ ] Kill a Windows plugin's Wine process while the app runs: `pgrep -af yabridge-host`, then `kill -9 <pid>` of one. The app should restart itself from the autosave and name the plugin it quarantined (it comes back with *Retry*).
 - [ ] The 2-hour rehearsal: 6–8 instruments including a Windows one, switching and playing for 2 hours. For an unattended version: `just soak 7200 3 --windows "Six Sines"`, then read the `state:` lines (xruns, held keys, RSS, threads). Expect 0 xruns, 0 held keys at the end, memory flat.

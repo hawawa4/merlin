@@ -23,6 +23,7 @@ mod controls;
 mod macros;
 mod setlist;
 mod snapshots;
+mod transport;
 
 use crate::scan_worker::{self, ScanMsg};
 use winit::event_loop::EventLoopProxy;
@@ -196,6 +197,8 @@ pub struct Session {
     last_snapshot: Option<usize>,
     /// The song and part entered last.
     position: Option<(usize, usize)>,
+    /// When the tempo was last tapped.
+    taps: Vec<Instant>,
     /// What each plugin said about its parameters, by (slot, insert).
     param_cache:
         std::collections::HashMap<(usize, Option<usize>), Vec<merlin_hosting::ParamInfo>>,
@@ -287,6 +290,7 @@ impl Session {
             last_control: None,
             last_snapshot: None,
             position: None,
+            taps: Vec::new(),
             param_cache: Default::default(),
             midi_seen: Default::default(),
             midi_lit: Default::default(),
@@ -334,6 +338,8 @@ impl Session {
                 .map(|m| m.device.as_str())
                 .collect::<Vec<_>>()
         ));
+        s.sync_transport();
+        s.apply_click_output();
         Ok(s)
     }
 
@@ -1534,6 +1540,7 @@ impl Session {
         self.rig = new_rig("Untitled");
         self.last_snapshot = None;
         self.position = None;
+        self.sync_transport();
         self.sync_mappings();
         let _ = self.engine.send(Command::SetMasterVolume(1.0));
         self.rig_path = None;
@@ -1578,6 +1585,7 @@ impl Session {
         self.rig = rig;
         self.last_snapshot = None;
         self.position = None;
+        self.sync_transport();
         self.sync_mappings();
         let _ = self
             .engine

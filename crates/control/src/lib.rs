@@ -57,6 +57,9 @@ pub enum Outcome {
     PrevPart,
     NextSong,
     PrevSong,
+    TransportToggle,
+    ClickToggle,
+    TapTempo,
     Panic,
 }
 
@@ -235,6 +238,9 @@ fn fire(action: &ControlAction, inc: &Incoming, ctx: &Context) -> Option<Outcome
                 None => count - 1,
             }))
         }
+        ControlAction::TransportToggle => Some(Outcome::TransportToggle),
+        ControlAction::ClickToggle => Some(Outcome::ClickToggle),
+        ControlAction::TapTempo => Some(Outcome::TapTempo),
         ControlAction::NextPart => Some(Outcome::NextPart),
         ControlAction::PrevPart => Some(Outcome::PrevPart),
         ControlAction::NextSong => Some(Outcome::NextSong),

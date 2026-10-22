@@ -9,12 +9,14 @@
 mod engine;
 mod events;
 pub mod router;
+pub mod transport;
 
 use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64};
 
-pub use engine::{Command, Engine, EngineHandle, Retired, new};
+pub use engine::{ClickOut, Command, Engine, EngineHandle, Retired, new};
 pub use merlin_model::{MAX_SLOTS, SelectMode};
 pub use router::{Filter, MAX_INPUTS, Router};
+pub use transport::{ClockEvent, MIDI_CLOCK, MIDI_START, MIDI_STOP, Transport, TransportShared};
 
 /// State the audio thread publishes for the UI.
 pub struct Shared {
@@ -37,6 +39,8 @@ pub struct Shared {
     /// Events dropped because a slot's event list was full.
     pub dropped_events: AtomicU32,
     pub blocks: AtomicU64,
+    /// Tempo, click and start/stop (see [`transport`]).
+    pub transport: TransportShared,
 }
 
 impl Shared {
@@ -52,6 +56,7 @@ impl Shared {
             load_max: std::array::from_fn(|_| AtomicU32::new(0)),
             dropped_events: AtomicU32::new(0),
             blocks: AtomicU64::new(0),
+            transport: TransportShared::new(),
         }
     }
 }

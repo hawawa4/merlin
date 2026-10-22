@@ -9,6 +9,7 @@ use merlin_model::{FxSettings, MAX_INSERTS, MAX_SLOTS, SelectMode};
 use crate::Shared;
 use crate::events::EventBuf;
 use crate::router::{Filter, Router};
+use crate::transport::{ClockEvent, Transport};
 
 const COMMAND_QUEUE: usize = 256;
 const RETIRED_QUEUE: usize = 64;
@@ -186,6 +187,18 @@ pub struct Engine {
     commands: rtrb::Consumer<Command>,
     retired: rtrb::Producer<Retired>,
     shared: Arc<Shared>,
+    transport: Transport,
+    click_l: Vec<f32>,
+    click_r: Vec<f32>,
+    clock: Vec<ClockEvent>,
+}
+
+/// Where the click and the MIDI clock go when they are not mixed into the main output.
+pub struct ClickOut<'a> {
+    pub l: &'a mut [f32],
+    pub r: &'a mut [f32],
+    /// Cleared by the caller; events are added with their frame in the whole call.
+    pub clock: &'a mut Vec<ClockEvent>,
 }
 
 /// Creates the engine (for the audio thread) and its handle (for the main thread).
@@ -214,6 +227,10 @@ pub fn new(sample_rate: f32, max_block: usize) -> (Engine, EngineHandle) {
         commands: cmd_rx,
         retired: ret_tx,
         shared: shared.clone(),
+        transport: Transport::new(sample_rate),
+        click_l: vec![0.0; max_block],
+        click_r: vec![0.0; max_block],
+        clock: Vec::with_capacity(512),
     };
     let handle = EngineHandle {
         commands: cmd_tx,
@@ -306,8 +323,22 @@ impl Engine {
     }
 
     /// Renders `out_l.len()` frames. `midi` is sorted by time (frames from the start of this
-    /// call). Allocation-free, lock-free.
+    /// call). Allocation-free, lock-free. The transport runs too, but its click is only heard
+    /// if it is mixed into the main output; use [`process_with_click`](Self::process_with_click)
+    /// to get it separately.
     pub fn process(&mut self, midi: &[MidiEvent], out_l: &mut [f32], out_r: &mut [f32]) {
+        self.process_with_click(midi, out_l, out_r, None);
+    }
+
+    /// As [`process`](Self::process), also filling `click` with the click (when it is not mixed
+    /// into the main output) and the MIDI clock bytes.
+    pub fn process_with_click(
+        &mut self,
+        midi: &[MidiEvent],
+        out_l: &mut [f32],
+        out_r: &mut [f32],
+        mut click: Option<&mut ClickOut<'_>>,
+    ) {
         let n = out_l.len().min(out_r.len());
         let mut start = 0;
         let mut next = 0;
@@ -324,6 +355,35 @@ impl Engine {
                 &mut out_l[start..end],
                 &mut out_r[start..end],
             );
+            // The transport, after the master limiter: the click is not limited or ducked.
+            self.transport.render(
+                &self.shared.transport,
+                &mut self.click_l[..len],
+                &mut self.click_r[..len],
+                &mut self.clock,
+            );
+            if self.shared.transport.click_to_main() {
+                for t in 0..len {
+                    out_l[start + t] += self.click_l[t];
+                    out_r[start + t] += self.click_r[t];
+                }
+            } else if let Some(c) = click.as_deref_mut()
+                && c.l.len() >= end
+                && c.r.len() >= end
+            {
+                c.l[start..end].copy_from_slice(&self.click_l[..len]);
+                c.r[start..end].copy_from_slice(&self.click_r[..len]);
+            }
+            if let Some(c) = click.as_deref_mut() {
+                for e in &self.clock {
+                    if c.clock.len() < c.clock.capacity() {
+                        c.clock.push(ClockEvent {
+                            time: e.time + start as u32,
+                            byte: e.byte,
+                        });
+                    }
+                }
+            }
             start = end;
         }
     }

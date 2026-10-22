@@ -12,10 +12,11 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::time::Instant;
 
 use anyhow::{Context, Result};
-use merlin_engine::{Engine, MAX_INPUTS};
+use merlin_engine::{ClickOut, ClockEvent, Engine, MAX_INPUTS};
 use merlin_hosting::MidiEvent;
 use jack::{
-    AudioOut, Client, ClientOptions, Control, MidiIn, NotificationHandler, Port, PortFlags,
+    AudioOut, Client, ClientOptions, Control, MidiIn, MidiOut, NotificationHandler, Port,
+    PortFlags, RawMidi,
 };
 
 /// Engine input index of the virtual keyboard.
@@ -247,6 +248,12 @@ impl JackClient {
             .map(|p| p.name())
             .collect::<Result<Vec<_>, _>>()?;
         let out_names = [out_l.name()?, out_r.name()?];
+        // The click (its own output pair) and the MIDI clock.
+        let click_l = client.register_port("click_l", AudioOut::default())?;
+        let click_r = client.register_port("click_r", AudioOut::default())?;
+        let clock_out = client.register_port("clock_out", MidiOut::default())?;
+        let click_names = [click_l.name()?, click_r.name()?];
+        let clock_name = clock_out.name()?;
 
         let (virtual_midi, virtual_rx) = rtrb::RingBuffer::new(VIRTUAL_QUEUE);
         let roles: Arc<[AtomicU8; HARDWARE_INPUTS]> = Arc::default();
@@ -258,6 +265,10 @@ impl JackClient {
             midi_in,
             out_l,
             out_r,
+            click_l,
+            click_r,
+            clock_out,
+            clock: Vec::with_capacity(512),
             virtual_rx,
             roles: roles.clone(),
             interest: interest.clone(),
@@ -276,6 +287,8 @@ impl JackClient {
             interest,
             control_rx: Some(control_rx),
             out_names,
+            click_names,
+            clock_name,
             sample_rate: self.sample_rate,
         })
     }
@@ -286,6 +299,10 @@ struct Callback {
     midi_in: Vec<Port<MidiIn>>,
     out_l: Port<AudioOut>,
     out_r: Port<AudioOut>,
+    click_l: Port<AudioOut>,
+    click_r: Port<AudioOut>,
+    clock_out: Port<MidiOut>,
+    clock: Vec<ClockEvent>,
     virtual_rx: rtrb::Consumer<MidiEvent>,
     /// [`InputRole`] bits per hardware input, set from the main thread.
     roles: Arc<[AtomicU8; HARDWARE_INPUTS]>,
@@ -384,7 +401,24 @@ impl jack::ProcessHandler for Callback {
         }
         let n = ps.n_frames() as usize;
         let (l, r) = (self.out_l.as_mut_slice(ps), self.out_r.as_mut_slice(ps));
-        self.engine.process(&self.events, &mut l[..n], &mut r[..n]);
+        let (cl, cr) = (self.click_l.as_mut_slice(ps), self.click_r.as_mut_slice(ps));
+        cl[..n].fill(0.0);
+        cr[..n].fill(0.0);
+        self.clock.clear();
+        let mut click = ClickOut {
+            l: &mut cl[..n],
+            r: &mut cr[..n],
+            clock: &mut self.clock,
+        };
+        self.engine
+            .process_with_click(&self.events, &mut l[..n], &mut r[..n], Some(&mut click));
+        let mut writer = self.clock_out.writer(ps);
+        for e in &self.clock {
+            let _ = writer.write(&RawMidi {
+                time: e.time,
+                bytes: &[e.byte],
+            });
+        }
 
         let ns = t0.elapsed().as_nanos() as u64;
         self.stats.last_ns.store(ns, Ordering::Relaxed);
@@ -407,6 +441,9 @@ pub struct JackBackend {
     pub interest: Arc<Interest>,
     control_rx: Option<rtrb::Consumer<ControlEvent>>,
     pub out_names: [String; 2],
+    /// Our click output pair and the MIDI clock output.
+    pub click_names: [String; 2],
+    pub clock_name: String,
     pub sample_rate: u32,
 }
 
@@ -464,6 +501,31 @@ impl JackBackend {
             .filter(|(src, dst)| c.connect_ports_by_name(src, dst).is_ok())
             .map(|(_, dst)| dst.clone())
             .collect()
+    }
+
+    /// The physical audio playback ports (the interface's outputs), for choosing where the
+    /// click goes.
+    pub fn playback_ports(&self) -> Vec<String> {
+        self.client.as_client().ports(
+            None,
+            Some("32 bit float mono audio"),
+            PortFlags::IS_PHYSICAL | PortFlags::IS_INPUT,
+        )
+    }
+
+    /// Sends the click to these two playback ports (and nowhere else), or to none.
+    pub fn connect_click(&self, to: Option<[&str; 2]>) {
+        let c = self.client.as_client();
+        for (src, dst) in self.click_names.iter().zip(to.unwrap_or(["", ""])) {
+            if let Some(port) = c.port_by_name(src) {
+                for existing in port.get_connections() {
+                    let _ = c.disconnect_ports_by_name(src, &existing);
+                }
+            }
+            if !dst.is_empty() {
+                let _ = c.connect_ports_by_name(src, dst);
+            }
+        }
     }
 
     /// Hardware MIDI output ports right now (not ours).

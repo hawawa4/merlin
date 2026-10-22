@@ -14,9 +14,9 @@ default:
 
 # The app. Loads plugins from the standard CLAP folders plus test-assets (Linux and, through
 # our patched Wine, Windows ones). Try: just dev --fresh      just dev --rig my.irig
-# This round: setlist. "Setlist" in the title bar: add songs, then parts (use "Part from the current sound" after
-# setting the rig up the way that part should sound). In Perform: Next / Prev part. Map foot switches in
-# Settings -> Controls. See docs/qa-checklist.md section 5f.
+# This round: transport and click. Perform view: START/STOP (with a count-in), tempo -/+ and TAP, CLICK and its
+# level. Settings -> Audio: send the click to your interface's headphone outputs instead of the main mix.
+# Entering a song part changes the tempo. See docs/qa-checklist.md section 5g.
 dev *args:
     cargo build -p merlin --release
     PATH="{{yabridge_dir}}:$PATH" WINELOADER={{patched_wine}} \

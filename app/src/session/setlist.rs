@@ -16,11 +16,9 @@ impl Session {
         self.position
     }
 
-    /// The tempo that applies where the setlist is now (120 before anything was entered).
+    /// The tempo the transport runs at (what the last part, tap or nudge set).
     pub fn current_tempo(&self) -> f32 {
-        self.position
-            .and_then(|(s, p)| Some(self.rig.songs.get(s)?.tempo_in(p)))
-            .unwrap_or(120.0)
+        self.tempo()
     }
 
     // ---- songs ------------------------------------------------------------------------
@@ -194,6 +192,8 @@ impl Session {
                 .map_or_else(|| "start".to_owned(), |p| p.label(part))
         );
         self.position = Some((song, part));
+        let (tempo, beats) = (s.tempo_in(part), s.beats_per_bar);
+        self.set_tempo_for_part(tempo, beats);
         if let Some(n) = snapshot {
             self.recall_snapshot(n);
         }

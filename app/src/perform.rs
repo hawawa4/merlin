@@ -19,6 +19,7 @@ const ALERT: Color32 = Color32::from_rgb(0xa0, 0x30, 0x30);
 
 pub fn show(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
     egui::Panel::top("perform-bar").show(ui, |ui| bar(ui, s, st, actions));
+    egui::Panel::top("perform-transport").show(ui, |ui| transport(ui, s, actions));
     egui::Panel::bottom("perform-master").show(ui, |ui| master(ui, s, actions));
     egui::CentralPanel::default().show(ui, |ui| {
         egui::ScrollArea::vertical().show(ui, |ui| {
@@ -125,6 +126,97 @@ fn lock_button(ui: &mut egui::Ui, st: &mut UiState, actions: &mut Vec<Action>) {
     } else {
         st.unlock_since = None;
     }
+}
+
+/// Start / stop, the bar and beat, the tempo with tap, and the click.
+fn transport(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        let running = s.transport_running();
+        let counting = s.counting_in();
+        let label = if running || counting { "STOP" } else { "START" };
+        let b = egui::Button::new(RichText::new(label).size(22.0).strong())
+            .min_size(egui::vec2(130.0, 52.0))
+            .fill(if running || counting {
+                Color32::from_rgb(0x7a, 0x2a, 0x2a)
+            } else {
+                Color32::from_rgb(0x2a, 0x6a, 0x3a)
+            });
+        if ui.add(b).clicked() {
+            actions.push(Action::TransportToggle);
+        }
+        let (bar, beat) = s.engine.shared.transport.position();
+        let position = if counting {
+            format!("count-in {beat}")
+        } else if running {
+            format!("{bar} . {beat}")
+        } else {
+            "stopped".to_owned()
+        };
+        ui.label(RichText::new(position).size(24.0).monospace());
+        ui.add_space(16.0);
+        if ui
+            .add(egui::Button::new("-").min_size(egui::vec2(40.0, 40.0)))
+            .clicked()
+        {
+            actions.push(Action::SetTempo(s.tempo() - 1.0));
+        }
+        ui.label(RichText::new(format!("{:.0} bpm", s.tempo())).size(24.0));
+        if ui
+            .add(egui::Button::new("+").min_size(egui::vec2(40.0, 40.0)))
+            .clicked()
+        {
+            actions.push(Action::SetTempo(s.tempo() + 1.0));
+        }
+        if ui
+            .add(
+                egui::Button::new(RichText::new("TAP").size(18.0)).min_size(egui::vec2(70.0, 40.0)),
+            )
+            .on_hover_text("Tap the beat to set the tempo")
+            .clicked()
+        {
+            actions.push(Action::TapTempo);
+        }
+        ui.add_space(16.0);
+        let t = s.rig.transport;
+        let click = egui::Button::new(RichText::new("CLICK").size(16.0))
+            .selected(t.click)
+            .min_size(egui::vec2(80.0, 40.0));
+        if ui.add(click).clicked() {
+            actions.push(Action::ToggleClick);
+        }
+        let mut volume = t.click_volume;
+        ui.spacing_mut().slider_width = 100.0;
+        if ui
+            .add(egui::Slider::new(&mut volume, 0.0..=1.0).show_value(false))
+            .changed()
+        {
+            actions.push(Action::SetClickVolume(volume));
+        }
+        ui.label("count-in");
+        let mut bars = t.count_in_bars;
+        egui::ComboBox::from_id_salt("count-in")
+            .selected_text(match bars {
+                0 => "off".to_owned(),
+                1 => "1 bar".to_owned(),
+                n => format!("{n} bars"),
+            })
+            .width(80.0)
+            .show_ui(ui, |ui| {
+                for n in 0..=merlin_model::MAX_COUNT_IN_BARS {
+                    let text = match n {
+                        0 => "off".to_owned(),
+                        1 => "1 bar".to_owned(),
+                        n => format!("{n} bars"),
+                    };
+                    ui.selectable_value(&mut bars, n, text);
+                }
+            });
+        if bars != t.count_in_bars {
+            actions.push(Action::SetCountIn(bars));
+        }
+    });
+    ui.add_space(4.0);
 }
 
 /// Where the setlist is: the song and its parts, with Previous / Next part and the other songs.

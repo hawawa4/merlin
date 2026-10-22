@@ -69,6 +69,8 @@ pub struct Settings {
     pub autosave_secs: u64,
     /// Browser favourites, as `Session::favorite_key` makes them.
     pub favorites: Vec<String>,
+    /// The two audio outputs of the interface the click goes to; the main outputs when unset.
+    pub click_output: Option<[String; 2]>,
 }
 
 impl Default for Settings {
@@ -85,6 +87,7 @@ impl Default for Settings {
             runtime_url: None,
             autosave_secs: 30,
             favorites: Vec::new(),
+            click_output: None,
         }
     }
 }

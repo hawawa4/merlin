@@ -68,6 +68,7 @@ def main():
     macros_check()
     selection_check()
     setlist_check()
+    transport_check()
 
 
 SNAP_FILE = Path(tempfile.gettempdir()) / "irig-e2e-snapshots.irig"
@@ -193,6 +194,39 @@ def setlist_check():
         print(out[-3000:])
         sys.exit(1)
     print(f"ok: foot switches walk the setlist, each part recalls its snapshot and tempo: {seq}")
+
+
+TRANSPORT_SCRIPT = "; ".join(
+    [
+        "1:load 1 TimGM6mb",
+        "2:tempo 240", "2.1:countin 1", "2.2:click off",
+        "3:transport start",
+        # 4 beats of count-in at 240 bpm = 1 s, then it runs.
+        "3.5:report", "5:report", "7:report",
+        "7.5:transport stop", "8:report",
+        "9:quit",
+    ]
+)
+
+
+def transport_check():
+    out = run(TRANSPORT_SCRIPT, "1:B0 1 0", 3)
+    rows = re.findall(r"transport (\w+) bar (\d+) beat (\d+) beats (\d+)", out)
+    problems = []
+    if [r[0] for r in rows] != ["counting", "running", "running", "stopped"]:
+        problems.append(f"states {rows}")
+    else:
+        # 240 bpm = 4 beats a second: ~4 beats counted in by 3.5 s... then running, ~7 beats by 5 s.
+        beats = [int(r[3]) for r in rows]
+        if not (beats[1] > beats[0] and beats[2] > beats[1] + 4 and beats[3] >= beats[2]):
+            problems.append(f"the beats do not advance at tempo: {beats}")
+        if int(rows[2][1]) < 3:
+            problems.append(f"the bar counter did not advance: {rows[2]}")
+    if problems:
+        print("FAIL (transport)\n  " + "\n  ".join(problems))
+        print(out[-2500:])
+        sys.exit(1)
+    print(f"ok: the transport counts in, runs and stops: {rows}")
 
 
 def controls_check():

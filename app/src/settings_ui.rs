@@ -34,6 +34,9 @@ pub enum ActionKind {
     SlotMacro,
     SelectedMacro,
     SelectedVolume,
+    TransportToggle,
+    ClickToggle,
+    TapTempo,
     NextPart,
     PrevPart,
     NextSong,
@@ -46,7 +49,7 @@ pub enum ActionKind {
 }
 
 impl ActionKind {
-    const ALL: [ActionKind; 20] = [
+    const ALL: [ActionKind; 23] = [
         Self::SelectSlot,
         Self::ToggleLayer,
         Self::ToggleMute,
@@ -58,6 +61,9 @@ impl ActionKind {
         Self::SlotMacro,
         Self::SelectedMacro,
         Self::SelectedVolume,
+        Self::TransportToggle,
+        Self::ClickToggle,
+        Self::TapTempo,
         Self::NextPart,
         Self::PrevPart,
         Self::NextSong,
@@ -82,6 +88,9 @@ impl ActionKind {
             Self::SlotMacro => "Macro of a slot (knob or fader)",
             Self::SelectedMacro => "Macro of the slot that plays (knob or fader)",
             Self::SelectedVolume => "Volume of the slot that plays (fader or knob)",
+            Self::TransportToggle => "Start / stop (count-in, click, MIDI clock)",
+            Self::ClickToggle => "Click on / off",
+            Self::TapTempo => "Tap tempo",
             Self::NextPart => "Next part (foot switch)",
             Self::PrevPart => "Previous part (foot switch)",
             Self::NextSong => "Next song",
@@ -121,6 +130,9 @@ impl ActionKind {
             Self::SlotMacro => A::SlotMacro { slot, index: base },
             Self::SelectedMacro => A::SelectedMacro { index: base },
             Self::SelectedVolume => A::SelectedVolume,
+            Self::TransportToggle => A::TransportToggle,
+            Self::ClickToggle => A::ClickToggle,
+            Self::TapTempo => A::TapTempo,
             Self::NextPart => A::NextPart,
             Self::PrevPart => A::PrevPart,
             Self::NextSong => A::NextSong,
@@ -309,6 +321,59 @@ fn audio(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
         b.stats.max_ns.load(Ordering::Relaxed) as f64 / 1000.0,
     ));
     ui.label(format!("Outputs: {}", b.out_names.join(", ")));
+    ui.add_space(8.0);
+    click_output(ui, s, actions);
+}
+
+/// Where the click is heard.
+fn click_output(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
+    ui.strong("Click");
+    ui.horizontal(|ui| {
+        ui.label("beats per bar when no song sets it");
+        let mut beats = s.rig.transport.beats_per_bar;
+        if ui
+            .add(egui::DragValue::new(&mut beats).range(1..=16))
+            .changed()
+        {
+            actions.push(Action::SetBeatsPerBar(beats));
+        }
+    });
+    ui.strong("Click output");
+    ui.label(
+        RichText::new("The metronome. Mixed into the main outputs by default; pick two of your interface's own outputs to hear it in headphones only. The MIDI clock goes out of the \"clock_out\" port (connect it in your patchbay).")
+            .small()
+            .weak(),
+    );
+    let ports = s.playback_ports();
+    let current = s.settings.click_output.clone();
+    let text = match &current {
+        Some([l, r]) => format!("{l} + {r}"),
+        None => "Main outputs (mixed in)".to_owned(),
+    };
+    egui::ComboBox::from_id_salt("click-output")
+        .selected_text(text)
+        .width(420.0)
+        .show_ui(ui, |ui| {
+            if ui
+                .selectable_label(current.is_none(), "Main outputs (mixed in)")
+                .clicked()
+            {
+                actions.push(Action::SetClickOutput(None));
+            }
+            // Left and right of a pair are neighbouring ports.
+            for pair in ports.chunks(2).filter(|p| p.len() == 2) {
+                let label = format!("{} + {}", pair[0], pair[1]);
+                let chosen = current
+                    .as_ref()
+                    .is_some_and(|c| c[0] == pair[0] && c[1] == pair[1]);
+                if ui.selectable_label(chosen, label).clicked() {
+                    actions.push(Action::SetClickOutput(Some([
+                        pair[0].clone(),
+                        pair[1].clone(),
+                    ])));
+                }
+            }
+        });
 }
 
 /// Where SoundFonts are looked for, with how many each folder holds.
