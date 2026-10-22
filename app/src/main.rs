@@ -530,10 +530,12 @@ impl Running {
             },
             Action::LoadInsertNamed(i, k, query) => {
                 let q = query.to_lowercase();
+                let label = |f: &Found| ui::found_label(f).to_lowercase();
                 match s
                     .effects
                     .iter()
-                    .find(|f| f.info.name.to_lowercase().contains(&q))
+                    .find(|f| label(f) == q)
+                    .or_else(|| s.effects.iter().find(|f| label(f).contains(&q)))
                     .cloned()
                 {
                     Some(f) => s.load_insert(i, k, &f),
@@ -1015,5 +1017,14 @@ fn main() -> Result<()> {
     event_loop.run_app(&mut app)?;
     // Give plugin background threads (JUCE) a moment to wind down.
     std::thread::sleep(Duration::from_millis(100));
-    Ok(())
+    // Leave without running the plugins' static destructors: yabridge's (C++) cancel threads
+    // there, and about one exit in fifteen died with "exception not rethrown". Everything that
+    // matters (the autosave, the marker, the plugins) was dealt with by the shutdown above.
+    {
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+        let _ = std::io::stderr().flush();
+    }
+    // SAFETY: _exit never returns and nothing is left to clean up.
+    unsafe { libc::_exit(0) }
 }

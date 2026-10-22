@@ -214,6 +214,9 @@ pub struct Session {
     proxy: EventLoopProxy<UserEvent>,
     pub sample_rate: u32,
     last_autosave: Instant,
+    /// A change of the rig's structure wants an autosave soon (not at once: a plugin that has
+    /// only just loaded should be left alone for a moment before it is asked for its state).
+    autosave_after: Option<Instant>,
 }
 
 impl Session {
@@ -277,6 +280,7 @@ impl Session {
             proxy,
             sample_rate,
             last_autosave: Instant::now(),
+            autosave_after: None,
         };
         s.rebuild_dirs();
         // Start from what the cache knows, then let the background scan catch up.
@@ -913,6 +917,19 @@ impl Session {
     }
 
     fn create_plugin(&mut self, i: usize, path: &Path, id: &str, windows: bool) -> Result<Loaded> {
+        let name = self
+            .found
+            .iter()
+            .chain(&self.effects)
+            .find(|f| f.info.id == id)
+            .map(|f| f.info.name.clone())
+            .unwrap_or_else(|| id.to_owned());
+        self.guard.register_plugin(HostInfo {
+            slot: i,
+            path: path.to_owned(),
+            id: id.to_owned(),
+            name,
+        });
         // A bridged plugin starts a Wine host process: remember which one is ours, so the
         // watchdog can tell a crash from a normal unload.
         let before = if windows {
@@ -920,7 +937,13 @@ impl Session {
         } else {
             Default::default()
         };
-        let loaded = self.create_plugin_inner(i, path, id)?;
+        // A cold Wine start is slow; a native plugin that takes this long is stuck.
+        let limit = Duration::from_secs(if windows { 120 } else { 40 });
+        let guard = self.guard.clone();
+        let loaded = {
+            let _call = guard.call(i, "loading", limit);
+            self.create_plugin_inner(i, path, id)?
+        };
         if windows {
             guard::install_socket_hook();
             let name = self
@@ -964,9 +987,13 @@ impl Session {
 
     /// Installs a created plugin in a slot: activate and hand its processor to the engine.
     fn install(&mut self, i: usize, mut loaded: Loaded) -> Result<()> {
-        let processor = loaded
-            .plugin
-            .activate(self.sample_rate as f64, MAX_BLOCK as u32)?;
+        let guard = self.guard.clone();
+        let processor = {
+            let _call = guard.call(i, "starting up", Duration::from_secs(30));
+            loaded
+                .plugin
+                .activate(self.sample_rate as f64, MAX_BLOCK as u32)?
+        };
         self.plugins[i] = Some(loaded);
         self.push_slot_settings(i);
         self.engine
@@ -1067,8 +1094,8 @@ impl Session {
         if self.targets.is_empty() {
             self.select(i, false);
         }
-        // Structural change: save now, so a crash right after restarts from this rig.
-        self.autosave(Duration::ZERO, true);
+        // Structural change: save soon, so a crash restarts from this rig.
+        self.autosave_soon();
         Ok(())
     }
 
@@ -1161,9 +1188,12 @@ impl Session {
             .as_ref()
             .and_then(|r| crate::quirks::lookup(&r.id, r.windows).warning)
             .map(str::to_owned);
-        let result = self
-            .editors
-            .show(i, &mut lookup(&mut self.plugins, &mut self.inserts));
+        let guard = self.guard.clone();
+        let result = {
+            let _call = guard.call(i, "opening its editor", Duration::from_secs(40));
+            self.editors
+                .show(i, &mut lookup(&mut self.plugins, &mut self.inserts))
+        };
         match result {
             Ok(o) if o.created => self.say(format!("editor {} created in {:?}", i + 1, o.elapsed)),
             Ok(_) => {}
@@ -1351,11 +1381,21 @@ impl Session {
     /// Plugin timers, editor eviction, retired processors. Returns when to run again.
     pub fn service(&mut self) -> Option<Instant> {
         let now = Instant::now();
-        for l in self.plugins.iter_mut().flatten() {
-            l.plugin.service(now);
+        let guard = self.guard.clone();
+        let limit = Duration::from_secs(15);
+        for (i, l) in self.plugins.iter_mut().enumerate() {
+            if let Some(l) = l {
+                let _call = guard.call(i, "running its timers", limit);
+                l.plugin.service(now);
+            }
         }
-        for l in self.inserts.iter_mut().flatten().flatten() {
-            l.plugin.service(now);
+        for (i, row) in self.inserts.iter_mut().enumerate() {
+            for (k, l) in row.iter_mut().enumerate() {
+                if let Some(l) = l {
+                    let _call = guard.call(insert_id(i, k), "running its timers", limit);
+                    l.plugin.service(now);
+                }
+            }
         }
         let evict = self
             .editors
@@ -1376,9 +1416,15 @@ impl Session {
 
     /// Copies every plugin's current state into the rig (so it gets saved).
     fn capture_states(&mut self) {
+        let guard = self.guard.clone();
+        let limit = Duration::from_secs(15);
         for i in 0..UI_SLOTS {
             if let Some(l) = self.plugins[i].as_mut() {
-                match l.plugin.save_state() {
+                let saved = {
+                    let _call = guard.call(i, "saving its state", limit);
+                    l.plugin.save_state()
+                };
+                match saved {
                     Ok(state) => self.rig.slots[i].state = Some(state),
                     Err(e) => {
                         let line = format!("slot {}: cannot save state: {e:#}", i + 1);
@@ -1387,11 +1433,16 @@ impl Session {
                 }
             }
             for k in 0..MAX_INSERTS {
-                if let Some(l) = self.inserts[i][k].as_mut()
-                    && let Ok(state) = l.plugin.save_state()
-                    && let Some(Some(ins)) = self.rig.slots[i].inserts.get_mut(k)
-                {
-                    ins.state = Some(state);
+                if let Some(l) = self.inserts[i][k].as_mut() {
+                    let saved = {
+                        let _call = guard.call(insert_id(i, k), "saving its state", limit);
+                        l.plugin.save_state()
+                    };
+                    if let Ok(state) = saved
+                        && let Some(Some(ins)) = self.rig.slots[i].inserts.get_mut(k)
+                    {
+                        ins.state = Some(state);
+                    }
                 }
             }
         }
@@ -1409,6 +1460,11 @@ impl Session {
 
     /// Writes the autosave if it is due (or `force`).
     pub fn autosave(&mut self, every: Duration, force: bool) {
+        let due = self.autosave_after.is_some_and(|t| Instant::now() >= t);
+        if due {
+            self.autosave_after = None;
+        }
+        let force = force || due;
         if every.is_zero() && !force {
             return;
         }
@@ -1425,6 +1481,12 @@ impl Session {
         if let Err(e) = write_rig(&self.rig, &crate::paths::autosave_file()) {
             self.say(format!("autosave failed: {e:#}"));
         }
+    }
+
+    /// Asks for an autosave in a moment (several changes in a row share one).
+    fn autosave_soon(&mut self) {
+        self.autosave_after
+            .get_or_insert_with(|| Instant::now() + Duration::from_secs(2));
     }
 
     pub fn new_rig(&mut self) {
@@ -1625,14 +1687,22 @@ impl Session {
             found.info.name,
             t.elapsed()
         ));
-        self.autosave(Duration::ZERO, true);
+        self.autosave_soon();
         Ok(())
     }
 
     fn install_insert(&mut self, slot: usize, index: usize, mut loaded: Loaded) -> Result<()> {
-        let processor = loaded
-            .plugin
-            .activate(self.sample_rate as f64, MAX_BLOCK as u32)?;
+        let guard = self.guard.clone();
+        let processor = {
+            let _call = guard.call(
+                insert_id(slot, index),
+                "starting up",
+                Duration::from_secs(30),
+            );
+            loaded
+                .plugin
+                .activate(self.sample_rate as f64, MAX_BLOCK as u32)?
+        };
         self.inserts[slot][index] = Some(loaded);
         self.engine
             .send(Command::SetInsert {

@@ -15,7 +15,7 @@ use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use merlin_scanner::{Quarantine, Quarantined};
 
@@ -30,12 +30,33 @@ pub struct HostInfo {
     pub name: String,
 }
 
+/// What the main thread is doing inside a plugin right now, and how long that may take.
+struct Busy {
+    id: usize,
+    what: &'static str,
+    limit: Duration,
+    since: Instant,
+}
+
 pub struct Guard {
     hosts: Mutex<HashMap<u32, HostInfo>>,
+    /// Every loaded plugin by slot id (not only Wine ones), for naming a plugin that hangs.
+    plugins: Mutex<HashMap<usize, HostInfo>>,
+    /// The plugin call the main thread is in, if any (calls nest: the older one is kept below).
+    busy: Mutex<Vec<Busy>>,
     /// Plugins being removed on purpose right now: their sockets closing is expected.
     closing: AtomicUsize,
     /// Shutting down: nothing is a crash any more.
     disarmed: AtomicBool,
+}
+
+/// Ends a [`Guard::call`] when dropped.
+pub struct CallGuard(Arc<Guard>);
+
+impl Drop for CallGuard {
+    fn drop(&mut self) {
+        self.0.busy.lock().unwrap().pop();
+    }
 }
 
 /// `(pid, parent pid, command name, state)` of every process.
@@ -105,6 +126,8 @@ impl Guard {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             hosts: Mutex::new(HashMap::new()),
+            plugins: Mutex::new(HashMap::new()),
+            busy: Mutex::new(Vec::new()),
             closing: AtomicUsize::new(0),
             disarmed: AtomicBool::new(false),
         })
@@ -127,6 +150,26 @@ impl Guard {
     /// Call before a plugin is removed on purpose, so its host exiting is not a crash.
     pub fn unregister_slot(&self, slot: usize) {
         self.hosts.lock().unwrap().retain(|_, h| h.slot != slot);
+        self.plugins.lock().unwrap().remove(&slot);
+    }
+
+    /// Remembers which plugin sits in `info.slot` (a slot or insert id), so a hang in it can be
+    /// blamed on the right file.
+    pub fn register_plugin(&self, info: HostInfo) {
+        self.plugins.lock().unwrap().insert(info.slot, info);
+    }
+
+    /// Marks that the main thread is about to call into the plugin `id` for `what`. If it is
+    /// still in there after `limit`, the watchdog gives up on the plugin: it is quarantined and
+    /// the app restarts from its autosave. Drop the returned value when the call returns.
+    pub fn call(self: &Arc<Self>, id: usize, what: &'static str, limit: Duration) -> CallGuard {
+        self.busy.lock().unwrap().push(Busy {
+            id,
+            what,
+            limit,
+            since: Instant::now(),
+        });
+        CallGuard(self.clone())
     }
 
     /// Brackets the deliberate removal of a plugin.
@@ -160,7 +203,31 @@ impl Guard {
                 .map(|(_, info)| info.clone())
         };
         if let Some(info) = dead {
-            recover(&info);
+            recover(
+                &info,
+                "its Wine host process died while the app was running",
+            );
+        }
+    }
+
+    /// Restarts the app if the main thread has been stuck in one plugin call for too long: a
+    /// plugin that deadlocks cannot be recovered in place, and a frozen window on stage is the
+    /// worst outcome.
+    fn recover_if_hung(&self) {
+        if self.disarmed.load(Ordering::SeqCst) {
+            return;
+        }
+        let stuck = {
+            let busy = self.busy.lock().unwrap();
+            busy.iter()
+                .find(|b| b.since.elapsed() > b.limit)
+                .map(|b| (b.id, b.what))
+        };
+        let Some((id, what)) = stuck else { return };
+        let info = self.plugins.lock().unwrap().get(&id).cloned();
+        match info {
+            Some(info) => recover(&info, &format!("it stopped responding while {what}")),
+            None => eprintln!("the main thread is stuck {what} in an unknown plugin"),
         }
     }
 
@@ -174,6 +241,7 @@ impl Guard {
                 loop {
                     std::thread::sleep(Duration::from_millis(250));
                     guard.recover_if_dead();
+                    guard.recover_if_hung();
                 }
             })
             .expect("spawn guard thread");
@@ -181,7 +249,7 @@ impl Guard {
 }
 
 /// Quarantines the plugin and restarts the app. Only returns if the restart failed.
-fn recover(info: &HostInfo) {
+fn recover(info: &HostInfo, reason: &str) {
     // The watchdog thread and the terminate hook can both get here; the first one restarts.
     static RECOVERING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if RECOVERING.swap(true, std::sync::atomic::Ordering::SeqCst) {
@@ -189,7 +257,7 @@ fn recover(info: &HostInfo) {
         return;
     }
     eprintln!(
-        "{} (slot {}) crashed its Wine host: quarantining it and restarting from the autosave",
+        "{} (slot {}): {reason}; quarantining it and restarting from the autosave",
         info.name,
         info.slot + 1
     );
@@ -199,7 +267,7 @@ fn recover(info: &HostInfo) {
         path: info.path.clone(),
         id: info.id.clone(),
         name: info.name.clone(),
-        reason: "its Wine host process died while the app was running".into(),
+        reason: reason.into(),
         when: SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_secs()),

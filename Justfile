@@ -32,6 +32,18 @@ dev *args:
 #   gh release upload runtime dist/runtime/* --clobber                           (later)
 # To try the download without publishing: serve the folder (`python3 -m http.server -d dist/runtime`)
 # and set runtime_url = "http://127.0.0.1:8000/runtime-manifest.json" in settings.toml.
+# Compatibility pass: loads every instrument and effect it finds, one app process each, plays, saves
+# and reopens the rig, and writes docs/compat-matrix.md. `just compat` tries everything (about a
+# minute per Windows plugin); `just compat Podolski Surge` only labels containing those words.
+compat *filters:
+    cargo build --release -p merlin
+    PATH="{{yabridge_dir}}:$PATH" WINELOADER={{patched_wine}} \
+        WINEPREFIX="{{justfile_directory()}}/{{assets}}/wine/prefix-vblank" \
+        python3 tools/compat.py {{filters}} -- \
+        --plugin-dir {{assets}}/dl/surge-linux --plugin-dir {{assets}}/sf
+
+# A pretend MIDI keyboard (a JACK MIDI source, like a USB keyboard through PipeWire) for trying the
+# MIDI settings without hardware. It plays a scale and unplugs itself after SECONDS.
 fake-keyboard name="Fake Keyboard" seconds="60":
     cargo run -q -p merlin-audio-io --release --example fake_keyboard -- "{{name}}" {{seconds}}
 
