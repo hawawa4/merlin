@@ -35,6 +35,7 @@ impl Session {
         shared.set_tempo(t.tempo);
         shared.set_beats_per_bar(t.beats_per_bar);
         shared.set_click(t.click, t.click_volume);
+        self.disarm();
     }
 
     /// Sets the tempo for now and as the rig's own (what a tap or a nudge does).
@@ -84,16 +85,28 @@ impl Session {
     /// Starts (after the count-in) or stops.
     pub fn transport_toggle(&mut self) {
         let shared = &self.engine.shared.transport;
-        if shared.running() || shared.counting_in() {
+        if self.pending_start.take().is_some() {
+            self.say("start cancelled");
+        } else if shared.running() || shared.counting_in() {
             shared.stop();
+            // The tracks have been played: open them again for the next start.
+            self.needs_rearm = self.armed_song.is_some();
             self.say("transport stopped");
+        } else if self.must_wait_for_tracks() {
+            self.say("loading the backing tracks, then starting");
+            self.pending_start = Some(Instant::now());
         } else {
-            let t = self.rig.transport;
-            // The song's own time signature is already on the audio thread.
-            let beats = u32::from(t.count_in_bars) * u32::from(t.beats_per_bar);
-            shared.start(beats.min(255) as u8);
-            self.say(format!("transport started at {:.0} bpm", shared.tempo()));
+            self.start_transport_now();
         }
+    }
+
+    pub(super) fn start_transport_now(&mut self) {
+        let t = self.rig.transport;
+        // The song's own time signature is already on the audio thread.
+        let beats = u32::from(t.count_in_bars) * u32::from(t.beats_per_bar);
+        let shared = &self.engine.shared.transport;
+        shared.start(beats.min(255) as u8);
+        self.say(format!("transport started at {:.0} bpm", shared.tempo()));
     }
 
     pub fn tap_tempo(&mut self) {

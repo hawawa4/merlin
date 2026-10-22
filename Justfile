@@ -14,9 +14,9 @@ default:
 
 # The app. Loads plugins from the standard CLAP folders plus test-assets (Linux and, through
 # our patched Wine, Windows ones). Try: just dev --fresh      just dev --rig my.irig
-# This round: transport and click. Perform view: START/STOP (with a count-in), tempo -/+ and TAP, CLICK and its
-# level. Settings -> Audio: send the click to your interface's headphone outputs instead of the main mix.
-# Entering a song part changes the tempo. See docs/qa-checklist.md section 5g.
+# This round: backing tracks. Setlist -> add a song, "+ Add track" (type a path, or drop a WAV/FLAC/MP3/OGG on the window),
+# enter the song with "Go", then START in the Perform view: the tracks play after the count-in, stop with STOP, and
+# can be muted per track. Tick "cue" to send one to the click output. See docs/qa-checklist.md section 5h.
 dev *args:
     cargo build -p merlin --release
     PATH="{{yabridge_dir}}:$PATH" WINELOADER={{patched_wine}} \

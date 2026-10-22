@@ -191,8 +191,12 @@ impl Session {
                 .get(part)
                 .map_or_else(|| "start".to_owned(), |p| p.label(part))
         );
-        self.position = Some((song, part));
         let (tempo, beats) = (s.tempo_in(part), s.beats_per_bar);
+        let changed_song = self.position.is_none_or(|(s, _)| s != song);
+        self.position = Some((song, part));
+        if changed_song || self.armed_song != Some(song) {
+            self.arm_song(song);
+        }
         self.set_tempo_for_part(tempo, beats);
         if let Some(n) = snapshot {
             self.recall_snapshot(n);

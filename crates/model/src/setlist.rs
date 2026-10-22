@@ -2,11 +2,16 @@
 //! a snapshot plus what is special about it (a tempo, a note for the player). All songs share
 //! the rig's slots, so moving between songs only changes what plays and how.
 
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 
 /// Most songs in a rig, and most parts in a song.
 pub const MAX_SONGS: usize = 256;
 pub const MAX_PARTS: usize = 64;
+
+/// Most backing tracks a song can play at once.
+pub const MAX_TRACKS: usize = 16;
 
 pub const MIN_TEMPO: f32 = 20.0;
 pub const MAX_TEMPO: f32 = 300.0;
@@ -35,6 +40,45 @@ impl Part {
     }
 }
 
+/// A backing track: an audio file played in time with the song.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Track {
+    pub name: String,
+    pub path: PathBuf,
+    /// Linear gain, 0..=2 (1 = as recorded).
+    pub gain: f32,
+    pub mute: bool,
+    /// Plays on the cue output (where the click goes) instead of the main mix: a guide track
+    /// for the player's headphones.
+    pub cue: bool,
+}
+
+impl Default for Track {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            path: PathBuf::new(),
+            gain: 1.0,
+            mute: false,
+            cue: false,
+        }
+    }
+}
+
+impl Track {
+    /// The name, or the file's name.
+    pub fn label(&self) -> String {
+        if self.name.trim().is_empty() {
+            self.path
+                .file_stem()
+                .map_or_else(|| "track".to_owned(), |s| s.to_string_lossy().into_owned())
+        } else {
+            self.name.clone()
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Song {
@@ -44,6 +88,8 @@ pub struct Song {
     pub beats_per_bar: u8,
     pub parts: Vec<Part>,
     pub note: String,
+    /// Backing tracks, played from the start of the run.
+    pub tracks: Vec<Track>,
 }
 
 impl Default for Song {
@@ -54,6 +100,7 @@ impl Default for Song {
             beats_per_bar: 4,
             parts: Vec::new(),
             note: String::new(),
+            tracks: Vec::new(),
         }
     }
 }
@@ -81,6 +128,8 @@ impl Song {
         tempo(self.tempo)
             && (1..=16).contains(&self.beats_per_bar)
             && self.parts.len() <= MAX_PARTS
+            && self.tracks.len() <= MAX_TRACKS
+            && self.tracks.iter().all(|t| (0.0..=2.0).contains(&t.gain))
             && self
                 .parts
                 .iter()
@@ -123,6 +172,23 @@ mod tests {
         assert!(!song.is_valid(1), "snapshot 2 does not exist");
         song.parts[0].snapshot = None;
         song.tempo = 5.0;
+        assert!(!song.is_valid(0));
+    }
+
+    #[test]
+    fn tracks_have_names_and_limits() {
+        let t = Track {
+            path: "/music/stems/Drums.wav".into(),
+            ..Track::default()
+        };
+        assert_eq!(t.label(), "Drums");
+        let mut song = Song {
+            tracks: vec![t; MAX_TRACKS + 1],
+            ..Song::default()
+        };
+        assert!(!song.is_valid(0));
+        song.tracks.truncate(1);
+        song.tracks[0].gain = 3.0;
         assert!(!song.is_valid(0));
     }
 

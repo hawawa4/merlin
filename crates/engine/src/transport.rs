@@ -5,7 +5,7 @@
 //! them. Everything is sample-accurate inside a block: the clock is 24 ticks per beat and every
 //! beat (every 24th tick) is where the click sounds and the bar counter moves.
 
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 
 const TICKS_PER_BEAT: u32 = 24;
 /// The click: a short decaying sine, higher on the first beat of a bar.
@@ -38,6 +38,8 @@ pub struct TransportShared {
     beat: AtomicU32,
     /// Counts every beat the click has marked since the app started, to see it is alive.
     beats_total: AtomicU32,
+    /// Frames since the run started (not counting the count-in).
+    run_frames: AtomicU64,
 }
 
 impl TransportShared {
@@ -55,6 +57,7 @@ impl TransportShared {
             bar: AtomicU32::new(0),
             beat: AtomicU32::new(0),
             beats_total: AtomicU32::new(0),
+            run_frames: AtomicU64::new(0),
         }
     }
 
@@ -112,6 +115,11 @@ impl TransportShared {
         )
     }
 
+    /// Seconds since the run started (the count-in does not count).
+    pub fn run_seconds(&self, sample_rate: f32) -> f64 {
+        self.run_frames.load(Ordering::Relaxed) as f64 / f64::from(sample_rate)
+    }
+
     pub fn beats_total(&self) -> u32 {
         self.beats_total.load(Ordering::Relaxed)
     }
@@ -124,8 +132,19 @@ pub struct ClockEvent {
     pub byte: u8,
 }
 
+/// What happened in a block that the rest of the engine has to act on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TransportEvents {
+    /// The run began at this frame of the block (backing tracks start here).
+    pub run_start: Option<u32>,
+    /// A stop was handled at the start of the block.
+    pub stopped: bool,
+}
+
 pub struct Transport {
     sample_rate: f32,
+    run_start: Option<u32>,
+    run_frames: u64,
     /// Frames until the next clock tick; `None` while stopped.
     until_tick: Option<f64>,
     tick: u32,
@@ -145,6 +164,8 @@ impl Transport {
     pub fn new(sample_rate: f32) -> Self {
         Self {
             sample_rate,
+            run_start: None,
+            run_frames: 0,
             until_tick: None,
             tick: 0,
             count_in_left: 0,
@@ -178,7 +199,9 @@ impl Transport {
         click_l: &mut [f32],
         click_r: &mut [f32],
         clock: &mut Vec<ClockEvent>,
-    ) {
+    ) -> TransportEvents {
+        let mut events = TransportEvents::default();
+        self.run_start = None;
         let frames = click_l.len().min(click_r.len());
         clock.clear();
         click_l[..frames].fill(0.0);
@@ -197,8 +220,10 @@ impl Transport {
                 self.beat_in_bar = 0;
                 self.bar = 0;
                 self.click_active = false;
+                self.run_frames = 0;
             }
             REQ_STOP => {
+                events.stopped = self.until_tick.is_some();
                 if self.until_tick.is_some() {
                     clock.push(ClockEvent {
                         time: 0,
@@ -264,12 +289,20 @@ impl Transport {
                 self.click_pos += 1;
             }
         }
+        events.run_start = self.run_start;
+        if let Some(at) = self.run_start {
+            self.run_frames = (frames as u64).saturating_sub(u64::from(at));
+        } else if self.running {
+            self.run_frames += frames as u64;
+        }
+        shared.run_frames.store(self.run_frames, Ordering::Relaxed);
         shared.running.store(self.running, Ordering::Relaxed);
         shared.counting_in.store(self.counting, Ordering::Relaxed);
         if self.until_tick.is_none() {
             shared.bar.store(0, Ordering::Relaxed);
             shared.beat.store(0, Ordering::Relaxed);
         }
+        events
     }
 
     /// A beat begins: moves the count-in or the bar counter on. Returns whether it is the first
@@ -285,6 +318,7 @@ impl Transport {
         } else if !self.running {
             // The count-in is over: this beat is bar 1, beat 1.
             self.running = true;
+            self.run_start = Some(at);
             self.counting = false;
             self.bar = 1;
             self.beat_in_bar = 0;

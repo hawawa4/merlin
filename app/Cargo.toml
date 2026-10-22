@@ -24,6 +24,7 @@ merlin-embed.workspace = true
 merlin-scanner.workspace = true
 merlin-wine.workspace = true
 merlin-control.workspace = true
+merlin-backing.workspace = true
 rtrb.workspace = true
 anyhow.workspace = true
 serde.workspace = true

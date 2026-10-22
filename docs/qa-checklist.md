@@ -91,6 +91,16 @@ Snapshots are saved inside the rig file, so one file holds the whole setup.
 - [ ] Settings > Controls: *Start / stop*, *Click on / off*, *Tap tempo* on a foot switch or pad.
 - [ ] Close and reopen the rig: tempo, count-in and click settings are back.
 
+## 5h. Backing tracks
+- [ ] Setlist > a song > **+ Add track**: type the path of a stem (or drop a file on the window while the Setlist screen is open). It says *loading...* then *ready 3:07*. A file that is not audio says *cannot play* (hover for why).
+- [ ] **Go** on a part of the song, Perform view, **START**: after the count-in the tracks play together, in time with the click. The clock shows 0:00 / length. **STOP** stops them (no click or pop), and **START** again restarts from the top.
+- [ ] Try your real stems: a long stereo WAV, a 44.1 kHz file (resampled), an MP3 and a mono file. Does anything drift against the click over a whole song? Any gaps or crackles? (The audio-engine counter *underruns* in the log lines would grow if the disk could not keep up.)
+- [ ] 8+ stems at once from a slow disk or a USB stick.
+- [ ] Per-track **gain**, **mute** (also in Perform) and **cue**: a cue track is heard only on the click output (headphones), not in the main mix (Settings > Audio > Click output).
+- [ ] Switch to another song and back (parts, foot switch, Setlist): the tracks of the entered song are the ones that play.
+- [ ] Save, reopen: the tracks are still listed; delete or move a file and open the rig: that track says *cannot play* and the rest still work.
+- [ ] Part tempo overrides change the click but not the recorded stems: expected.
+
 ## 6. Stability
 - [ ] Kill a Windows plugin's Wine process while the app runs: `pgrep -af yabridge-host`, then `kill -9 <pid>` of one. The app should restart itself from the autosave and name the plugin it quarantined (it comes back with *Retry*).
 - [ ] The 2-hour rehearsal: 6–8 instruments including a Windows one, switching and playing for 2 hours. For an unattended version: `just soak 7200 3 --windows "Six Sines"`, then read the `state:` lines (xruns, held keys, RSS, threads). Expect 0 xruns, 0 held keys at the end, memory flat.

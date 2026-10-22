@@ -69,6 +69,7 @@ def main():
     selection_check()
     setlist_check()
     transport_check()
+    backing_check()
 
 
 SNAP_FILE = Path(tempfile.gettempdir()) / "irig-e2e-snapshots.irig"
@@ -227,6 +228,63 @@ def transport_check():
         print(out[-2500:])
         sys.exit(1)
     print(f"ok: the transport counts in, runs and stops: {rows}")
+
+
+def write_wav(path, rate, seconds, hz, amp):
+    import math
+    import struct
+    import wave
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(2)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        frames = bytearray()
+        for i in range(int(rate * seconds)):
+            s = int(math.sin(2 * math.pi * hz * i / rate) * amp * 32767)
+            frames += struct.pack("<hh", s, s)
+        w.writeframes(bytes(frames))
+
+
+def backing_check():
+    work = Path(tempfile.mkdtemp(prefix="irig-stems-"))
+    a, b = work / "stem a.wav", work / "stem b.wav"
+    write_wav(a, 44100, 20, 440, 0.3)  # 44.1 kHz: resampled to the engine's rate
+    write_wav(b, 48000, 20, 880, 0.2)
+    script = "; ".join(
+        [
+            "1:load 1 TimGM6mb", "2:song add", "2.1:song tempo 1 120", f"2.2:track add 1 {a}", f"2.3:track add 1 {b}",
+            "2.4:go 1 1", "2.5:countin 0", "2.6:click off",
+            "4:peak", "4.5:transport start", "5:peak", "5.5:report", "7:report", "7.5:transport stop",
+            "8.5:report", "9:transport start", "11:report", "12:peak", "13:quit",
+        ]
+    )
+    out = run(script, "1:B0 1 0", 3)
+    shutil.rmtree(work, ignore_errors=True)
+    rows = re.findall(r"transport (\w+) bar \d+ beat \d+ beats \d+, run ([\d.]+)s, underruns (\d+), stems (\w+)", out)
+    masters = [float(m) for m in re.findall(r"master:([\d.]+)", out)]
+    problems = []
+    if len(rows) != 4:
+        problems.append(f"reports {rows}")
+    else:
+        running1, running2, stopped, restarted = rows
+        if not (running1[0] == "running" and running1[3] == "true" and 0.5 < float(running1[1]) < 3):
+            problems.append(f"first run {running1}")
+        if not (float(running2[1]) > float(running1[1]) + 1.0):
+            problems.append(f"the song clock does not advance: {running1} {running2}")
+        if not (stopped[0] == "stopped" and stopped[3] == "false"):
+            problems.append(f"not stopped: {stopped}")
+        if not (restarted[0] == "running" and restarted[3] == "true" and float(restarted[1]) < 3):
+            problems.append(f"the second start did not restart the tracks from the top: {restarted}")
+        if any(int(r[2]) > 0 for r in rows):
+            problems.append(f"the decoder fell behind: {[r[2] for r in rows]}")
+    # Master peak: silent before the start; about 0.5 (0.3 + 0.2) with both tracks playing.
+    if len(masters) != 3 or masters[0] > 0.01 or not (0.35 < masters[1] < 0.6) or not (0.35 < masters[2] < 0.6):
+        problems.append(f"master peaks {masters}")
+    if problems:
+        print("FAIL (backing tracks)\n  " + "\n  ".join(problems))
+        print(out[-3000:])
+        sys.exit(1)
+    print(f"ok: two stems (one resampled) play with the run, stop with it and start again from the top: {rows}, peaks {masters}")
 
 
 def controls_check():

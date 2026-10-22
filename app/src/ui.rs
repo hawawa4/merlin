@@ -150,6 +150,9 @@ pub enum Action {
     /// text (or `sampler:level`, `sampler:brightness`, ... for a SoundFont).
     AddMacroParamNamed(usize, usize, String),
     ToggleSetlist,
+    AddTrack(usize, PathBuf),
+    RemoveTrack(usize, usize),
+    EditTrack(usize, usize, crate::session::TrackEdit),
     TransportToggle,
     TransportStart,
     TransportStop,
@@ -214,6 +217,8 @@ pub struct UiState {
     pub settings_open: bool,
     /// The Setlist screen is showing, and the song being edited in it.
     pub setlist_open: bool,
+    /// The path being typed for a new backing track.
+    pub track_text: String,
     pub edit_song: usize,
     /// The Perform view is showing.
     pub perform: bool,
@@ -262,6 +267,7 @@ impl UiState {
             tab: DockTab::Plugin,
             settings_open: false,
             setlist_open: false,
+            track_text: String::new(),
             edit_song: 0,
             perform: false,
             locked: false,

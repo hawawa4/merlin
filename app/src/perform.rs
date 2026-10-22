@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use egui::{Color32, RichText};
 
 use crate::keyboard::COLORS;
-use crate::session::{Session, UI_SLOTS};
+use crate::session::{Session, TrackState, UI_SLOTS};
 use crate::ui::{Action, UiState};
 
 /// How long Unlock has to be held: long enough that a brush against a touch screen does nothing.
@@ -216,7 +216,61 @@ fn transport(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
             actions.push(Action::SetCountIn(bars));
         }
     });
+    backing_row(ui, s, actions);
     ui.add_space(4.0);
+}
+
+/// The song's backing tracks: the clock and a mute for each.
+fn backing_row(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
+    let Some(n) = s.armed_song() else { return };
+    let Some(song) = s.songs().get(n) else { return };
+    if song.tracks.is_empty() {
+        return;
+    }
+    ui.horizontal_wrapped(|ui| {
+        let longest = (0..song.tracks.len())
+            .filter_map(|k| s.track_seconds(n, k))
+            .fold(0.0, f64::max);
+        let now = if s.transport_running() {
+            s.run_seconds()
+        } else {
+            0.0
+        };
+        ui.label(
+            RichText::new(format!(
+                "{} / {}",
+                crate::setlist_ui::clock(now),
+                crate::setlist_ui::clock(longest)
+            ))
+            .size(18.0)
+            .monospace(),
+        );
+        for (k, track) in song.tracks.iter().enumerate() {
+            let text = match s.track_state(n, k) {
+                TrackState::Failed(_) => format!("{}  (cannot play)", track.label()),
+                TrackState::Loading => format!("{}  ...", track.label()),
+                _ => track.label(),
+            };
+            let b = egui::Button::new(RichText::new(text).size(14.0))
+                .selected(!track.mute)
+                .min_size(egui::vec2(90.0, 30.0));
+            if ui
+                .add(b)
+                .on_hover_text(if track.cue {
+                    "Cue output (headphones)"
+                } else {
+                    "Main mix"
+                })
+                .clicked()
+            {
+                actions.push(Action::EditTrack(
+                    n,
+                    k,
+                    crate::session::TrackEdit::Mute(!track.mute),
+                ));
+            }
+        }
+    });
 }
 
 /// Where the setlist is: the song and its parts, with Previous / Next part and the other songs.

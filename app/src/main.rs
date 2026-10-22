@@ -580,6 +580,18 @@ impl Running {
                 s.set_click_output(p);
                 Ok(())
             }
+            Action::AddTrack(n, path) => {
+                s.add_track(n, path);
+                Ok(())
+            }
+            Action::RemoveTrack(n, k) => {
+                s.remove_track(n, k);
+                Ok(())
+            }
+            Action::EditTrack(n, k, edit) => {
+                s.edit_track(n, k, edit);
+                Ok(())
+            }
             Action::ToggleSetlist => {
                 self.ui.setlist_open = !self.ui.setlist_open;
                 if self.ui.setlist_open {
@@ -717,6 +729,17 @@ impl Running {
                     .and_then(|e| e.to_str())
                     .map(str::to_ascii_lowercase);
                 match ext.as_deref() {
+                    // Audio: a backing track for the song being edited in the Setlist screen.
+                    Some("wav" | "flac" | "mp3" | "ogg" | "m4a" | "aac") => {
+                        if self.ui.setlist_open && !self.session.songs().is_empty() {
+                            self.session.add_track(self.ui.edit_song, path);
+                            Ok(())
+                        } else {
+                            Err(anyhow::anyhow!(
+                                "open the Setlist screen first to add a backing track to a song"
+                            ))
+                        }
+                    }
                     Some("exe" | "msi") => {
                         // Show the progress where it is written.
                         self.ui.settings_open = true;
@@ -862,7 +885,13 @@ impl Running {
                     .map(|i| format!("{}:{:.3}", i + 1, peaks[i]))
                     .collect::<Vec<_>>()
                     .join(" ");
-                s.say(format!("peaks since last check: {line}"));
+                let master = f32::from_bits(
+                    s.engine
+                        .shared
+                        .master_peak
+                        .swap(0, std::sync::atomic::Ordering::Relaxed),
+                );
+                s.say(format!("peaks since last check: {line} master:{master:.3}"));
                 Ok(())
             }
             Action::Cpu => {
@@ -937,7 +966,7 @@ impl Running {
                 s.say(format!(
                     "state: rig '{}'{}, xruns {xruns}, DSP {dsp:.1}%, held keys {held}, \
                      RSS {rss_mb} MB, threads {threads}, midi {midi}, master {:.2}, vol1 {:.2}, targets {:?}, dock shows {:?}, \
-                     popup {}, slots {}, perform {}, locked {}, macro1 {:.2}, gain1 {:.2}, position {:?}, tempo {:.0}, transport {} bar {} beat {} beats {}",
+                     popup {}, slots {}, perform {}, locked {}, macro1 {:.2}, gain1 {:.2}, position {:?}, tempo {:.0}, transport {} bar {} beat {} beats {}, run {:.1}s, underruns {}, stems {}",
                     s.rig.name,
                     if s.dirty { " (modified)" } else { "" },
                     s.rig.master_volume,
@@ -955,7 +984,10 @@ impl Running {
                     if s.transport_running() { "running" } else if s.counting_in() { "counting" } else { "stopped" },
                     s.engine.shared.transport.position().0,
                     s.engine.shared.transport.position().1,
-                    s.engine.shared.transport.beats_total()
+                    s.engine.shared.transport.beats_total(),
+                    s.run_seconds(),
+                    s.engine.shared.backing_underruns.load(std::sync::atomic::Ordering::Relaxed),
+                    s.engine.shared.stems_playing.load(std::sync::atomic::Ordering::Relaxed)
                 ));
                 Ok(())
             }
@@ -1329,6 +1361,29 @@ fn parse_script() -> Vec<(Duration, Action)> {
                 "click" => Action::SetClickState(words.next()? == "on"),
                 "tap" => Action::TapTempo,
                 "countin" => Action::SetCountIn(words.next()?.parse().ok()?),
+                // track add S path | track gain S K v | track cue S K on|off | track mute S K on|off
+                "track" => match words.next()? {
+                    "add" => {
+                        let n = slot(words.next())?;
+                        Action::AddTrack(n, PathBuf::from(words.collect::<Vec<_>>().join(" ")))
+                    }
+                    "gain" => Action::EditTrack(
+                        slot(words.next())?,
+                        slot(words.next())?,
+                        session::TrackEdit::Gain(words.next()?.parse().ok()?),
+                    ),
+                    "cue" => Action::EditTrack(
+                        slot(words.next())?,
+                        slot(words.next())?,
+                        session::TrackEdit::Cue(words.next()? == "on"),
+                    ),
+                    "mute" => Action::EditTrack(
+                        slot(words.next())?,
+                        slot(words.next())?,
+                        session::TrackEdit::Mute(words.next()? == "on"),
+                    ),
+                    _ => return None,
+                },
                 "go" => Action::GoTo(slot(words.next())?, slot(words.next())?),
                 "nextpart" => Action::NextPart,
                 "prevpart" => Action::PrevPart,

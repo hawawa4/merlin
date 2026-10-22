@@ -3,7 +3,7 @@
 
 use egui::{Color32, RichText};
 
-use crate::session::Session;
+use crate::session::{Session, TrackEdit, TrackState};
 use crate::ui::{Action, PartEdit, SongEdit, UiState};
 
 pub fn show(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
@@ -31,7 +31,7 @@ pub fn show(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<
         if s.songs().is_empty() {
             ui.label("Add a song to begin.");
         } else {
-            song_editor(ui, s, st.edit_song, actions);
+            song_editor(ui, s, st, actions);
         }
     });
 }
@@ -79,7 +79,8 @@ fn songs(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Act
     }
 }
 
-fn song_editor(ui: &mut egui::Ui, s: &Session, n: usize, actions: &mut Vec<Action>) {
+fn song_editor(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
+    let n = st.edit_song;
     let Some(song) = s.songs().get(n) else { return };
     ui.horizontal(|ui| {
         ui.label("Name");
@@ -237,7 +238,109 @@ fn song_editor(ui: &mut egui::Ui, s: &Session, n: usize, actions: &mut Vec<Actio
                 actions.push(Action::AddPart(n, false));
             }
         });
+        ui.add_space(12.0);
+        tracks(ui, s, st, n, actions);
     });
+}
+
+/// The song's backing tracks.
+fn tracks(ui: &mut egui::Ui, s: &Session, st: &mut UiState, n: usize, actions: &mut Vec<Action>) {
+    let Some(song) = s.songs().get(n) else { return };
+    ui.strong("Backing tracks");
+    ui.label(
+        RichText::new("Audio files (WAV, FLAC, MP3, OGG, M4A) that play from the start of the song when the transport starts, after the count-in. Tick *cue* to send a track to the click output instead of the main mix (a guide for your headphones). Drop a file on the window to add it.")
+            .small()
+            .weak(),
+    );
+    for (k, track) in song.tracks.iter().enumerate() {
+        ui.horizontal(|ui| {
+            let mut name = track.name.clone();
+            if ui
+                .add(
+                    egui::TextEdit::singleline(&mut name)
+                        .hint_text(track.label())
+                        .desired_width(150.0),
+                )
+                .changed()
+            {
+                actions.push(Action::EditTrack(n, k, TrackEdit::Name(name)));
+            }
+            let file = track
+                .path
+                .file_name()
+                .map_or_else(String::new, |f| f.to_string_lossy().into_owned());
+            ui.label(RichText::new(file).small().weak())
+                .on_hover_text(track.path.display().to_string());
+            match s.track_state(n, k) {
+                TrackState::Ready => {
+                    let len = s
+                        .track_seconds(n, k)
+                        .map_or_else(String::new, |t| format!("  {}", clock(t)));
+                    ui.colored_label(Color32::from_rgb(0x6c, 0xc9, 0x6a), format!("ready{len}"));
+                }
+                TrackState::Loading => {
+                    ui.colored_label(Color32::from_rgb(0xe0, 0xb4, 0x4a), "loading...");
+                }
+                TrackState::Failed(why) => {
+                    ui.colored_label(Color32::from_rgb(0xe0, 0x6c, 0x5a), "cannot play")
+                        .on_hover_text(why);
+                }
+                TrackState::NotArmed => {
+                    ui.label(
+                        RichText::new("(opens when the song is entered)")
+                            .small()
+                            .weak(),
+                    );
+                }
+            }
+            let mut gain = track.gain;
+            ui.spacing_mut().slider_width = 100.0;
+            if ui
+                .add(
+                    egui::Slider::new(&mut gain, 0.0..=2.0)
+                        .fixed_decimals(2)
+                        .text("gain"),
+                )
+                .changed()
+            {
+                actions.push(Action::EditTrack(n, k, TrackEdit::Gain(gain)));
+            }
+            let mut mute = track.mute;
+            if ui.checkbox(&mut mute, "mute").changed() {
+                actions.push(Action::EditTrack(n, k, TrackEdit::Mute(mute)));
+            }
+            let mut cue = track.cue;
+            if ui.checkbox(&mut cue, "cue").changed() {
+                actions.push(Action::EditTrack(n, k, TrackEdit::Cue(cue)));
+            }
+            if ui
+                .small_button("x")
+                .on_hover_text("Remove the track")
+                .clicked()
+            {
+                actions.push(Action::RemoveTrack(n, k));
+            }
+        });
+    }
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::TextEdit::singleline(&mut st.track_text)
+                .hint_text("/path/to/stem.wav")
+                .desired_width(420.0),
+        );
+        if ui.button("+ Add track").clicked() && !st.track_text.trim().is_empty() {
+            actions.push(Action::AddTrack(
+                n,
+                std::mem::take(&mut st.track_text).trim().into(),
+            ));
+        }
+    });
+}
+
+/// `3:07` from seconds.
+pub fn clock(secs: f64) -> String {
+    let t = secs.max(0.0) as u64;
+    format!("{}:{:02}", t / 60, t % 60)
 }
 
 fn snapshot_picker(

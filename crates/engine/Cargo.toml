@@ -9,6 +9,7 @@ publish.workspace = true
 merlin-model.workspace = true
 merlin-hosting.workspace = true
 merlin-dsp.workspace = true
+merlin-backing.workspace = true
 rtrb.workspace = true
 
 [dev-dependencies]

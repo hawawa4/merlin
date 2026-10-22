@@ -19,6 +19,7 @@ use merlin_model::{
 use merlin_scanner::{Cache, Entry, Found, Quarantine};
 use std::sync::mpsc;
 
+mod backing;
 mod controls;
 mod macros;
 mod setlist;
@@ -121,6 +122,8 @@ impl Waker for SlotWaker {
     }
 }
 
+pub use backing::{TrackEdit, TrackState};
+
 pub struct Loaded {
     pub plugin: Box<dyn PluginHandle>,
 }
@@ -197,6 +200,13 @@ pub struct Session {
     last_snapshot: Option<usize>,
     /// The song and part entered last.
     position: Option<(usize, usize)>,
+    /// The song whose backing tracks are open, and how each of its tracks went.
+    armed_song: Option<usize>,
+    armed: Vec<backing::Armed>,
+    /// The armed tracks were played: arm them again once the transport is idle.
+    needs_rearm: bool,
+    /// START was pressed while the tracks were still loading.
+    pending_start: Option<Instant>,
     /// When the tempo was last tapped.
     taps: Vec<Instant>,
     /// What each plugin said about its parameters, by (slot, insert).
@@ -290,6 +300,10 @@ impl Session {
             last_control: None,
             last_snapshot: None,
             position: None,
+            armed_song: None,
+            armed: Vec::new(),
+            needs_rearm: false,
+            pending_start: None,
             taps: Vec::new(),
             param_cache: Default::default(),
             midi_seen: Default::default(),
@@ -1455,7 +1469,11 @@ impl Session {
             .chain(self.inserts.iter().flatten().flatten())
             .filter_map(|l| l.plugin.next_deadline())
             .min();
-        [timers, evict].into_iter().flatten().min()
+        self.service_backing();
+        // While backing tracks are being re-armed or waited for, look again soon.
+        let backing = (self.needs_rearm || self.pending_start.is_some())
+            .then(|| now + Duration::from_millis(50));
+        [timers, evict, backing].into_iter().flatten().min()
     }
 
     // ---- persistence -----------------------------------------------------------------

@@ -11,9 +11,9 @@ mod events;
 pub mod router;
 pub mod transport;
 
-use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64};
 
-pub use engine::{ClickOut, Command, Engine, EngineHandle, Retired, new};
+pub use engine::{ClickOut, Command, Engine, EngineHandle, MAX_STEMS, Retired, Stem, new};
 pub use merlin_model::{MAX_SLOTS, SelectMode};
 pub use router::{Filter, MAX_INPUTS, Router};
 pub use transport::{ClockEvent, MIDI_CLOCK, MIDI_START, MIDI_STOP, Transport, TransportShared};
@@ -41,6 +41,9 @@ pub struct Shared {
     pub blocks: AtomicU64,
     /// Tempo, click and start/stop (see [`transport`]).
     pub transport: TransportShared,
+    /// Backing tracks are playing; and how often one ran dry (the decoder fell behind).
+    pub stems_playing: AtomicBool,
+    pub backing_underruns: AtomicU32,
 }
 
 impl Shared {
@@ -57,6 +60,8 @@ impl Shared {
             dropped_events: AtomicU32::new(0),
             blocks: AtomicU64::new(0),
             transport: TransportShared::new(),
+            stems_playing: AtomicBool::new(false),
+            backing_underruns: AtomicU32::new(0),
         }
     }
 }

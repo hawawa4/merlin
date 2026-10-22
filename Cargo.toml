@@ -31,6 +31,7 @@ merlin-embed = { path = "crates/embed" }
 merlin-scanner = { path = "crates/scanner" }
 merlin-wine = { path = "crates/wine" }
 merlin-control = { path = "crates/control" }
+merlin-backing = { path = "crates/backing" }
 
 [profile.release]
 debug = 1

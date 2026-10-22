@@ -9,10 +9,14 @@ use merlin_model::{FxSettings, MAX_INSERTS, MAX_SLOTS, SelectMode};
 use crate::Shared;
 use crate::events::EventBuf;
 use crate::router::{Filter, Router};
-use crate::transport::{ClockEvent, Transport};
+use merlin_backing::StemReader;
+
+use crate::transport::{ClockEvent, Transport, TransportEvents};
 
 const COMMAND_QUEUE: usize = 256;
 const RETIRED_QUEUE: usize = 64;
+/// Backing tracks a song can play together.
+pub const MAX_STEMS: usize = 16;
 /// Master duck around a panic.
 const FADE_OUT_SECS: f32 = 0.005;
 const FADE_IN_SECS: f32 = 0.020;
@@ -67,10 +71,48 @@ pub enum Command {
         settings: FxSettings,
     },
     SetInheritPedal(bool),
+    /// Adds a backing track (it plays from the start of the transport's run). At most
+    /// [`MAX_STEMS`]; extra ones come straight back as retired.
+    AddStem(Stem),
+    /// Takes every backing track out; they come back through [`EngineHandle::take_retired_stems`].
+    ClearStems,
+    SetStemMix {
+        index: usize,
+        gain: f32,
+        mute: bool,
+        cue: bool,
+    },
     SetMasterVolume(f32),
     /// The master limiter is on by default.
     SetLimiter(bool),
     Panic,
+}
+
+/// A backing track on the audio thread.
+pub struct Stem {
+    pub reader: StemReader,
+    pub gain: f32,
+    pub mute: bool,
+    /// Goes to the cue output (where the click goes) instead of the main mix.
+    pub cue: bool,
+    /// The gain applied at the end of the previous block, to ramp from.
+    last_gain: f32,
+}
+
+impl Stem {
+    pub fn new(reader: StemReader, gain: f32, mute: bool, cue: bool) -> Self {
+        Self {
+            reader,
+            gain,
+            mute,
+            cue,
+            last_gain: if mute { 0.0 } else { gain },
+        }
+    }
+
+    fn target(&self) -> f32 {
+        if self.mute { 0.0 } else { self.gain }
+    }
 }
 
 /// Audio thread -> main thread: a processor to be dropped (and deactivated) off the
@@ -86,6 +128,7 @@ pub struct Retired {
 pub struct EngineHandle {
     commands: rtrb::Producer<Command>,
     retired: rtrb::Consumer<Retired>,
+    retired_stems: rtrb::Consumer<Stem>,
     pub shared: Arc<Shared>,
 }
 
@@ -95,6 +138,15 @@ impl EngineHandle {
         self.commands
             .push(command)
             .map_err(|rtrb::PushError::Full(c)| c)
+    }
+
+    /// Backing tracks the engine has let go of since the last call.
+    pub fn take_retired_stems(&mut self) -> Vec<Stem> {
+        let mut v = Vec::new();
+        while let Ok(s) = self.retired_stems.pop() {
+            v.push(s);
+        }
+        v
     }
 
     /// Processors the engine has let go of since the last call.
@@ -186,7 +238,12 @@ pub struct Engine {
     sample_rate: f32,
     commands: rtrb::Consumer<Command>,
     retired: rtrb::Producer<Retired>,
+    retired_stems: rtrb::Producer<Stem>,
     shared: Arc<Shared>,
+    stems: Vec<Stem>,
+    stems_playing: bool,
+    stem_l: Vec<f32>,
+    stem_r: Vec<f32>,
     transport: Transport,
     click_l: Vec<f32>,
     click_r: Vec<f32>,
@@ -206,6 +263,7 @@ pub fn new(sample_rate: f32, max_block: usize) -> (Engine, EngineHandle) {
     let shared = Arc::new(Shared::new());
     let (cmd_tx, cmd_rx) = rtrb::RingBuffer::new(COMMAND_QUEUE);
     let (ret_tx, ret_rx) = rtrb::RingBuffer::new(RETIRED_QUEUE);
+    let (stem_tx, stem_rx) = rtrb::RingBuffer::new(MAX_STEMS * 2);
     let engine = Engine {
         max_block,
         router: Router::new(shared.clone()),
@@ -226,7 +284,12 @@ pub fn new(sample_rate: f32, max_block: usize) -> (Engine, EngineHandle) {
         sample_rate,
         commands: cmd_rx,
         retired: ret_tx,
+        retired_stems: stem_tx,
         shared: shared.clone(),
+        stems: Vec::with_capacity(MAX_STEMS),
+        stems_playing: false,
+        stem_l: vec![0.0; max_block],
+        stem_r: vec![0.0; max_block],
         transport: Transport::new(sample_rate),
         click_l: vec![0.0; max_block],
         click_r: vec![0.0; max_block],
@@ -235,6 +298,7 @@ pub fn new(sample_rate: f32, max_block: usize) -> (Engine, EngineHandle) {
     let handle = EngineHandle {
         commands: cmd_tx,
         retired: ret_rx,
+        retired_stems: stem_rx,
         shared,
     };
     (engine, handle)
@@ -314,6 +378,33 @@ impl Engine {
             Command::SetFx { slot, settings } => self.slots[slot].fx.set(&settings),
             Command::SetLimiter(on) => self.limiter_on = on,
             Command::SetInheritPedal(on) => self.router.inherit_pedal = on,
+            Command::AddStem(stem) => {
+                if self.stems.len() < MAX_STEMS {
+                    self.stems.push(stem);
+                } else {
+                    let _ = self.retired_stems.push(stem);
+                }
+            }
+            Command::ClearStems => {
+                self.stems_playing = false;
+                for stem in self.stems.drain(..) {
+                    // Freed on the main thread; if the queue is full the stem is leaked rather
+                    // than freed here.
+                    if let Err(rtrb::PushError::Full(s)) = self.retired_stems.push(stem) {
+                        std::mem::forget(s);
+                    }
+                }
+            }
+            Command::SetStemMix {
+                index,
+                gain,
+                mute,
+                cue,
+            } => {
+                if let Some(s) = self.stems.get_mut(index) {
+                    (s.gain, s.mute, s.cue) = (gain, mute, cue);
+                }
+            }
             Command::SetMasterVolume(v) => self.master_volume = v,
             Command::Panic => {
                 self.router.panic(&mut self.events);
@@ -349,18 +440,20 @@ impl Engine {
             while next < midi.len() && (midi[next].time as usize) < end {
                 next += 1;
             }
+            // The transport first: it says where a run starts (backing tracks start there),
+            // and its click is mixed after the master limiter, so it is not limited or ducked.
+            let events = self.transport.render(
+                &self.shared.transport,
+                &mut self.click_l[..len],
+                &mut self.click_r[..len],
+                &mut self.clock,
+            );
             self.block(
                 start,
                 &midi[first..next],
                 &mut out_l[start..end],
                 &mut out_r[start..end],
-            );
-            // The transport, after the master limiter: the click is not limited or ducked.
-            self.transport.render(
-                &self.shared.transport,
-                &mut self.click_l[..len],
-                &mut self.click_r[..len],
-                &mut self.clock,
+                events,
             );
             if self.shared.transport.click_to_main() {
                 for t in 0..len {
@@ -388,7 +481,14 @@ impl Engine {
         }
     }
 
-    fn block(&mut self, start: usize, midi: &[MidiEvent], out_l: &mut [f32], out_r: &mut [f32]) {
+    fn block(
+        &mut self,
+        start: usize,
+        midi: &[MidiEvent],
+        out_l: &mut [f32],
+        out_r: &mut [f32],
+        transport: TransportEvents,
+    ) {
         let frames = out_l.len();
         while let Ok(command) = self.commands.pop() {
             self.apply(command);
@@ -504,6 +604,7 @@ impl Engine {
             self.shared.load_max[i].fetch_max(used.to_bits(), Ordering::Relaxed);
         }
         self.shared.sleeping.store(sleeping, Ordering::Relaxed);
+        self.mix_stems(frames, transport);
 
         // Master volume and the panic duck.
         let mut master_peak = 0f32;
@@ -551,6 +652,58 @@ impl Engine {
         self.shared.blocks.fetch_add(1, Ordering::Relaxed);
         for e in &mut self.events {
             e.clear();
+        }
+    }
+
+    /// Backing tracks: start where the run starts, stop when the transport stops, and add into
+    /// the main mix (or the cue output, where the click is).
+    fn mix_stems(&mut self, frames: usize, transport: TransportEvents) {
+        // A stop fades the stems out over this block instead of cutting them off.
+        let fading = transport.stopped && self.stems_playing;
+        let from = match transport.run_start {
+            Some(at) => {
+                self.stems_playing = true;
+                (at as usize).min(frames)
+            }
+            None if self.stems_playing => 0,
+            None => {
+                self.shared.stems_playing.store(false, Ordering::Relaxed);
+                return;
+            }
+        };
+        self.shared.stems_playing.store(true, Ordering::Relaxed);
+        let len = frames - from;
+        for stem in &mut self.stems {
+            let tg = if fading { 0.0 } else { stem.target() };
+            let mut g = stem.last_gain;
+            let step = (tg - g) / len.max(1) as f32;
+            let n = if stem.reader.finished() {
+                0
+            } else {
+                let n = stem
+                    .reader
+                    .read(&mut self.stem_l[..len], &mut self.stem_r[..len]);
+                if n < len && !stem.reader.finished() {
+                    self.shared
+                        .backing_underruns
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                n
+            };
+            let (bus_l, bus_r) = if stem.cue {
+                (&mut self.click_l, &mut self.click_r)
+            } else {
+                (&mut self.mix_l, &mut self.mix_r)
+            };
+            for t in 0..n {
+                g += step;
+                bus_l[from + t] += self.stem_l[t] * g;
+                bus_r[from + t] += self.stem_r[t] * g;
+            }
+            stem.last_gain = tg;
+        }
+        if fading {
+            self.stems_playing = false;
         }
     }
 }

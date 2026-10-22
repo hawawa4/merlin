@@ -23,7 +23,7 @@ pub use fx::{CompSettings, DelaySettings, EqSettings, FxSettings, ReverbSettings
 pub use macros::{MACROS_PER_SLOT, MAX_MACRO_TARGETS, Macro, MacroTarget, SamplerField};
 pub use mapping::{ControlAction, Curve, Glue, Mapping, Relative, Source, SourceKind, Takeover};
 pub use migrate::{Migration, migrate};
-pub use setlist::{MAX_PARTS, MAX_SONGS, MAX_TEMPO, MIN_TEMPO, Part, Song};
+pub use setlist::{MAX_PARTS, MAX_SONGS, MAX_TEMPO, MAX_TRACKS, MIN_TEMPO, Part, Song, Track};
 pub use snapshot::{MAX_SNAPSHOTS, PresetChoice, SlotSnapshot, Snapshot};
 pub use transport::{MAX_COUNT_IN_BARS, TransportSettings};
 
