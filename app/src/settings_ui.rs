@@ -381,23 +381,22 @@ fn windows_plugins(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &m
         ));
     });
     ui.add_space(6.0);
-    ui.label("Installer (.exe or .msi)");
+    ui.add_space(6.0);
+    egui::Frame::group(ui.style()).show(ui, |ui| {
+        ui.set_width(ui.available_width().min(620.0));
+        ui.vertical_centered(|ui| {
+            ui.add_space(6.0);
+            ui.strong("Drop a Windows plugin installer (.exe or .msi) anywhere on this window");
+            ui.label(
+                RichText::new("It runs in the app's own Windows environment, and the plugins it installs show up in the browser when it finishes.")
+                    .small()
+                    .weak(),
+            );
+            ui.add_space(6.0);
+        });
+    });
     ui.horizontal(|ui| {
-        ui.add(
-            egui::TextEdit::singleline(&mut st.installer_text)
-                .hint_text("/path/to/Plugin-Setup.exe")
-                .desired_width(460.0),
-        );
         let busy = s.windows_busy();
-        if ui
-            .add_enabled(
-                !busy && !st.installer_text.trim().is_empty(),
-                egui::Button::new("Install"),
-            )
-            .clicked()
-        {
-            actions.push(Action::InstallWindows(st.installer_text.clone()));
-        }
         if ui
             .add_enabled(!busy, egui::Button::new("Look for installed plugins"))
             .on_hover_text(
@@ -408,6 +407,26 @@ fn windows_plugins(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &m
             actions.push(Action::SyncWindows);
         }
     });
+    egui::CollapsingHeader::new("Install from a path instead")
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut st.installer_text)
+                        .hint_text("/path/to/Plugin-Setup.exe")
+                        .desired_width(460.0),
+                );
+                if ui
+                    .add_enabled(
+                        !s.windows_busy() && !st.installer_text.trim().is_empty(),
+                        egui::Button::new("Install"),
+                    )
+                    .clicked()
+                {
+                    actions.push(Action::InstallWindows(st.installer_text.clone()));
+                }
+            });
+        });
     if !s.windows_status.is_empty() {
         ui.label(&s.windows_status);
     }

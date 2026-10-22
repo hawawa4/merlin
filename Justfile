@@ -14,9 +14,9 @@ default:
 
 # The app. Loads plugins from the standard CLAP folders plus test-assets (Linux and, through
 # our patched Wine, Windows ones). Try: just dev --fresh      just dev --rig my.irig
-# This round: Windows plugins are found by themselves. At startup every Windows CLAP/VST3 plugin in
-# the Wine prefix (here test-assets/wine/prefix-vblank) gets a bridge and shows up in the browser.
-# Settings → Windows has the Wine doctor, an installer box and "Look for installed plugins".
+# This round: drag files onto the window. A Windows installer (.exe/.msi) is installed into the app's
+# Windows environment, a .sf2/.sf3 loads into a free slot, a .irig opens as a rig; a banner shows
+# what the drop would do while you drag. (Settings -> Windows explains it.)
 dev *args:
     cargo build -p merlin --release
     PATH="{{yabridge_dir}}:$PATH" WINELOADER={{patched_wine}} \

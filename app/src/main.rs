@@ -430,6 +430,37 @@ impl Running {
                 s.install_windows_plugin(path)
             }
             Action::SyncWindows => s.sync_windows_plugins(),
+            Action::DropFile(path) => {
+                self.ui.drag_hint = None;
+                let ext = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(str::to_ascii_lowercase);
+                match ext.as_deref() {
+                    Some("exe" | "msi") => {
+                        // Show the progress where it is written.
+                        self.ui.settings_open = true;
+                        self.ui.settings_tab = settings_ui::SettingsTab::Windows;
+                        if s.windows_runtime().is_none() {
+                            Err(anyhow!(
+                                "Windows plugin support is not installed yet: press \"Download \
+                                 Windows plugin support\" here, then drop the installer again"
+                            ))
+                        } else {
+                            s.install_windows_plugin(path)
+                        }
+                    }
+                    Some("sf2" | "sf3") => s.load_soundfont_file(&path),
+                    Some("irig") => s.open_rig(&path),
+                    _ => Err(anyhow!(
+                        "don't know what to do with {}",
+                        path.file_name().map_or_else(
+                            || path.display().to_string(),
+                            |n| n.to_string_lossy().into_owned()
+                        )
+                    )),
+                }
+            }
             Action::InstallRuntime => s.install_runtime(),
             Action::ToggleFavorite(k) => {
                 if let Some(f) = s.found.get(k).cloned() {
@@ -755,6 +786,18 @@ impl ApplicationHandler<UserEvent> for App {
                 run.requested = false;
                 run.redraw();
             }
+            WindowEvent::HoveredFile(path) => {
+                run.ui.drag_hint = Some(ui::drop_hint(&path));
+                run.ask_redraw();
+            }
+            WindowEvent::HoveredFileCancelled => {
+                run.ui.drag_hint = None;
+                run.ask_redraw();
+            }
+            WindowEvent::DroppedFile(path) => {
+                run.apply(Action::DropFile(path));
+                run.ask_redraw();
+            }
             _ => {}
         }
         if wants_repaint {
@@ -853,6 +896,7 @@ fn parse_script() -> Vec<(Duration, Action)> {
                 "fx" => Action::FxPreset(slot(words.next())?, words.next()?.to_string()),
                 "install" => Action::InstallWindows(words.collect::<Vec<_>>().join(" ")),
                 "sync" => Action::SyncWindows,
+                "drop" => Action::DropFile(PathBuf::from(words.collect::<Vec<_>>().join(" "))),
                 "runtime" => Action::InstallRuntime,
                 "fit" => Action::Fit,
                 "on" => Action::NoteOn(words.next()?.parse().ok()?),

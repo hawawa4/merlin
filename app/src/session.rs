@@ -579,6 +579,28 @@ impl Session {
         self.load(free, &found)
     }
 
+    /// Loads a SoundFont file (dropped on the window) into the viewed slot if empty, else the
+    /// first empty slot. It does not need to be in a scanned folder.
+    pub fn load_soundfont_file(&mut self, path: &Path) -> Result<()> {
+        if !merlin_hosting::soundfont::is_soundfont(path) {
+            return Err(anyhow!("{} is not a SoundFont", path.display()));
+        }
+        let found = Found {
+            path: path.to_owned(),
+            windows: false,
+            info: merlin_hosting::soundfont::info_for(path),
+        };
+        let free = self
+            .viewing
+            .filter(|&i| self.rig.slots[i].instrument.is_none() && self.loading[i].is_none())
+            .or_else(|| {
+                (0..UI_SLOTS)
+                    .find(|&i| self.rig.slots[i].instrument.is_none() && self.loading[i].is_none())
+            })
+            .context("all slots are in use: remove one first")?;
+        self.load(free, &found)
+    }
+
     pub fn set_buffer_size(&mut self, frames: u32) -> Result<()> {
         let backend = self.backend.as_ref().context("audio is not running")?;
         let now = backend.set_buffer_size(frames)?;

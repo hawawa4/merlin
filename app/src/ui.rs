@@ -15,6 +15,20 @@ use crate::perf;
 use crate::session::{Session, UI_SLOTS};
 use crate::settings_ui::{self, SettingsTab};
 
+/// What dropping this file on the window does, and whether it does anything.
+pub fn drop_hint(path: &std::path::Path) -> (String, bool) {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+    match ext.as_deref() {
+        Some("exe" | "msi") => ("Drop to install this Windows plugin".into(), true),
+        Some("sf2" | "sf3") => ("Drop to load this SoundFont into a free slot".into(), true),
+        Some("irig") => ("Drop to open this rig".into(), true),
+        _ => ("This kind of file can't be used here".into(), false),
+    }
+}
+
 /// How a plugin is named in the browser: `Name`, `Name (VST3)`, `Name (Windows)`.
 pub fn found_label(f: &merlin_scanner::Found) -> String {
     let mut label = f.info.name.clone();
@@ -73,6 +87,8 @@ pub enum Action {
     SetBuffer(u32),
     RefreshMidi,
     SaveWine(String, String),
+    /// A file was dropped on the window (or the script's `drop`): install, load or open it.
+    DropFile(PathBuf),
     /// Run a Windows plugin installer (path) in the managed prefix, then pick up its plugins.
     InstallWindows(String),
     /// Make bridges for the Windows plugins already in the prefix.
@@ -121,6 +137,8 @@ pub struct UiState {
     pub wine_text: String,
     pub yab_text: String,
     pub installer_text: String,
+    /// What a file being dragged over the window would do, while one is.
+    pub drag_hint: Option<(String, bool)>,
     pub perf: Option<(std::time::Instant, Vec<perf::Check>)>,
     pub peaks_shown: [f32; UI_SLOTS],
     pub held_key: Option<u8>,
@@ -151,6 +169,7 @@ impl UiState {
             wine_text: String::new(),
             yab_text: String::new(),
             installer_text: String::new(),
+            drag_hint: None,
             perf: None,
             peaks_shown: [0.0; UI_SLOTS],
             held_key: None,
@@ -168,6 +187,7 @@ pub fn draw(
     dock_rect: &mut egui::Rect,
     actions: &mut Vec<Action>,
 ) {
+    drag_overlay(ui, st);
     egui::Panel::top("header").show(ui, |ui| header(ui, s, st, actions));
     if st.settings_open {
         egui::CentralPanel::default().show(ui, |ui| {
@@ -263,6 +283,33 @@ fn sampler_panel(
                     actions.push(Action::SetPreset(i, p.bank, p.program));
                 }
             }
+        });
+}
+
+/// A banner over everything while a file is dragged across the window.
+fn drag_overlay(ui: &mut egui::Ui, st: &UiState) {
+    let Some((text, ok)) = &st.drag_hint else {
+        return;
+    };
+    let screen = ui.ctx().content_rect();
+    egui::Area::new(egui::Id::unique("drag-hint"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(egui::pos2(screen.center().x - 200.0, screen.top() + 90.0))
+        .show(ui.ctx(), |ui| {
+            egui::Frame::popup(ui.style())
+                .fill(if *ok {
+                    Color32::from_rgb(0x1f, 0x4d, 0x7a)
+                } else {
+                    Color32::from_rgb(0x6a, 0x2a, 0x2a)
+                })
+                .show(ui, |ui| {
+                    ui.set_width(400.0);
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(8.0);
+                        ui.heading(text);
+                        ui.add_space(8.0);
+                    });
+                });
         });
 }
 
