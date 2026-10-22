@@ -52,11 +52,21 @@ impl FxChain {
         self.settings.any_enabled()
     }
 
-    pub fn process(&mut self, l: &mut [f32], r: &mut [f32]) {
+    /// EQ and compressor: before the slot's insert plugins.
+    pub fn process_pre(&mut self, l: &mut [f32], r: &mut [f32]) {
         self.eq.process(l, r);
         self.comp.process(l, r);
+    }
+
+    /// Delay and reverb: after the slot's insert plugins.
+    pub fn process_post(&mut self, l: &mut [f32], r: &mut [f32]) {
         self.delay.process(l, r);
         self.reverb.process(l, r);
+    }
+
+    pub fn process(&mut self, l: &mut [f32], r: &mut [f32]) {
+        self.process_pre(l, r);
+        self.process_post(l, r);
     }
 }
 

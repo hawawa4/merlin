@@ -3,7 +3,7 @@ use std::sync::atomic::Ordering;
 
 use merlin_dsp::{FxChain, Limiter};
 use merlin_hosting::{Io, MidiEvent, PluginProcessor, ProcessStatus};
-use merlin_model::{FxSettings, MAX_SLOTS, SelectMode};
+use merlin_model::{FxSettings, MAX_INSERTS, MAX_SLOTS, SelectMode};
 
 use crate::Shared;
 use crate::events::EventBuf;
@@ -43,6 +43,22 @@ pub enum Command {
         slot: usize,
         mode: SelectMode,
     },
+    /// Install or replace an insert effect (position `index` in the slot's chain). The old one
+    /// comes back as [`Retired`].
+    SetInsert {
+        slot: usize,
+        index: usize,
+        processor: Box<dyn PluginProcessor>,
+    },
+    ClearInsert {
+        slot: usize,
+        index: usize,
+    },
+    SetInsertBypass {
+        slot: usize,
+        index: usize,
+        bypass: bool,
+    },
     /// A slot's built-in effects.
     SetFx {
         slot: usize,
@@ -59,6 +75,8 @@ pub enum Command {
 /// audio thread.
 pub struct Retired {
     pub slot: usize,
+    /// `Some(k)` for an insert effect, `None` for the slot's instrument.
+    pub insert: Option<usize>,
     pub processor: Box<dyn PluginProcessor>,
 }
 
@@ -97,6 +115,8 @@ struct SlotRt {
     last_r: f32,
     sleeping: bool,
     fx: FxChain,
+    inserts: [Option<Box<dyn PluginProcessor>>; MAX_INSERTS],
+    insert_bypass: [bool; MAX_INSERTS],
     /// Frames of exactly silent output while the instrument sleeps with effects on.
     quiet_frames: usize,
 }
@@ -112,6 +132,8 @@ impl SlotRt {
             last_r: 0.0,
             sleeping: false,
             fx: FxChain::new(sample_rate),
+            inserts: std::array::from_fn(|_| None),
+            insert_bypass: [false; MAX_INSERTS],
             quiet_frames: 0,
         }
     }
@@ -143,6 +165,8 @@ pub struct Engine {
     events: Vec<EventBuf>,
     scratch_l: Vec<f32>,
     scratch_r: Vec<f32>,
+    tmp_l: Vec<f32>,
+    tmp_r: Vec<f32>,
     mix_l: Vec<f32>,
     mix_r: Vec<f32>,
     master_volume: f32,
@@ -169,6 +193,8 @@ pub fn new(sample_rate: f32, max_block: usize) -> (Engine, EngineHandle) {
         events: (0..MAX_SLOTS).map(|_| EventBuf::new()).collect(),
         scratch_l: vec![0.0; max_block],
         scratch_r: vec![0.0; max_block],
+        tmp_l: vec![0.0; max_block],
+        tmp_r: vec![0.0; max_block],
         mix_l: vec![0.0; max_block],
         mix_r: vec![0.0; max_block],
         master_volume: 1.0,
@@ -199,12 +225,29 @@ impl Engine {
         if let Some(processor) = self.slots[slot].processor.take() {
             // If the queue is full the processor is leaked rather than freed here: dropping a
             // plugin on the audio thread is worse.
-            if let Err(rtrb::PushError::Full(r)) = self.retired.push(Retired { slot, processor }) {
+            if let Err(rtrb::PushError::Full(r)) = self.retired.push(Retired {
+                slot,
+                insert: None,
+                processor,
+            }) {
                 std::mem::forget(r);
             }
         }
         self.slots[slot].sleeping = false;
         self.router.drop_slot(slot);
+    }
+
+    fn retire_insert(&mut self, slot: usize, index: usize) {
+        if let Some(processor) = self.slots[slot].inserts[index].take() {
+            // As for instruments: leak rather than free on the audio thread if the queue is full.
+            if let Err(rtrb::PushError::Full(r)) = self.retired.push(Retired {
+                slot,
+                insert: Some(index),
+                processor,
+            }) {
+                std::mem::forget(r);
+            }
+        }
     }
 
     fn apply(&mut self, command: Command) {
@@ -229,6 +272,21 @@ impl Engine {
                 (s.volume, s.pan, s.mute) = (volume, pan, mute);
             }
             Command::Select { slot, mode } => self.router.select(slot, mode, &mut self.events),
+            Command::SetInsert {
+                slot,
+                index,
+                processor,
+            } => {
+                self.retire_insert(slot, index);
+                self.slots[slot].inserts[index] = Some(processor);
+                self.slots[slot].quiet_frames = 0;
+            }
+            Command::ClearInsert { slot, index } => self.retire_insert(slot, index),
+            Command::SetInsertBypass {
+                slot,
+                index,
+                bypass,
+            } => self.slots[slot].insert_bypass[index] = bypass,
             Command::SetFx { slot, settings } => self.slots[slot].fx.set(&settings),
             Command::SetLimiter(on) => self.limiter_on = on,
             Command::SetInheritPedal(on) => self.router.inherit_pedal = on,
@@ -289,7 +347,13 @@ impl Engine {
             let target = self.router.targets() & (1 << i) != 0;
             let skip_instrument = slot.sleeping && events.is_empty() && !target;
             // A sleeping instrument's effects keep running until their tails have died away.
-            let fx_live = slot.fx.is_active() && slot.quiet_frames < fx_idle_frames;
+            let has_inserts = slot
+                .inserts
+                .iter()
+                .zip(&slot.insert_bypass)
+                .any(|(p, &bypass)| p.is_some() && !bypass);
+            let effects = slot.fx.is_active() || has_inserts;
+            let fx_live = effects && slot.quiet_frames < fx_idle_frames;
             if skip_instrument && !fx_live {
                 sleeping |= 1 << i;
                 continue;
@@ -307,9 +371,30 @@ impl Engine {
                 );
                 slot.sleeping = status == ProcessStatus::Sleep;
             }
-            if slot.fx.is_active() {
+            if effects {
+                // EQ and compressor, then the insert plugins, then delay and reverb.
                 slot.fx
-                    .process(&mut self.scratch_l[..frames], &mut self.scratch_r[..frames]);
+                    .process_pre(&mut self.scratch_l[..frames], &mut self.scratch_r[..frames]);
+                for k in 0..MAX_INSERTS {
+                    let Some(insert) = slot.inserts[k].as_mut().filter(|_| !slot.insert_bypass[k])
+                    else {
+                        continue;
+                    };
+                    self.tmp_l[..frames].copy_from_slice(&self.scratch_l[..frames]);
+                    self.tmp_r[..frames].copy_from_slice(&self.scratch_r[..frames]);
+                    self.scratch_l[..frames].fill(0.0);
+                    self.scratch_r[..frames].fill(0.0);
+                    insert.process(
+                        &mut Io {
+                            input: Some((&self.tmp_l[..frames], &self.tmp_r[..frames])),
+                            out_l: &mut self.scratch_l[..frames],
+                            out_r: &mut self.scratch_r[..frames],
+                        },
+                        &[],
+                    );
+                }
+                slot.fx
+                    .process_post(&mut self.scratch_l[..frames], &mut self.scratch_r[..frames]);
                 self.shared.comp_reduction[i].store(
                     slot.fx.compressor_reduction_db().to_bits(),
                     Ordering::Relaxed,

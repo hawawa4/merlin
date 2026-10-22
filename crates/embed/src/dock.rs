@@ -13,7 +13,6 @@
 //! tears down asynchronously is a race (S5).
 
 use anyhow::{Result, anyhow};
-use merlin_model::MAX_SLOTS;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
     AtomEnum, ConfigureWindowAux, ConnectionExt, CreateWindowAux, EventMask, MapState, PropMode,
@@ -21,6 +20,10 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
+
+/// How many editors a dock can hold: instruments and their insert effects, each with a canvas of
+/// its own. Editor ids are chosen by the app.
+pub const MAX_EDITORS: usize = 64;
 
 #[derive(Clone, Copy)]
 struct Canvas {
@@ -31,7 +34,7 @@ struct Canvas {
 pub struct Dock {
     conn: RustConnection,
     clip: u32,
-    canvases: [Option<Canvas>; MAX_SLOTS],
+    canvases: [Option<Canvas>; MAX_EDITORS],
     rect: (i32, i32, u32, u32),
     /// The slot whose canvas is mapped.
     shown: Option<usize>,
@@ -59,7 +62,7 @@ impl Dock {
         Ok(Self {
             conn,
             clip,
-            canvases: [None; MAX_SLOTS],
+            canvases: [None; MAX_EDITORS],
             rect: (0, 0, 1, 1),
             shown: None,
             mapped: false,

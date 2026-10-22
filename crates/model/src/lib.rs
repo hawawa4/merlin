@@ -59,6 +59,19 @@ pub struct PluginRef {
     pub windows: bool,
 }
 
+/// Plugin effects per slot, between the built-in EQ/compressor and the delay/reverb.
+pub const MAX_INSERTS: usize = 4;
+
+/// One insert effect: the plugin, its saved state, and whether it is bypassed.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Insert {
+    pub plugin: PluginRef,
+    #[serde(default, with = "base64_opt", skip_serializing_if = "Option::is_none")]
+    pub state: Option<Vec<u8>>,
+    #[serde(default)]
+    pub bypass: bool,
+}
+
 /// What a slot listens to (plan §4.3).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -109,6 +122,9 @@ pub struct Slot {
     pub armed: bool,
     /// The slot's built-in effects (plan §4.3): EQ, compressor, delay, reverb.
     pub fx: FxSettings,
+    /// Up to [`MAX_INSERTS`] effect plugins; position in the list is the insert's position.
+    /// A `None` entry is an empty insert position.
+    pub inserts: Vec<Option<Insert>>,
 }
 
 impl Default for Slot {
@@ -124,6 +140,7 @@ impl Default for Slot {
             filter: MidiFilter::default(),
             armed: true,
             fx: FxSettings::default(),
+            inserts: Vec::new(),
         }
     }
 }
@@ -170,6 +187,7 @@ pub enum RigError {
     TooManySlots(usize),
     BadSelection(usize),
     BadFilter(usize),
+    TooManyInserts(usize),
     NewerVersion(u32),
 }
 
@@ -179,6 +197,9 @@ impl std::fmt::Display for RigError {
             Self::TooManySlots(n) => write!(f, "{n} slots (at most {MAX_SLOTS})"),
             Self::BadSelection(i) => write!(f, "selected slot {i} does not exist"),
             Self::BadFilter(i) => write!(f, "slot {} has an invalid MIDI filter", i + 1),
+            Self::TooManyInserts(i) => {
+                write!(f, "slot {} has more than {MAX_INSERTS} inserts", i + 1)
+            }
             Self::NewerVersion(v) => write!(f, "rig format {v} is newer than this app understands"),
         }
     }
@@ -199,6 +220,9 @@ impl Rig {
             return Err(RigError::BadSelection(i));
         }
         for (i, s) in self.slots.iter().enumerate() {
+            if s.inserts.len() > MAX_INSERTS {
+                return Err(RigError::TooManyInserts(i));
+            }
             let f = &s.filter;
             let ok = f.key_lo <= f.key_hi
                 && f.key_hi <= 127

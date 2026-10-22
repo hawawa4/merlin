@@ -13,7 +13,9 @@ use merlin_engine::{Command, EngineHandle, Filter};
 use merlin_hosting::clap::ClapLibrary;
 use merlin_hosting::vst3::Vst3Library;
 use merlin_hosting::{EditorSize, HostEvent, MidiEvent, PluginHandle, Waker};
-use merlin_model::{Format, FxSettings, MAX_SLOTS, PluginRef, Rig, SelectMode, Slot};
+use merlin_model::{
+    Format, FxSettings, Insert, MAX_INSERTS, MAX_SLOTS, PluginRef, Rig, SelectMode, Slot,
+};
 use merlin_scanner::{Cache, Entry, Found, Quarantine};
 use std::sync::mpsc;
 
@@ -54,19 +56,36 @@ pub struct Loaded {
     pub plugin: Box<dyn PluginHandle>,
 }
 
-/// Lets the editor manager borrow the plugins of a rack.
-pub struct Lookup<'a>(&'a mut [Option<Loaded>]);
+/// The editor id of an insert: instruments use their slot number, inserts the numbers after.
+pub fn insert_id(slot: usize, index: usize) -> usize {
+    UI_SLOTS + slot * MAX_INSERTS + index
+}
 
-pub fn lookup(plugins: &mut [Option<Loaded>]) -> Lookup<'_> {
-    Lookup(plugins)
+/// Lets the editor manager borrow the plugins of a rack by editor id.
+pub struct Lookup<'a> {
+    plugins: &'a mut [Option<Loaded>],
+    inserts: &'a mut [[Option<Loaded>; MAX_INSERTS]],
+}
+
+pub fn lookup<'a>(
+    plugins: &'a mut [Option<Loaded>],
+    inserts: &'a mut [[Option<Loaded>; MAX_INSERTS]],
+) -> Lookup<'a> {
+    Lookup { plugins, inserts }
 }
 
 impl PluginLookup for Lookup<'_> {
-    fn plugin(&mut self, slot: usize) -> Option<&mut dyn PluginHandle> {
-        self.0
-            .get_mut(slot)?
-            .as_mut()
-            .map(|l| &mut *l.plugin as &mut dyn PluginHandle)
+    fn plugin(&mut self, id: usize) -> Option<&mut dyn PluginHandle> {
+        let loaded = if id < UI_SLOTS {
+            self.plugins.get_mut(id)?.as_mut()
+        } else {
+            let k = id - UI_SLOTS;
+            self.inserts
+                .get_mut(k / MAX_INSERTS)?
+                .get_mut(k % MAX_INSERTS)?
+                .as_mut()
+        };
+        loaded.map(|l| &mut *l.plugin as &mut dyn PluginHandle)
     }
 }
 
@@ -76,6 +95,8 @@ pub struct Session {
     /// The rig changed since it was last saved.
     pub dirty: bool,
     pub plugins: Vec<Option<Loaded>>,
+    /// Insert effects, per slot.
+    pub inserts: Vec<[Option<Loaded>; MAX_INSERTS]>,
     /// Why a slot's saved plugin could not be loaded; the slot keeps its saved plugin and
     /// state so nothing is lost.
     pub missing: Vec<Option<String>>,
@@ -83,9 +104,13 @@ pub struct Session {
     pub targets: Vec<usize>,
     /// The slot whose editor is on show (or would be, if it has none or it is not allowed).
     pub viewing: Option<usize>,
+    /// The editor id on show (the slot's instrument, or one of its inserts).
+    pub view_id: Option<usize>,
     /// What to tell the user instead of, or beside, a slot's editor (see `quirks`).
     pub notes: Vec<Option<String>>,
     pub found: Vec<Found>,
+    /// Effect plugins, for the inserts.
+    pub effects: Vec<Found>,
     /// Every plugin file the scanner knows, including the ones that failed to load.
     pub entries: Vec<Entry>,
     /// Where plugins are looked for (standard folders, settings, command line).
@@ -127,11 +152,16 @@ impl Session {
             rig_path: None,
             dirty: false,
             plugins: (0..UI_SLOTS).map(|_| None).collect(),
+            inserts: (0..UI_SLOTS)
+                .map(|_| std::array::from_fn(|_| None))
+                .collect(),
             missing: vec![None; UI_SLOTS],
             targets: Vec::new(),
             viewing: None,
+            view_id: None,
             notes: vec![None; UI_SLOTS],
             found: Vec::new(),
+            effects: Vec::new(),
             entries: Vec::new(),
             plugin_dirs: Vec::new(),
             cli_dirs,
@@ -283,6 +313,7 @@ impl Session {
 
     fn refresh_found(&mut self) {
         self.found = merlin_scanner::with_feature(&self.entries, "instrument");
+        self.effects = merlin_scanner::with_feature(&self.entries, "audio-effect");
     }
 
     pub fn scanning(&self) -> bool {
@@ -339,6 +370,19 @@ impl Session {
                     String::new()
                 }
             ));
+        }
+    }
+
+    /// The loaded plugin behind an editor id.
+    fn plugin_by_id(&mut self, id: usize) -> Option<&mut Loaded> {
+        if id < UI_SLOTS {
+            self.plugins.get_mut(id)?.as_mut()
+        } else {
+            let k = id - UI_SLOTS;
+            self.inserts
+                .get_mut(k / MAX_INSERTS)?
+                .get_mut(k % MAX_INSERTS)?
+                .as_mut()
         }
     }
 
@@ -500,6 +544,7 @@ impl Session {
         self.notes[i] = None;
         if self.viewing == Some(i) {
             self.viewing = None;
+            self.view_id = None;
         }
     }
 
@@ -511,19 +556,11 @@ impl Session {
         }
         self.guard.unregister_slot(i);
         self.guard.begin_close();
-        let _ = self.editors.forget(i, &mut Lookup(&mut self.plugins));
+        let _ = self
+            .editors
+            .forget(i, &mut lookup(&mut self.plugins, &mut self.inserts));
         let _ = self.engine.send(Command::ClearProcessor { slot: i });
-        // The processor comes back through the retired queue; wait for it (the audio thread
-        // answers within a cycle) so the plugin can be deactivated.
-        let deadline = Instant::now() + Duration::from_millis(500);
-        let mut retired = Vec::new();
-        while retired.is_empty() && Instant::now() < deadline {
-            retired = self.engine.take_retired();
-            if retired.is_empty() {
-                std::thread::sleep(Duration::from_millis(1));
-            }
-        }
-        drop(retired);
+        self.wait_for_retired();
         if let Some(mut l) = self.plugins[i].take() {
             l.plugin.deactivate();
         }
@@ -560,17 +597,47 @@ impl Session {
 
     pub fn show_editor(&mut self, i: usize) {
         self.viewing = Some(i);
+        self.view_id = Some(i);
         // Known problems with this plugin's editor are shown beside it.
         self.notes[i] = self.rig.slots[i]
             .instrument
             .as_ref()
             .and_then(|r| crate::quirks::lookup(&r.id, r.windows).warning)
             .map(str::to_owned);
-        let result = self.editors.show(i, &mut Lookup(&mut self.plugins));
+        let result = self
+            .editors
+            .show(i, &mut lookup(&mut self.plugins, &mut self.inserts));
         match result {
             Ok(o) if o.created => self.say(format!("editor {} created in {:?}", i + 1, o.elapsed)),
             Ok(_) => {}
             Err(e) => self.say(format!("slot {}: no editor: {e:#}", i + 1)),
+        }
+    }
+
+    /// Shows an insert's editor in the dock.
+    pub fn show_insert_editor(&mut self, slot: usize, index: usize) {
+        let id = insert_id(slot, index);
+        if self.inserts[slot][index].is_none() {
+            return;
+        }
+        self.viewing = Some(slot);
+        self.view_id = Some(id);
+        match self
+            .editors
+            .show(id, &mut lookup(&mut self.plugins, &mut self.inserts))
+        {
+            Ok(o) if o.created => self.say(format!(
+                "insert {}.{} editor created in {:?}",
+                slot + 1,
+                index + 1,
+                o.elapsed
+            )),
+            Ok(_) => {}
+            Err(e) => self.say(format!(
+                "insert {}.{}: no editor: {e:#}",
+                slot + 1,
+                index + 1
+            )),
         }
     }
 
@@ -645,12 +712,12 @@ impl Session {
         };
         match e {
             HostEvent::MainThreadCallback => {
-                if let Some(l) = self.plugins.get_mut(i).and_then(Option::as_mut) {
+                if let Some(l) = self.plugin_by_id(i) {
                     l.plugin.on_main_thread();
                 }
             }
             HostEvent::FdReady => {
-                if let Some(l) = self.plugins.get_mut(i).and_then(Option::as_mut) {
+                if let Some(l) = self.plugin_by_id(i) {
                     l.plugin.on_fd_ready();
                 }
             }
@@ -658,11 +725,11 @@ impl Session {
                 let _ = self.editors.plugin_resized(
                     i,
                     EditorSize { width, height },
-                    &mut Lookup(&mut self.plugins),
+                    &mut lookup(&mut self.plugins, &mut self.inserts),
                 );
             }
             HostEvent::EditorClosed => {
-                self.say(format!("slot {}: plugin closed its editor", i + 1))
+                self.say(format!("editor {}: plugin closed its editor", i + 1))
             }
             HostEvent::StateDirty => self.dirty = true,
         }
@@ -675,13 +742,19 @@ impl Session {
         for l in self.plugins.iter_mut().flatten() {
             l.plugin.service(now);
         }
-        let evict = self.editors.tick(now, &mut Lookup(&mut self.plugins));
+        for l in self.inserts.iter_mut().flatten().flatten() {
+            l.plugin.service(now);
+        }
+        let evict = self
+            .editors
+            .tick(now, &mut lookup(&mut self.plugins, &mut self.inserts));
         // Processors the engine let go of without being asked (none today) are just dropped.
         drop(self.engine.take_retired());
         let timers = self
             .plugins
             .iter()
             .flatten()
+            .chain(self.inserts.iter().flatten().flatten())
             .filter_map(|l| l.plugin.next_deadline())
             .min();
         [timers, evict].into_iter().flatten().min()
@@ -699,6 +772,14 @@ impl Session {
                         let line = format!("slot {}: cannot save state: {e:#}", i + 1);
                         self.log.push(line);
                     }
+                }
+            }
+            for k in 0..MAX_INSERTS {
+                if let Some(l) = self.inserts[i][k].as_mut()
+                    && let Ok(state) = l.plugin.save_state()
+                    && let Some(Some(ins)) = self.rig.slots[i].inserts.get_mut(k)
+                {
+                    ins.state = Some(state);
                 }
             }
         }
@@ -744,13 +825,19 @@ impl Session {
 
     fn clear(&mut self) {
         for i in 0..UI_SLOTS {
+            for k in 0..MAX_INSERTS {
+                self.remove_insert_runtime(i, k);
+            }
             self.remove_runtime(i);
         }
-        let _ = self.editors.hide(&mut Lookup(&mut self.plugins));
+        let _ = self
+            .editors
+            .hide(&mut lookup(&mut self.plugins, &mut self.inserts));
         self.missing = vec![None; UI_SLOTS];
         self.notes = vec![None; UI_SLOTS];
         self.targets.clear();
         self.viewing = None;
+        self.view_id = None;
     }
 
     pub fn open_rig(&mut self, path: &Path) -> Result<()> {
@@ -769,6 +856,7 @@ impl Session {
         rig.slots.resize_with(UI_SLOTS, Slot::default);
         for slot in &mut rig.slots {
             slot.fx.clamp();
+            slot.inserts.resize(MAX_INSERTS, None);
         }
         self.rig = rig;
         let _ = self
@@ -791,6 +879,21 @@ impl Session {
                 }
             }
         }
+        for i in 0..UI_SLOTS {
+            for k in 0..MAX_INSERTS {
+                let Some(ins) = self.rig.slots[i].inserts[k].clone() else {
+                    continue;
+                };
+                if let Err(e) = self.restore_insert(i, k, &ins) {
+                    self.say(format!(
+                        "slot {} insert {}: {} is missing: {e:#}",
+                        i + 1,
+                        k + 1,
+                        ins.plugin.name
+                    ));
+                }
+            }
+        }
         let selected = self.rig.selected.clone();
         for (n, &i) in selected.iter().enumerate() {
             if i < UI_SLOTS {
@@ -800,18 +903,24 @@ impl Session {
         self.dirty = false;
     }
 
-    fn restore_slot(&mut self, i: usize, r: &PluginRef, state: Option<&[u8]>) -> Result<()> {
-        // Find the plugin again by id (a path alone can go stale after a reinstall).
+    /// Finds the file for a saved plugin: by id in what was scanned (a path alone can go stale
+    /// after a reinstall), else by the saved path. Refuses unsupported and quarantined plugins.
+    fn locate(&self, r: &PluginRef) -> Result<(PathBuf, bool)> {
         let found = self
             .found
             .iter()
+            .chain(&self.effects)
             .find(|f| f.info.id == r.id && f.windows == r.windows)
-            .or_else(|| self.found.iter().find(|f| f.info.id == r.id))
-            .cloned();
+            .or_else(|| {
+                self.found
+                    .iter()
+                    .chain(&self.effects)
+                    .find(|f| f.info.id == r.id)
+            });
         if let Some(why) = crate::quirks::lookup(&r.id, r.windows).unsupported {
             return Err(anyhow!("not supported: {why}"));
         }
-        let path = match &found {
+        let path = match found {
             Some(f) => f.path.clone(),
             None => r
                 .path
@@ -822,7 +931,11 @@ impl Session {
         if let Some(q) = self.quarantine.get(&path, &r.id) {
             return Err(anyhow!("quarantined: {}", q.reason));
         }
-        let windows = found.as_ref().map_or(r.windows, |f| f.windows);
+        Ok((path, found.map_or(r.windows, |f| f.windows)))
+    }
+
+    fn restore_slot(&mut self, i: usize, r: &PluginRef, state: Option<&[u8]>) -> Result<()> {
+        let (path, windows) = self.locate(r)?;
         let mut loaded = self.create_plugin(i, &path, &r.id, windows)?;
         if let Some(state) = state {
             loaded
@@ -831,6 +944,143 @@ impl Session {
                 .context("restoring the saved state")?;
         }
         self.install(i, loaded)
+    }
+
+    // ---- insert effects -------------------------------------------------------------
+
+    /// Puts an effect plugin into position `index` of a slot's insert chain.
+    pub fn load_insert(&mut self, slot: usize, index: usize, found: &Found) -> Result<()> {
+        if let Some(why) = crate::quirks::lookup(&found.info.id, found.windows).unsupported {
+            return Err(anyhow!("{} is not supported: {why}", found.info.name));
+        }
+        if self.quarantine.remove(&found.path, &found.info.id) {
+            let _ = self.quarantine.save(&crate::paths::quarantine_file());
+        }
+        self.unload_insert(slot, index);
+        let t = Instant::now();
+        let loaded = self.create_plugin(
+            insert_id(slot, index),
+            &found.path,
+            &found.info.id,
+            found.windows,
+        )?;
+        self.install_insert(slot, index, loaded)?;
+        self.rig.slots[slot].inserts.resize(MAX_INSERTS, None);
+        self.rig.slots[slot].inserts[index] = Some(Insert {
+            plugin: PluginRef {
+                format: found.info.format,
+                id: found.info.id.clone(),
+                name: found.info.name.clone(),
+                path: Some(found.path.clone()),
+                windows: found.windows,
+            },
+            state: None,
+            bypass: false,
+        });
+        self.dirty = true;
+        self.say(format!(
+            "slot {} insert {} <- {} in {:?}",
+            slot + 1,
+            index + 1,
+            found.info.name,
+            t.elapsed()
+        ));
+        self.autosave(Duration::ZERO, true);
+        Ok(())
+    }
+
+    fn install_insert(&mut self, slot: usize, index: usize, mut loaded: Loaded) -> Result<()> {
+        let processor = loaded
+            .plugin
+            .activate(self.sample_rate as f64, MAX_BLOCK as u32)?;
+        self.inserts[slot][index] = Some(loaded);
+        self.engine
+            .send(Command::SetInsert {
+                slot,
+                index,
+                processor,
+            })
+            .map_err(|_| anyhow!("engine command queue full"))?;
+        Ok(())
+    }
+
+    fn restore_insert(&mut self, slot: usize, index: usize, ins: &Insert) -> Result<()> {
+        let (path, windows) = self.locate(&ins.plugin)?;
+        let mut loaded =
+            self.create_plugin(insert_id(slot, index), &path, &ins.plugin.id, windows)?;
+        if let Some(state) = &ins.state {
+            loaded
+                .plugin
+                .load_state(state)
+                .context("restoring the saved state")?;
+        }
+        self.install_insert(slot, index, loaded)?;
+        if ins.bypass {
+            let _ = self.engine.send(Command::SetInsertBypass {
+                slot,
+                index,
+                bypass: true,
+            });
+        }
+        Ok(())
+    }
+
+    pub fn unload_insert(&mut self, slot: usize, index: usize) {
+        self.remove_insert_runtime(slot, index);
+        if let Some(entry) = self.rig.slots[slot].inserts.get_mut(index)
+            && entry.take().is_some()
+        {
+            self.dirty = true;
+        }
+        if self.view_id == Some(insert_id(slot, index)) {
+            self.view_id = Some(slot);
+        }
+    }
+
+    fn remove_insert_runtime(&mut self, slot: usize, index: usize) -> bool {
+        if self.inserts[slot][index].is_none() {
+            return false;
+        }
+        let id = insert_id(slot, index);
+        self.guard.unregister_slot(id);
+        self.guard.begin_close();
+        let _ = self
+            .editors
+            .forget(id, &mut lookup(&mut self.plugins, &mut self.inserts));
+        let _ = self.engine.send(Command::ClearInsert { slot, index });
+        self.wait_for_retired();
+        if let Some(mut l) = self.inserts[slot][index].take() {
+            l.plugin.deactivate();
+        }
+        self.guard.end_close();
+        true
+    }
+
+    pub fn toggle_insert_bypass(&mut self, slot: usize, index: usize) {
+        if let Some(Some(ins)) = self.rig.slots[slot].inserts.get_mut(index) {
+            ins.bypass = !ins.bypass;
+            let bypass = ins.bypass;
+            self.dirty = true;
+            let _ = self.engine.send(Command::SetInsertBypass {
+                slot,
+                index,
+                bypass,
+            });
+        }
+    }
+
+    /// Waits (briefly) for the audio thread to hand a removed processor back, so its plugin can
+    /// be deactivated. The audio thread answers within a cycle.
+    fn wait_for_retired(&mut self) {
+        let deadline = Instant::now() + Duration::from_millis(500);
+        let mut retired = Vec::new();
+        while retired.is_empty() && Instant::now() < deadline {
+            retired = self.engine.take_retired();
+            if retired.is_empty() {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+        drop(retired);
     }
 
     /// Tries a missing or quarantined slot again from its saved plugin and state.
@@ -862,7 +1112,8 @@ impl Session {
     pub fn shutdown(&mut self) {
         self.guard.disarm();
         self.autosave(Duration::ZERO, true);
-        self.editors.shutdown(&mut Lookup(&mut self.plugins));
+        self.editors
+            .shutdown(&mut lookup(&mut self.plugins, &mut self.inserts));
         if let Some(b) = self.backend.take() {
             let engine = b.stop();
             drop(engine);
@@ -872,7 +1123,13 @@ impl Session {
         for l in self.plugins.iter_mut().flatten() {
             l.plugin.deactivate();
         }
+        for l in self.inserts.iter_mut().flatten().flatten() {
+            l.plugin.deactivate();
+        }
         self.plugins.iter_mut().for_each(|p| *p = None);
+        self.inserts
+            .iter_mut()
+            .for_each(|row| row.iter_mut().for_each(|p| *p = None));
     }
 
     /// Peaks since the last call, per slot.

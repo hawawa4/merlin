@@ -434,10 +434,10 @@ libjack preload (S1), `build-wine.sh` and the patch set (S4).
 1. ✅ Workspace, `model`, `engine` with the dummy backend and offline render tests.
 2. ✅ JACK backend, JACK MIDI, automatic hardware connection, stats. (Meters in the UI; hotplug and ALSA sequencer listing still to do.)
 3. ✅ Router and note ownership, exclusive/layer, zones, transpose, panic (property-tested).
-4. ◐ CLAP hosting (instrument) and state ✅; inserts (effects in a slot) not yet.
+4. ✅ CLAP hosting (instrument) and state; plugin inserts (up to 4 effect plugins per slot, after EQ and compressor, before delay and reverb, with bypass, state in the rig, editor tabs in the dock).
 5. ✅ VST3 hosting and state (`hosting::vst3`, ported from S3 onto the `PluginHandle` traits, with `IMessage`/`IAttributeList`; first audio bus only, no programs/units yet). Scanner reads `.vst3` bundles too.
 6. ✅ **`embed` crate:** editor dock, clipping/scroll, editor cache, overlap rules. (Keyboard focus handshake: manual test pending.)
-7. ✅ Built-in FX in the `dsp` crate: EQ, compressor, delay, reverb per slot (an Effects tab in the dock), master limiter. Tails keep ringing after an instrument sleeps. Plugin inserts (up to 4 per slot) still to do.
+7. ✅ Built-in FX in the `dsp` crate: EQ, compressor, delay, reverb per slot (an Effects tab in the dock), master limiter. Tails keep ringing after an instrument sleeps. Plugin inserts are in (item 4).
 8. ✅ Scanner: cache, background scan with one child process per file and a timeout (`merlin-scan`), failed files with Retry, quarantine list; searchable browser with favourites and drag-and-drop. VST3-specific `moduleinfo.json` and SoundFont scanning later.
 9. ✅ Rack UI, keyboard map, Settings panel (plugin folders, audio buffer size, MIDI inputs, Windows plugin paths) and the performance check with the exact fix for each problem. MIDI device roles and hotplug (ALSA sequencer) later.
 10. ◐ Windows plugins work through a manually configured Wine (`just dev` wires our patched build); the managed runtime and "Install Windows plugin…" are Phase 2.

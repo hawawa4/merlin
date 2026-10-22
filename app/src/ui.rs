@@ -50,6 +50,12 @@ pub enum Action {
     FxPreset(usize, String),
     /// Switch the dock between the plugin's editor and the slot's effects.
     Tab(DockTab),
+    /// Put effect-plugin entry `k` into insert position `index` of slot `i`.
+    LoadInsert(usize, usize, usize),
+    UnloadInsert(usize, usize),
+    BypassInsert(usize, usize),
+    /// Script-only: load the named effect plugin as an insert.
+    LoadInsertNamed(usize, usize, String),
     ToggleSettings,
     /// Script-only: show a settings tab.
     ShowSettingsTab(SettingsTab),
@@ -85,6 +91,8 @@ pub enum Action {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DockTab {
     Plugin,
+    /// The editor of insert `n`.
+    Insert(usize),
     Effects,
 }
 
@@ -173,7 +181,7 @@ pub fn draw(
             "Load an instrument into a slot, then select it"
         } else if st.popup_open {
             "(editor hidden while a menu is open)"
-        } else if s.editors.shown() != s.viewing {
+        } else if s.editors.shown() != s.view_id {
             note.unwrap_or("This plugin has no editor")
         } else {
             ""
@@ -488,7 +496,17 @@ fn dock_bar(ui: &mut egui::Ui, s: &Session, st: &UiState, actions: &mut Vec<Acti
             ui.label("EDITOR · nothing selected");
             return;
         };
-        for (tab, label) in [(DockTab::Plugin, "Plugin"), (DockTab::Effects, "Effects")] {
+        let mut tabs = vec![(DockTab::Plugin, "Plugin".to_owned())];
+        for (k, ins) in s.rig.slots[i].inserts.iter().enumerate() {
+            if let Some(ins) = ins {
+                tabs.push((
+                    DockTab::Insert(k),
+                    format!("Insert {}: {}", k + 1, ins.plugin.name),
+                ));
+            }
+        }
+        tabs.push((DockTab::Effects, "Effects".to_owned()));
+        for (tab, label) in tabs {
             if ui.selectable_label(st.tab == tab, label).clicked() {
                 actions.push(Action::Tab(tab));
             }
@@ -508,13 +526,17 @@ fn dock_bar(ui: &mut egui::Ui, s: &Session, st: &UiState, actions: &mut Vec<Acti
             ui.colored_label(COLORS[i], format!("EFFECTS · {} · {on}/4 on", i + 1));
             return;
         }
-        let name = s.rig.slots[i]
-            .instrument
-            .as_ref()
-            .map(|r| r.name.as_str())
-            .unwrap_or("");
+        let name = match st.tab {
+            DockTab::Insert(k) => s.rig.slots[i]
+                .inserts
+                .get(k)
+                .and_then(Option::as_ref)
+                .map(|n| n.plugin.name.as_str()),
+            _ => s.rig.slots[i].instrument.as_ref().map(|r| r.name.as_str()),
+        }
+        .unwrap_or("");
         ui.colored_label(COLORS[i], format!("EDITOR · {} {name}", i + 1));
-        let Some(info) = s.editors.info(i) else {
+        let Some(info) = s.view_id.and_then(|id| s.editors.info(id)) else {
             return;
         };
         if ui
@@ -593,6 +615,7 @@ fn pedal(
 
 /// The slot's built-in effects: EQ, compressor, delay, reverb, in signal order.
 fn fx_panel(ui: &mut egui::Ui, s: &Session, i: usize, actions: &mut Vec<Action>) {
+    inserts_section(ui, s, i, actions);
     let before = s.rig.slots[i].fx;
     let mut fx = before;
     let reduction = f32::from_bits(s.engine.shared.comp_reduction[i].load(Ordering::Relaxed));
@@ -767,4 +790,50 @@ fn fx_panel(ui: &mut egui::Ui, s: &Session, i: usize, actions: &mut Vec<Action>)
     if fx != before {
         actions.push(Action::SetFx(i, fx));
     }
+}
+
+/// The slot's insert chain: effect plugins between the instrument and the built-in effects.
+fn inserts_section(ui: &mut egui::Ui, s: &Session, i: usize, actions: &mut Vec<Action>) {
+    ui.add_space(6.0);
+    ui.label(
+        RichText::new("INSERTS · plugin effects, in order, before the built-in effects").strong(),
+    );
+    for k in 0..merlin_model::MAX_INSERTS {
+        ui.horizontal(|ui| {
+            ui.label(format!("{}.", k + 1));
+            match s.rig.slots[i].inserts.get(k).and_then(Option::as_ref) {
+                Some(ins) => {
+                    ui.label(&ins.plugin.name);
+                    let mut on = !ins.bypass;
+                    if ui.checkbox(&mut on, "on").changed() {
+                        actions.push(Action::BypassInsert(i, k));
+                    }
+                    if ui.small_button("Edit").clicked() {
+                        actions.push(Action::Tab(DockTab::Insert(k)));
+                    }
+                    if ui.small_button("Remove").clicked() {
+                        actions.push(Action::UnloadInsert(i, k));
+                    }
+                }
+                None => {
+                    ui.menu_button("Load effect…", |ui| {
+                        if s.effects.is_empty() {
+                            ui.label("No effect plugins found");
+                        }
+                        egui::ScrollArea::vertical()
+                            .max_height(300.0)
+                            .show(ui, |ui| {
+                                for (e, f) in s.effects.iter().enumerate() {
+                                    if ui.button(found_label(f)).clicked() {
+                                        actions.push(Action::LoadInsert(i, k, e));
+                                        ui.close();
+                                    }
+                                }
+                            });
+                    });
+                }
+            }
+        });
+    }
+    ui.separator();
 }

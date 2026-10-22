@@ -1,17 +1,16 @@
 use std::time::{Duration, Instant};
 
+use crate::Dock;
+use crate::dock::MAX_EDITORS;
 use anyhow::{Context, Result};
 use merlin_hosting::{EditorSize, PluginHandle};
-use merlin_model::MAX_SLOTS;
-
-use crate::Dock;
 
 /// Surplus editors are destroyed this long after a switch, never in the same turn as showing
 /// another editor: destroying a bridged editor right when another appears makes Wine abort the
 /// plugin host with `BadWindow` (found in S5).
 pub const EVICT_DELAY: Duration = Duration::from_millis(300);
 
-/// Gives the manager the plugin of a slot. The app owns the plugins; the manager only borrows
+/// Gives the manager the plugin behind an editor id. The app owns the plugins; the manager only borrows
 /// them for the duration of a call.
 pub trait PluginLookup {
     fn plugin(&mut self, slot: usize) -> Option<&mut dyn PluginHandle>;
@@ -69,7 +68,7 @@ impl EditorManager {
     pub fn new(parent: u32, scale: f64, cache_cap: usize) -> Result<Self> {
         Ok(Self {
             dock: Dock::new(parent)?,
-            entries: (0..MAX_SLOTS).map(|_| Entry::new()).collect(),
+            entries: (0..MAX_EDITORS).map(|_| Entry::new()).collect(),
             cache_cap: cache_cap.max(1),
             evict_at: None,
             popup_open: false,
@@ -257,7 +256,7 @@ impl EditorManager {
         self.evict_at = None;
         let keep = self.dock.shown();
         while self.live_editors() > self.cache_cap {
-            let victim = (0..MAX_SLOTS)
+            let victim = (0..MAX_EDITORS)
                 .filter(|&s| self.entries[s].created && Some(s) != keep)
                 .min_by_key(|&s| self.entries[s].last_shown);
             let Some(victim) = victim else { break };
@@ -268,7 +267,7 @@ impl EditorManager {
 
     /// Destroys every editor. Call before the plugins are dropped.
     pub fn shutdown(&mut self, plugins: &mut dyn PluginLookup) {
-        for slot in 0..MAX_SLOTS {
+        for slot in 0..MAX_EDITORS {
             let _ = self.forget(slot, plugins);
         }
     }

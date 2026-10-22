@@ -6,6 +6,23 @@ use merlin_hosting::MidiEvent;
 use merlin_hosting::builtin::SineSynth;
 use merlin_model::FxSettings;
 
+struct Gain(f32);
+
+impl merlin_hosting::PluginProcessor for Gain {
+    fn process(
+        &mut self,
+        io: &mut merlin_hosting::Io,
+        _: &[MidiEvent],
+    ) -> merlin_hosting::ProcessStatus {
+        let (l, r) = io.input.unwrap();
+        for i in 0..io.frames() {
+            io.out_l[i] = l[i] * self.0;
+            io.out_r[i] = r[i] * self.0;
+        }
+        merlin_hosting::ProcessStatus::Continue
+    }
+}
+
 #[global_allocator]
 static ALLOCATOR: AllocDisabler = AllocDisabler;
 
@@ -38,6 +55,17 @@ fn processing_does_not_allocate() {
                 },
             })
             .ok();
+    }
+    for slot in 0..4 {
+        for index in 0..2 {
+            handle
+                .send(Command::SetInsert {
+                    slot,
+                    index,
+                    processor: Box::new(Gain(0.9)),
+                })
+                .ok();
+        }
     }
     let mut fx = FxSettings::default();
     fx.eq.enabled = true;

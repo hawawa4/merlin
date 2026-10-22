@@ -9,5 +9,5 @@
 mod dock;
 mod manager;
 
-pub use dock::Dock;
+pub use dock::{Dock, MAX_EDITORS};
 pub use manager::{EVICT_DELAY, EditorInfo, EditorManager, PluginLookup, ShowOutcome};

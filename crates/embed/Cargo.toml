@@ -6,9 +6,9 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-merlin-model.workspace = true
 merlin-hosting.workspace = true
 anyhow.workspace = true
 x11rb = { version = "0.13", features = ["allow-unsafe-code"] }
 
 [dev-dependencies]
+merlin-model.workspace = true

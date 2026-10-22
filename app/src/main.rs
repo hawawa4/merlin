@@ -432,13 +432,49 @@ impl Running {
             }
             Action::Tab(tab) => {
                 self.ui.tab = tab;
+                if let Some(i) = s.viewing {
+                    match tab {
+                        ui::DockTab::Plugin => s.show_editor(i),
+                        ui::DockTab::Insert(k) => s.show_insert_editor(i, k),
+                        ui::DockTab::Effects => {}
+                    }
+                }
+                Ok(())
+            }
+            Action::LoadInsert(i, k, e) => match s.effects.get(e).cloned() {
+                Some(f) => s.load_insert(i, k, &f),
+                None => Err(anyhow::anyhow!("no such effect plugin")),
+            },
+            Action::LoadInsertNamed(i, k, query) => {
+                let q = query.to_lowercase();
+                match s
+                    .effects
+                    .iter()
+                    .find(|f| f.info.name.to_lowercase().contains(&q))
+                    .cloned()
+                {
+                    Some(f) => s.load_insert(i, k, &f),
+                    None => Err(anyhow::anyhow!("no effect plugin matching {query:?}")),
+                }
+            }
+            Action::UnloadInsert(i, k) => {
+                s.unload_insert(i, k);
+                if self.ui.tab == ui::DockTab::Insert(k) {
+                    self.ui.tab = ui::DockTab::Effects;
+                }
+                Ok(())
+            }
+            Action::BypassInsert(i, k) => {
+                s.toggle_insert_bypass(i, k);
                 Ok(())
             }
             Action::Transpose(i, t) => {
                 s.set_transpose(i, t);
                 Ok(())
             }
-            Action::Fit => s.editors.fit(&mut session::lookup(&mut s.plugins)),
+            Action::Fit => s
+                .editors
+                .fit(&mut session::lookup(&mut s.plugins, &mut s.inserts)),
             Action::Scroll(x, y) => s.editors.scroll(x, y),
             Action::NoteOn(k) => {
                 s.note(k, true);
@@ -734,11 +770,26 @@ fn parse_script() -> Vec<(Duration, Action)> {
                         _ => settings_ui::SettingsTab::Plugins,
                     }),
                 },
-                "tab" => Action::Tab(if words.next()? == "fx" {
-                    ui::DockTab::Effects
-                } else {
-                    ui::DockTab::Plugin
+                "tab" => Action::Tab(match words.next()? {
+                    "fx" => ui::DockTab::Effects,
+                    t if t.starts_with("insert") => ui::DockTab::Insert(
+                        t["insert".len()..].parse::<usize>().ok()?.checked_sub(1)?,
+                    ),
+                    _ => ui::DockTab::Plugin,
                 }),
+                "insert" => {
+                    let i = slot(words.next())?;
+                    let k = words.next()?.parse::<usize>().ok()?.checked_sub(1)?;
+                    Action::LoadInsertNamed(i, k, words.collect::<Vec<_>>().join(" "))
+                }
+                "uninsert" => Action::UnloadInsert(
+                    slot(words.next())?,
+                    words.next()?.parse::<usize>().ok()?.checked_sub(1)?,
+                ),
+                "bypass" => Action::BypassInsert(
+                    slot(words.next())?,
+                    words.next()?.parse::<usize>().ok()?.checked_sub(1)?,
+                ),
                 "master" => Action::SetMaster(words.next()?.parse().ok()?),
                 "fx" => Action::FxPreset(slot(words.next())?, words.next()?.to_string()),
                 "fit" => Action::Fit,
