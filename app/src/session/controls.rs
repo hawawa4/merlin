@@ -101,6 +101,7 @@ impl Session {
                 self.learn_from(&incoming);
                 continue;
             }
+            self.surface_input(&incoming);
             let ctx = self.control_context();
             for outcome in self.mapper.handle(&incoming, &ctx) {
                 self.apply_outcome(outcome);
@@ -170,6 +171,15 @@ impl Session {
                         .map_or(0.0, |_| self.macro_value(i, k))
                 })
             }),
+            knobs: std::array::from_fn(|i| {
+                std::array::from_fn(|k| {
+                    if i < UI_SLOTS && self.rig.slots[i].instrument.is_some() {
+                        self.knob_value(i, k)
+                    } else {
+                        0.0
+                    }
+                })
+            }),
             snapshots: self.rig.snapshots.len(),
             snapshot: self.last_snapshot,
         }
@@ -183,6 +193,7 @@ impl Session {
             Outcome::SetVolume(i, v) => self.set_volume(i, v),
             Outcome::SetMaster(v) => self.set_master_volume(v),
             Outcome::SetMacro(i, k, v) => self.set_macro(i, k, v),
+            Outcome::SetKnob(i, k, v) => self.set_knob(i, k, v),
             Outcome::Recall(n) => self.recall_snapshot(n),
             Outcome::NextPart => self.next_part(),
             Outcome::PrevPart => self.prev_part(),

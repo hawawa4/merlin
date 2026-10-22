@@ -1572,6 +1572,9 @@ fn parse_control_action(
             index: num(words.next())?,
         },
         "selvolume" => A::SelectedVolume,
+        "selknob" => A::SelectedKnob {
+            index: num(words.next())?,
+        },
         "macro" => A::SlotMacro {
             slot: num(words.next())?,
             index: num(words.next())?,

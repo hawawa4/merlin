@@ -5,7 +5,10 @@
 use std::time::Duration;
 
 use merlin_hosting::ParamInfo;
-use merlin_model::{MACROS_PER_SLOT, MAX_MACRO_TARGETS, Macro, MacroTarget, SamplerField};
+use merlin_model::{
+    BRIGHTNESS_OCTAVES, DefaultKnob, MACROS_PER_SLOT, MAX_MACRO_TARGETS, Macro, MacroTarget,
+    SamplerField,
+};
 
 use super::{Session, UI_SLOTS, insert_id};
 
@@ -15,6 +18,75 @@ const PARAM_CALL_LIMIT: Duration = Duration::from_secs(10);
 impl Session {
     pub fn macros(&self, slot: usize) -> &[Macro] {
         &self.rig.slots[slot].macros
+    }
+
+    /// Does macro `k` of `slot` drive anything? (Then a controller's knob `k` is that macro.)
+    pub fn macro_in_use(&self, slot: usize, k: usize) -> bool {
+        self.rig.slots[slot]
+            .macros
+            .get(k)
+            .is_some_and(|m| !m.targets.is_empty())
+    }
+
+    /// The default knob `k` stands for on this slot: none for a SoundFont-only control on a plugin.
+    pub fn default_knob(&self, slot: usize, k: usize) -> Option<DefaultKnob> {
+        let knob = DefaultKnob::for_index(k)?;
+        (knob != DefaultKnob::Brightness || self.is_sampler(slot)).then_some(knob)
+    }
+
+    /// Where controller knob `k` of `slot` sits: its macro, or the default control's position.
+    pub fn knob_value(&self, slot: usize, k: usize) -> f32 {
+        if self.macro_in_use(slot, k) {
+            return self.macro_value(slot, k);
+        }
+        match self.default_knob(slot, k) {
+            Some(DefaultKnob::Brightness) => self
+                .sampler_tone(slot)
+                .map_or(0.0, |t| (t.cutoff / BRIGHTNESS_OCTAVES + 1.0) / 2.0),
+            Some(knob) => knob.read(&self.rig.slots[slot]).unwrap_or(0.0),
+            None => 0.0,
+        }
+        .clamp(0.0, 1.0)
+    }
+
+    /// What controller knob `k` of `slot` is called, and its position in words.
+    pub fn knob_label(&self, slot: usize, k: usize) -> (String, String) {
+        let v = self.knob_value(slot, k);
+        if self.macro_in_use(slot, k) {
+            let name = self.rig.slots[slot].macros[k].label(k);
+            return (name, format!("{:.0}%", v * 100.0));
+        }
+        match self.default_knob(slot, k) {
+            Some(knob) => (knob.name().to_owned(), knob.display(v)),
+            None => (String::new(), String::new()),
+        }
+    }
+
+    /// Turns controller knob `k` of `slot`: the macro if there is one, else the default control.
+    pub fn set_knob(&mut self, slot: usize, k: usize, v: f32) {
+        if slot >= UI_SLOTS {
+            return;
+        }
+        if self.macro_in_use(slot, k) {
+            self.set_macro(slot, k, v);
+            return;
+        }
+        match self.default_knob(slot, k) {
+            Some(DefaultKnob::Brightness) => {
+                if let Some(mut tone) = self.sampler_tone(slot) {
+                    tone.cutoff = (v.clamp(0.0, 1.0) * 2.0 - 1.0) * BRIGHTNESS_OCTAVES;
+                    self.set_sampler_tone(slot, tone);
+                }
+            }
+            Some(knob) => {
+                let mut copy = self.rig.slots[slot].clone();
+                if knob.write(&mut copy, v) {
+                    self.rig.slots[slot].pan = copy.pan;
+                    self.set_fx(slot, copy.fx);
+                }
+            }
+            None => {}
+        }
     }
 
     /// Where macro `k` of `slot` sits.

@@ -430,18 +430,24 @@ enabled = false
 LK_SCRIPT = "; ".join(
     [
         "1:load 1 TimGM6mb", "1.2:load 2 TimGM6mb", "1.4:load 3 TimGM6mb", "4:select 1", "4.1:snapshot save",
-        "4.2:macrotarget 1 1 sampler:level",
+        # Macro 3 of slot 1 drives its level: knob 3 is that macro, the other knobs their defaults.
+        "4.2:macrotarget 1 3 sampler:level",
     ]
-    + [f"{t}:report" for t in (7.5, 8.5, 9.5, 10.5, 11.5)]
-    + ["14:quit"]
+    + [f"{t}:report" for t in [7.5 + i for i in range(14)]]
+    + ["23:quit"]
 )
 # Top pad 2 selects slot 2; Track right goes on to slot 3; bottom pad 1 recalls snapshot 1 (slot 1
-# again); fader button 1 mutes slot 1.
-LK_CONTROLS = "1:144 97 100; 2:BF 103 127; 3:144 112 100; 4:BF 37 127"
+# again); fader button 1 mutes slot 1. Knob 1 (pan, default) picks up at the middle and goes
+# right; knob 2 (reverb) picks up at the bottom and switches the reverb on; knob 3 is a macro and
+# raises the level. Then Device Select held (pad 3 of the select row), back to Session, then Drum.
+LK_CONTROLS = (
+    "1:144 97 100; 2:BF 103 127; 3:144 112 100; 4:BF 37 127; 5:BF 21 64; 6:BF 21 127; "
+    "7:BF 22 0; 8:BF 22 64; 9:BF 23 64; 10:BF 23 127; 11:BF 3 9; 12:144 66 100; 13:BF 3 2; 14:BF 3 1"
+)
 
 
 def launchkey_check():
-    out, got = run(LK_SCRIPT, LK_CONTROLS, 12, args=(), controller=FAKE_LAUNCHKEY, name=LK_NAME, config=LK_CONFIG)
+    out, got = run(LK_SCRIPT, LK_CONTROLS, 20, args=(), controller=FAKE_LAUNCHKEY, name=LK_NAME, config=LK_CONFIG)
     msgs = [tuple(int(x, 16) for x in line.split()[2:]) for line in got.splitlines() if line.startswith("recv ")]
     targets = [t.strip() for t in re.findall(r"targets \[([\d, ]*)\]", out)]
     problems = []
@@ -472,6 +478,23 @@ def launchkey_check():
     # What the controls did.
     if targets[:4] != ["2", "3", "1", "1"]:
         problems.append(f"selected slots {targets}, wanted 2, 3, 1, 1")
+    if targets[11:14] != ["3", "3", "3"]:
+        problems.append(f"Device Select pad 3 did not select slot 3: {targets}")
+    pan = [float(x) for x in re.findall(r"pan1 ([\d.-]+)", out)]
+    fx = re.findall(r"fx1 (\d+)", out)
+    gain = [float(x) for x in re.findall(r"gain1 ([\d.-]+)", out)]
+    if len(pan) < 14 or abs(pan[4]) > 0.02 or pan[5] < 0.99:
+        problems.append(f"knob 1 (default: pan) {pan}")
+    if len(fx) < 14 or fx[6] != "0000" or fx[7] != "0001":
+        problems.append(f"knob 2 (default: reverb) {fx}")
+    if len(gain) < 14 or abs(gain[8] - 1.0) > 0.02 or abs(gain[9] - 2.0) > 0.05:
+        problems.append(f"knob 3 (a macro, so it wins over the default) {gain}")
+    # Pad modes: Device Select lights the select notes, Drum mode the drum pads in the colour of
+    # the slot that plays (slot 3: green).
+    if not any(m[:2] in ((0x90, 64), (0x92, 64)) for m in msgs):
+        problems.append("Device Select mode did not light the select row")
+    if (0x99, 0x28, 21) not in msgs:
+        problems.append("Drum mode did not light the drum pads in the slot's colour")
     if problems:
         print("FAIL (launchkey)\n  " + "\n  ".join(problems))
         print(out[-2500:])

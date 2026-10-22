@@ -45,6 +45,8 @@ pub struct Context {
     pub primary: Option<usize>,
     /// Where each slot's macros sit.
     pub macros: [[f32; MACROS_PER_SLOT]; MAX_SLOTS],
+    /// Where each slot's knobs sit: the macro's position, or the default control's.
+    pub knobs: [[f32; MACROS_PER_SLOT]; MAX_SLOTS],
     /// How many snapshots the rig has, and the one recalled last.
     pub snapshots: usize,
     pub snapshot: Option<usize>,
@@ -74,6 +76,8 @@ pub enum Outcome {
     SetVolume(usize, f32),
     SetMaster(f32),
     SetMacro(usize, usize, f32),
+    /// Knob `k` of a slot: its macro if it has one, else the default for that knob.
+    SetKnob(usize, usize, f32),
     Recall(usize),
     NextPart,
     PrevPart,
@@ -159,7 +163,9 @@ impl Mapper {
         for (m, s) in self.mappings.iter().zip(self.state.iter_mut()) {
             if matches!(
                 m.action,
-                ControlAction::SelectedMacro { .. } | ControlAction::SelectedVolume
+                ControlAction::SelectedMacro { .. }
+                    | ControlAction::SelectedKnob { .. }
+                    | ControlAction::SelectedVolume
             ) {
                 *s = State::default();
             }
@@ -401,6 +407,17 @@ fn follow(m: &Mapping, state: &mut State, inc: &Incoming, ctx: &Context) -> Opti
             (
                 ctx.macros[s][k],
                 Box::new(move |v| Outcome::SetMacro(s, k, v)),
+            )
+        }
+        ControlAction::SelectedKnob { index } => {
+            let s = ctx.primary.filter(|&s| loaded(ctx, s))?;
+            let k = index as usize;
+            if k >= MACROS_PER_SLOT {
+                return None;
+            }
+            (
+                ctx.knobs[s][k],
+                Box::new(move |v| Outcome::SetKnob(s, k, v)),
             )
         }
         ControlAction::SlotPan { slot } => {

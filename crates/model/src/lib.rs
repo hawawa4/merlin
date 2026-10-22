@@ -12,6 +12,7 @@ pub const MAX_SLOTS: usize = 16;
 pub const RIG_VERSION: u32 = 1;
 
 mod fx;
+mod knobs;
 mod macros;
 mod mapping;
 mod migrate;
@@ -20,6 +21,7 @@ mod snapshot;
 mod transport;
 
 pub use fx::{CompSettings, DelaySettings, EqSettings, FxSettings, ReverbSettings};
+pub use knobs::{BRIGHTNESS_OCTAVES, DefaultKnob};
 pub use macros::{MACROS_PER_SLOT, MAX_MACRO_TARGETS, Macro, MacroTarget, SamplerField};
 pub use mapping::{
     ControlAction, Curve, FxKind, Glue, INSTRUMENT, Mapping, Relative, Source, SourceKind, Switch,

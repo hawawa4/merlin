@@ -29,6 +29,19 @@ pub fn show(
         .small()
         .weak(),
     );
+    ui.label(
+        RichText::new(format!(
+            "A controller's knob 1-8 (a Launchkey's, say) turns macro 1-8 of the slot that plays; a knob whose macro has nothing in it does this instead: {}.",
+            merlin_model::DefaultKnob::ALL
+                .iter()
+                .enumerate()
+                .map(|(k, d)| format!("{} {}", k + 1, d.name()))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
+        .small()
+        .weak(),
+    );
     ui.add_space(4.0);
     egui::ScrollArea::vertical().show(ui, |ui| {
         for k in 0..MACROS_PER_SLOT {

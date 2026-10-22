@@ -5,7 +5,6 @@
 
 use merlin_audio_io::{DEVICE_OUTPUTS, DeviceMessage, friendly_name, sink_friendly_name};
 use merlin_control::launchkey::{self, Model, Surface, View};
-use merlin_model::Macro;
 
 use super::{Session, UI_SLOTS};
 
@@ -136,14 +135,10 @@ impl Session {
             (None, None) => format!("{tempo:.0} bpm"),
         };
         if let Some(i) = primary {
-            let macros = &self.rig.slots[i].macros;
             for k in 0..launchkey::PADS {
-                let m = macros.get(k);
-                v.knobs[k] = (
-                    m.map_or_else(|| Macro::default().label(k), |m| m.label(k)),
-                    format!("{:.0}%", m.map_or(0.0, |m| m.value) * 100.0),
-                );
+                v.knobs[k] = self.knob_label(i, k);
             }
+            v.drum = launchkey::SLOT_COLOURS.get(i).copied();
         }
         for i in 0..launchkey::PADS {
             v.faders[i] = format!("{:.2}", self.rig.slots[i].volume);
@@ -165,6 +160,25 @@ impl Session {
                 // The queue was full: forget what was sent so the next round sends it all.
                 s.surface.connect();
             }
+        }
+    }
+
+    /// A message from a controller we drive, before the mappings see it: pad-mode reports change
+    /// what the pads show.
+    pub(super) fn surface_input(&mut self, incoming: &merlin_control::Incoming) {
+        let merlin_control::Message::Cc { number, value } = incoming.message else {
+            return;
+        };
+        let mut changed = false;
+        for s in self
+            .surfaces
+            .iter_mut()
+            .filter(|s| s.device == incoming.device)
+        {
+            changed |= s.surface.input(incoming.channel, number, value);
+        }
+        if changed {
+            self.update_surfaces();
         }
     }
 

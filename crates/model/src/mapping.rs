@@ -92,6 +92,11 @@ pub enum ControlAction {
     },
     /// A fader for the volume of whichever slot plays now.
     SelectedVolume,
+    /// Knob `index` for the slot that plays now: its macro of that number if it has targets,
+    /// else the default for that knob (pan, reverb, delay, EQ, ...; see [`crate::DefaultKnob`]).
+    SelectedKnob {
+        index: u8,
+    },
     /// Move through the setlist: the next part (then the next song), the one before, or
     /// straight to the next or previous song.
     NextPart,
@@ -151,6 +156,7 @@ impl ControlAction {
                 | Self::MasterVolume
                 | Self::SlotMacro { .. }
                 | Self::SelectedMacro { .. }
+                | Self::SelectedKnob { .. }
                 | Self::SelectedVolume
                 | Self::SlotPan { .. }
                 | Self::ClickLevel
@@ -207,6 +213,11 @@ impl ControlAction {
                 format!("Macro {} of the slot that plays", index as usize + 1)
             }
             Self::SelectedVolume => "Volume of the slot that plays".into(),
+            Self::SelectedKnob { index } => format!(
+                "Knob {} of the slot that plays (its macro, else {})",
+                index as usize + 1,
+                crate::DefaultKnob::for_index(index as usize).map_or("nothing", |k| k.name())
+            ),
             Self::SlotMacro { slot, index } => {
                 format!("Macro {} of slot {}", index as usize + 1, slot as usize + 1)
             }
@@ -447,9 +458,9 @@ impl Mapping {
             }
             && match self.action {
                 ControlAction::SelectByValue { base } => (base as usize) < MAX_SLOTS,
-                ControlAction::SlotMacro { index, .. } | ControlAction::SelectedMacro { index } => {
-                    (index as usize) < MACROS_PER_SLOT
-                }
+                ControlAction::SlotMacro { index, .. }
+                | ControlAction::SelectedMacro { index }
+                | ControlAction::SelectedKnob { index } => (index as usize) < MACROS_PER_SLOT,
                 ControlAction::RecallSnapshot { snapshot: n }
                 | ControlAction::RecallSnapshotByValue { base: n } => (n as usize) < MAX_SNAPSHOTS,
                 _ => true,

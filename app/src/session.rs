@@ -1289,6 +1289,8 @@ impl Session {
         self.rig.selected = self.targets.clone();
         self.mapper.selection_changed();
         self.dirty = true;
+        // The controller's lights first: the editor can take a while to appear.
+        self.update_surfaces();
         self.show_editor(i);
     }
 
