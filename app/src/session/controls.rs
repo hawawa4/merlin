@@ -11,7 +11,10 @@ use std::time::Duration;
 
 use merlin_audio_io::{ControlEvent, MARKER_INPUT, friendly_name};
 use merlin_control::{Context, Incoming, Message, Outcome};
-use merlin_model::{ControlAction, Glue, Mapping, Source, SourceKind, Takeover};
+use merlin_model::{
+    ControlAction, FxKind, Glue, INSTRUMENT, MAX_TEMPO, MIN_TEMPO, Mapping, Source, SourceKind,
+    Takeover,
+};
 
 use super::{MAX_SLOTS, Session, UI_SLOTS, UserEvent};
 
@@ -105,8 +108,52 @@ impl Session {
         }
     }
 
-    fn control_context(&self) -> Context {
+    fn control_context(&mut self) -> Context {
+        // Where the mapped plugin parameters sit: what we last set, or their default.
+        let mut params = std::collections::HashMap::new();
+        let wanted: Vec<_> = self
+            .rig
+            .mappings
+            .iter()
+            .filter_map(|m| match m.action {
+                ControlAction::SlotParam { slot, insert, id } => Some((slot, insert, id)),
+                _ => None,
+            })
+            .collect();
+        for key in wanted {
+            if let Some(v) = self.param_position(key) {
+                params.insert(key, v);
+            }
+        }
+        let fx_bits = |f: &merlin_model::FxSettings| {
+            u8::from(f.eq.enabled)
+                | u8::from(f.comp.enabled) << 1
+                | u8::from(f.delay.enabled) << 2
+                | u8::from(f.reverb.enabled) << 3
+        };
+        let t = self.rig.transport;
         Context {
+            pans: std::array::from_fn(|i| {
+                self.rig.slots.get(i).map_or(0.5, |s| (s.pan + 1.0) / 2.0)
+            }),
+            click_level: t.click_volume,
+            tempo: (self.tempo() - MIN_TEMPO) / (MAX_TEMPO - MIN_TEMPO),
+            params,
+            muted: (0..UI_SLOTS)
+                .filter(|&i| self.rig.slots.get(i).is_some_and(|s| s.mute))
+                .fold(0, |m, i| m | 1 << i),
+            fx_on: std::array::from_fn(|i| self.rig.slots.get(i).map_or(0, |s| fx_bits(&s.fx))),
+            bypassed: std::array::from_fn(|i| {
+                self.rig.slots.get(i).map_or(0, |s| {
+                    s.inserts
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, ins)| ins.as_ref().is_some_and(|x| x.bypass))
+                        .fold(0, |m, (k, _)| m | 1 << k)
+                })
+            }),
+            click_on: t.click,
+            transport_running: self.transport_running(),
             loaded: (0..UI_SLOTS)
                 .filter(|&i| self.plugins[i].is_some())
                 .fold(0, |m, i| m | 1 << i),
@@ -144,13 +191,171 @@ impl Session {
             Outcome::ClickToggle => self.toggle_click(),
             Outcome::TapTempo => self.tap_tempo(),
             Outcome::Panic => self.panic(),
+            Outcome::SetPan(i, v) => self.set_pan(i, v * 2.0 - 1.0),
+            Outcome::SetClickLevel(v) => {
+                let on = self.rig.transport.click;
+                self.set_click(on, v);
+            }
+            Outcome::SetTempo(v) => self.set_tempo(MIN_TEMPO + v * (MAX_TEMPO - MIN_TEMPO)),
+            Outcome::SetParam(key, v) => self.set_param_position(key, v),
+            Outcome::ToggleFx(i, fx) => self.toggle_fx(i, fx),
+            Outcome::ToggleBypass(i, k) => self.toggle_insert_bypass(i, k),
         }
+    }
+
+    /// Script support: map a control (any device) to a named plugin parameter.
+    pub fn map_param_named(
+        &mut self,
+        kind: SourceKind,
+        slot: usize,
+        insert: Option<usize>,
+        query: &str,
+        pickup: bool,
+    ) -> anyhow::Result<()> {
+        let q = query.to_lowercase();
+        let info = self
+            .plugin_params(slot, insert)
+            .iter()
+            .find(|p| p.name.to_lowercase().contains(&q))
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no parameter matching {query:?}"))?;
+        let mut m = Mapping::new(
+            Source {
+                device: None,
+                channel: None,
+                kind,
+            },
+            ControlAction::SlotParam {
+                slot: slot as u8,
+                insert: insert.map_or(INSTRUMENT, |i| i as u8),
+                id: info.id,
+            },
+        );
+        m.label = Some(info.name);
+        if pickup {
+            m.takeover = Takeover::Pickup;
+        }
+        self.add_mapping(m);
+        Ok(())
+    }
+
+    /// For the script's report: where the mapped parameters sit.
+    pub fn param_report(&self) -> Vec<String> {
+        let mut v: Vec<_> = self
+            .param_values
+            .iter()
+            .map(|((s, _, id), x)| format!("{}#{id}={x:.2}", *s + 1))
+            .collect();
+        v.sort();
+        v
+    }
+
+    // ---- targets that only a mapping reaches ------------------------------------------------
+
+    pub fn set_pan(&mut self, slot: usize, pan: f32) {
+        if slot >= UI_SLOTS {
+            return;
+        }
+        self.rig.slots[slot].pan = pan.clamp(-1.0, 1.0);
+        self.dirty = true;
+        self.push_slot_settings(slot);
+    }
+
+    pub fn toggle_fx(&mut self, slot: usize, fx: FxKind) {
+        if slot >= UI_SLOTS {
+            return;
+        }
+        let mut all = self.rig.slots[slot].fx;
+        let on = match fx {
+            FxKind::Eq => &mut all.eq.enabled,
+            FxKind::Comp => &mut all.comp.enabled,
+            FxKind::Delay => &mut all.delay.enabled,
+            FxKind::Reverb => &mut all.reverb.enabled,
+        };
+        *on = !*on;
+        self.set_fx(slot, all);
+    }
+
+    /// The plugin and call id a mapped parameter lives in.
+    fn param_target(
+        &self,
+        key: merlin_control::ParamKey,
+    ) -> Option<(usize, Option<usize>)> {
+        let (slot, insert, _) = key;
+        let slot = slot as usize;
+        (slot < UI_SLOTS).then_some(())?;
+        Some((slot, (insert != INSTRUMENT).then_some(insert as usize)))
+    }
+
+    /// Where a mapped parameter sits (0..=1 of its range): what was last set, else its default.
+    fn param_position(&mut self, key: merlin_control::ParamKey) -> Option<f32> {
+        if let Some(&v) = self.param_values.get(&key) {
+            return Some(v);
+        }
+        let (slot, insert) = self.param_target(key)?;
+        let info = self
+            .plugin_params(slot, insert)
+            .iter()
+            .find(|p| p.id == key.2)?
+            .clone();
+        let span = info.max - info.min;
+        (span > 0.0).then(|| ((info.default - info.min) / span).clamp(0.0, 1.0) as f32)
+    }
+
+    /// Puts a mapped parameter at `v` (0..=1 of its range).
+    pub fn set_param_position(&mut self, key: merlin_control::ParamKey, v: f32) {
+        let Some((slot, insert)) = self.param_target(key) else {
+            return;
+        };
+        let Some(info) = self
+            .plugin_params(slot, insert)
+            .iter()
+            .find(|p| p.id == key.2)
+            .cloned()
+        else {
+            return;
+        };
+        let v = if v.is_finite() {
+            v.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let mut value = info.min + (info.max - info.min) * f64::from(v);
+        if info.stepped {
+            value = value.round();
+        }
+        let (call_id, loaded) = match insert {
+            None => (slot, self.plugins[slot].as_mut()),
+            Some(i) => (
+                super::insert_id(slot, i),
+                self.inserts[slot].get_mut(i).and_then(Option::as_mut),
+            ),
+        };
+        if let Some(l) = loaded {
+            let _call = self.guard.call(
+                call_id,
+                "setting a parameter",
+                std::time::Duration::from_secs(10),
+            );
+            l.plugin.set_param(key.2, value);
+        }
+        self.param_values.insert(key, v);
+        self.dirty = true;
     }
 
     // ---- the mapping list --------------------------------------------------------------
 
     pub fn mappings(&self) -> &[Mapping] {
         &self.rig.mappings
+    }
+
+    /// The mapping that drives `action`, and where it is in the list.
+    pub fn mapping_for(&self, action: ControlAction) -> Option<(usize, &Mapping)> {
+        self.rig
+            .mappings
+            .iter()
+            .enumerate()
+            .find(|(_, m)| m.action == action)
     }
 
     pub fn add_mapping(&mut self, mapping: Mapping) {
@@ -176,6 +381,13 @@ impl Session {
             } else {
                 m.glue = Glue::default();
             }
+        }
+    }
+
+    pub fn set_mapping_switch(&mut self, index: usize, switch: merlin_model::Switch) {
+        if let Some(m) = self.rig.mappings.get_mut(index) {
+            m.switch = switch;
+            self.mappings_changed();
         }
     }
 
@@ -227,7 +439,13 @@ impl Session {
 
     /// Waits for the next control the user moves or presses, and maps it to `action`.
     pub fn start_learn(&mut self, action: ControlAction) {
+        self.start_learn_labelled(action, None);
+    }
+
+    /// As [`Session::start_learn`], keeping `label` with the mapping (a parameter's name).
+    pub fn start_learn_labelled(&mut self, action: ControlAction, label: Option<String>) {
         self.learn = Some(action);
+        self.learn_label = label;
         if let Some(b) = self.backend.as_ref() {
             b.interest.learning.store(true, Ordering::Relaxed);
         }
@@ -235,6 +453,7 @@ impl Session {
 
     pub fn cancel_learn(&mut self) {
         self.learn = None;
+        self.learn_label = None;
         if let Some(b) = self.backend.as_ref() {
             b.interest.learning.store(false, Ordering::Relaxed);
         }
@@ -262,21 +481,24 @@ impl Session {
             Message::Program { .. } => SourceKind::Program,
             _ => return,
         };
-        let mapping = Mapping {
-            source: Source {
+        let mut mapping = Mapping::new(
+            Source {
                 device: Some(inc.device.clone()),
                 channel: Some(inc.channel),
                 kind,
             },
             action,
-            takeover: if action.is_continuous() {
-                Takeover::Pickup
-            } else {
-                Takeover::Jump
-            },
-            glue: Glue::default(),
-        };
+        );
+        if action.is_continuous() {
+            mapping.takeover = Takeover::Pickup;
+        }
+        mapping.label = self.learn_label.take();
+        // In map mode a control has one source: teaching it again replaces the old one.
+        let replace = self.map_mode;
         self.cancel_learn();
+        if replace {
+            self.rig.mappings.retain(|m| m.action != action);
+        }
         self.say(format!(
             "mapped {} to {}",
             mapping.source.describe(),

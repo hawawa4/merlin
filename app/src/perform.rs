@@ -7,6 +7,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use egui::{Color32, RichText};
+use merlin_model::ControlAction;
 
 use crate::keyboard::COLORS;
 use crate::session::{Session, TrackState, UI_SLOTS};
@@ -57,10 +58,15 @@ fn bar(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Actio
             )
             .fill(ALERT)
             .min_size(egui::vec2(130.0, 48.0));
-            if ui.add(panic).clicked() {
+            let panic = ui.add(panic);
+            crate::map_mode::target(ui, s, &panic, ControlAction::Panic, None, actions);
+            if panic.clicked() && !s.map_mode {
                 actions.push(Action::Panic);
             }
             lock_button(ui, st, actions);
+            if !st.locked {
+                crate::map_mode::toggle(ui, s, actions);
+            }
             if ui
                 .add(
                     egui::Button::new(RichText::new("Full screen").size(16.0))
@@ -142,7 +148,9 @@ fn transport(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
             } else {
                 Color32::from_rgb(0x2a, 0x6a, 0x3a)
             });
-        if ui.add(b).clicked() {
+        let b = ui.add(b);
+        crate::map_mode::target(ui, s, &b, ControlAction::TransportToggle, None, actions);
+        if b.clicked() && !s.map_mode {
             actions.push(Action::TransportToggle);
         }
         let (bar, beat) = s.engine.shared.transport.position();
@@ -161,20 +169,21 @@ fn transport(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
         {
             actions.push(Action::SetTempo(s.tempo() - 1.0));
         }
-        ui.label(RichText::new(format!("{:.0} bpm", s.tempo())).size(24.0));
+        let bpm = ui.label(RichText::new(format!("{:.0} bpm", s.tempo())).size(24.0));
+        crate::map_mode::target(ui, s, &bpm, ControlAction::Tempo, None, actions);
         if ui
             .add(egui::Button::new("+").min_size(egui::vec2(40.0, 40.0)))
             .clicked()
         {
             actions.push(Action::SetTempo(s.tempo() + 1.0));
         }
-        if ui
+        let tap = ui
             .add(
                 egui::Button::new(RichText::new("TAP").size(18.0)).min_size(egui::vec2(70.0, 40.0)),
             )
-            .on_hover_text("Tap the beat to set the tempo")
-            .clicked()
-        {
+            .on_hover_text("Tap the beat to set the tempo");
+        crate::map_mode::target(ui, s, &tap, ControlAction::TapTempo, None, actions);
+        if tap.clicked() && !s.map_mode {
             actions.push(Action::TapTempo);
         }
         ui.add_space(16.0);
@@ -182,17 +191,18 @@ fn transport(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
         let click = egui::Button::new(RichText::new("CLICK").size(16.0))
             .selected(t.click)
             .min_size(egui::vec2(80.0, 40.0));
-        if ui.add(click).clicked() {
+        let click = ui.add(click);
+        crate::map_mode::target(ui, s, &click, ControlAction::ClickToggle, None, actions);
+        if click.clicked() && !s.map_mode {
             actions.push(Action::ToggleClick);
         }
         let mut volume = t.click_volume;
         ui.spacing_mut().slider_width = 100.0;
-        if ui
-            .add(egui::Slider::new(&mut volume, 0.0..=1.0).show_value(false))
-            .changed()
-        {
+        let level = ui.add(egui::Slider::new(&mut volume, 0.0..=1.0).show_value(false));
+        if level.changed() {
             actions.push(Action::SetClickVolume(volume));
         }
+        crate::map_mode::target(ui, s, &level, ControlAction::ClickLevel, None, actions);
         ui.label("count-in");
         let mut bars = t.count_in_bars;
         egui::ComboBox::from_id_salt("count-in")
@@ -292,10 +302,14 @@ fn setlist(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
         egui::Button::new(RichText::new(text).size(20.0).strong()).min_size(egui::vec2(150.0, 64.0))
     };
     ui.horizontal(|ui| {
-        if ui.add(big("< Prev part")).clicked() {
+        let prev = ui.add(big("< Prev part"));
+        crate::map_mode::target(ui, s, &prev, ControlAction::PrevPart, None, actions);
+        if prev.clicked() && !s.map_mode {
             actions.push(Action::PrevPart);
         }
-        if ui.add(big("Next part >")).clicked() {
+        let next = ui.add(big("Next part >"));
+        crate::map_mode::target(ui, s, &next, ControlAction::NextPart, None, actions);
+        if next.clicked() && !s.map_mode {
             actions.push(Action::NextPart);
         }
         ui.add_space(10.0);
@@ -390,7 +404,16 @@ fn snapshots(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
                 } else {
                     egui::Stroke::new(1.0, Color32::from_gray(70))
                 });
-            if ui.add(b).clicked() {
+            let b = ui.add(b);
+            crate::map_mode::target(
+                ui,
+                s,
+                &b,
+                ControlAction::RecallSnapshot { snapshot: n as u8 },
+                None,
+                actions,
+            );
+            if b.clicked() && !s.map_mode {
                 actions.push(Action::RecallSnapshot(n));
             }
         }
@@ -446,14 +469,21 @@ fn tile(ui: &mut egui::Ui, s: &Session, st: &UiState, i: usize, actions: &mut Ve
                         .frame(false)
                         .min_size(egui::vec2(0.0, 40.0)),
                 );
-                if loaded && r.clicked() {
+                if loaded {
+                    let a = ControlAction::SelectSlot { slot: i as u8 };
+                    crate::map_mode::target(ui, s, &r, a, None, actions);
+                }
+                if loaded && r.clicked() && !s.map_mode {
                     actions.push(Action::Select(i, false));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let mute = egui::Button::new(RichText::new("MUTE").size(16.0).strong())
                         .selected(slot.mute)
                         .min_size(egui::vec2(80.0, 40.0));
-                    if ui.add_enabled(loaded, mute).clicked() {
+                    let mute = ui.add_enabled(loaded, mute);
+                    let a = ControlAction::ToggleMute { slot: i as u8 };
+                    crate::map_mode::target(ui, s, &mute, a, None, actions);
+                    if mute.clicked() && !s.map_mode {
                         actions.push(Action::Mute(i));
                     }
                     let layer = egui::Button::new(RichText::new("+").size(18.0).strong())
@@ -485,32 +515,41 @@ fn tile(ui: &mut egui::Ui, s: &Session, st: &UiState, i: usize, actions: &mut Ve
             ui.add_space(6.0);
             let mut vol = slot.volume;
             ui.spacing_mut().slider_width = ui.available_width() - 80.0;
-            if ui
-                .add(
-                    egui::Slider::new(&mut vol, 0.0..=1.5)
-                        .fixed_decimals(2)
-                        .text("vol"),
-                )
-                .changed()
-            {
+            let v = ui.add(
+                egui::Slider::new(&mut vol, 0.0..=1.5)
+                    .fixed_decimals(2)
+                    .text("vol"),
+            );
+            if v.changed() {
                 actions.push(Action::Volume(i, vol));
             }
+            crate::map_mode::target(
+                ui,
+                s,
+                &v,
+                ControlAction::SlotVolume { slot: i as u8 },
+                None,
+                actions,
+            );
             // The slot's macros that do something.
             for (k, m) in s.macros(i).iter().enumerate() {
                 if m.targets.is_empty() {
                     continue;
                 }
                 let mut v = m.value;
-                if ui
-                    .add(
-                        egui::Slider::new(&mut v, 0.0..=1.0)
-                            .fixed_decimals(2)
-                            .text(m.label(k)),
-                    )
-                    .changed()
-                {
+                let r = ui.add(
+                    egui::Slider::new(&mut v, 0.0..=1.0)
+                        .fixed_decimals(2)
+                        .text(m.label(k)),
+                );
+                if r.changed() {
                     actions.push(Action::SetMacro(i, k, v));
                 }
+                let a = ControlAction::SlotMacro {
+                    slot: i as u8,
+                    index: k as u8,
+                };
+                crate::map_mode::target(ui, s, &r, a, None, actions);
             }
         });
 }
@@ -520,16 +559,15 @@ fn master(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
     ui.horizontal(|ui| {
         let mut master = s.rig.master_volume;
         ui.spacing_mut().slider_width = (ui.available_width() - 420.0).max(200.0);
-        if ui
-            .add(
-                egui::Slider::new(&mut master, 0.0..=1.5)
-                    .fixed_decimals(2)
-                    .text(RichText::new("master").size(18.0)),
-            )
-            .changed()
-        {
+        let m = ui.add(
+            egui::Slider::new(&mut master, 0.0..=1.5)
+                .fixed_decimals(2)
+                .text(RichText::new("master").size(18.0)),
+        );
+        if m.changed() {
             actions.push(Action::SetMaster(master));
         }
+        crate::map_mode::target(ui, s, &m, ControlAction::MasterVolume, None, actions);
         let limiting = f32::from_bits(s.engine.shared.limiter_reduction.swap(0, Ordering::Relaxed));
         if limiting > 0.5 {
             ui.label(

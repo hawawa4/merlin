@@ -38,13 +38,13 @@ CONTROLS = (
 )
 
 
-def run(script, controls, seconds, keep=None):
+def run(script, controls, seconds, keep=None, args=()):
     """Runs the app with the script and the controller; returns the app's output."""
     work = Path(tempfile.mkdtemp(prefix="irig-e2e-"))
     env = dict(os.environ, MERLIN_SCRIPT=script)
     for var, d in (("XDG_DATA_HOME", "data"), ("XDG_STATE_HOME", "state"), ("XDG_CACHE_HOME", "cache"), ("XDG_CONFIG_HOME", "config")):
         env[var] = str(work / d)
-    app = subprocess.Popen([str(APP), "--fresh"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+    app = subprocess.Popen([str(APP), "--fresh", *args], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
     time.sleep(6)
     ctl = subprocess.Popen([str(CONTROLLER), "Fake Controller", controls, str(seconds)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
@@ -71,6 +71,7 @@ def main():
     transport_check()
     backing_check()
     timeline_check()
+    targets_check()
 
 
 SNAP_FILE = Path(tempfile.gettempdir()) / "irig-e2e-snapshots.irig"
@@ -348,6 +349,55 @@ def controls_check():
         print(out[-3000:])
         sys.exit(1)
     print(f"ok: slots {slots}, fader {sorted(set(vols))}, master {sorted(set(masters))}")
+
+
+TARGET_SCRIPT = "; ".join(
+    [
+        "1:load 1 TimGM6mb", "1.5:load 2 Surge XT",
+        "5:map cc 50 pan 1", "5.1:map cc 51 fx 1 reverb", "5.2:map cc 52 fx 1 eq latch",
+        "5.3:map cc 53 clicklevel", "5.4:map cc 54 tempo", "5.5:mapparam cc 55 2 inst Volume",
+        "5.6:mapmode on",
+    ]
+    + [f"{t}:report" for t in (7.5, 8.5, 9.5, 10.5, 11.5, 12.5, 13.5, 14.5, 15.5)]
+    + ["17:quit"]
+)
+# Pan hard right then hard left; reverb on; the latching switch on, off, and off again (stays
+# off); click level, tempo, and a parameter's knob in the middle.
+TARGET_CONTROLS = (
+    "1:B0 50 127; 2:B0 50 0; 3:B0 51 127; 4:B0 52 127; 5:B0 52 0; 6:B0 52 0; "
+    "7:B0 53 127; 8:B0 54 127; 9:B0 55 64"
+)
+
+
+def targets_check():
+    out = run(TARGET_SCRIPT, TARGET_CONTROLS, 11, args=("--plugin-dir", str(ROOT / "test-assets/dl/surge-linux")))
+    rows = re.findall(
+        r"tempo (\d+),.*pan1 ([\d.-]+), fx1 (\d+), bypass1 \S*, click \w+ level ([\d.]+), mapmode (\w+), mappings (\d+), params \[(.*?)\]",
+        out,
+    )
+    if len(rows) != 9:
+        print(f"FAIL (targets)\n  {len(rows)} reports, wanted 9")
+        print(out[-3000:])
+        sys.exit(1)
+    seq = [(int(t), float(p), fx, float(c)) for t, p, fx, c, *_ in rows]
+    wanted = [
+        (120, 1.0, "0000", 0.5), (120, -1.0, "0000", 0.5), (120, -1.0, "0001", 0.5),
+        (120, -1.0, "1001", 0.5), (120, -1.0, "0001", 0.5), (120, -1.0, "0001", 0.5),
+        (120, -1.0, "0001", 1.0), (300, -1.0, "0001", 1.0), (300, -1.0, "0001", 1.0),
+    ]
+    problems = []
+    if seq != wanted:
+        problems.append(f"(tempo, pan, fx, click level) {seq}\n  wanted {wanted}")
+    last = rows[-1]
+    if last[4] != "true" or last[5] != "6":
+        problems.append(f"map mode {last[4]}, mappings {last[5]}")
+    if not re.search(r"2#\d+=0\.50", last[6]):
+        problems.append(f"the parameter did not follow its knob: {last[6]!r}")
+    if problems:
+        print("FAIL (targets)\n  " + "\n  ".join(problems))
+        print(out[-3000:])
+        sys.exit(1)
+    print(f"ok: pan, effect switches (flip and latching), click level, tempo and a plugin parameter follow their controls: {seq[-1]}, {last[6]}")
 
 
 if __name__ == "__main__":

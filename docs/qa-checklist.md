@@ -121,6 +121,20 @@ Snapshots are saved inside the rig file, so one file holds the whole setup.
 - [ ] Insert an LV2 effect on a slot (Effects tab > Load effect...).
 - [ ] The Macros tab > *+ parameter...* on an LV2 plugin lists its control ports (plugins that use only patch parameters list none).
 
+## 5l. MIDI map mode: any control on any controller
+Works with any device that sends CC, notes or Program Change (this is the "every device is supported" route; the Novation-specific one comes later). No hardware: run `just fake-keyboard` or the pretend controller to get something to learn from.
+- [ ] Click **MIDI map** in the header (or Ctrl+M). Every mappable control gets a blue tint: the slot names, **M**, **vol**, the master slider, PANIC and the snapshot buttons. Clicking one turns it amber ("move a control...") instead of using it. Move a knob or press a button on your device: the tint turns green and shows the source (`CC 14`).
+- [ ] Right-click a green control: *Remove the mapping*. Click a green control and move another knob: the new one replaces the old one. Escape (or the button) leaves map mode; then the controls work normally again.
+- [ ] Map the slot volume of slot 1 to a fader, then leave map mode and move the fader: the **vol** number follows. Do the same with a button on **M** (mute), the master slider and a snapshot button.
+- [ ] Effects tab (map mode on): the four built-in effect switches and the inserts' **on** boxes can be mapped. A pad flips the effect each press. In Settings > Controls, set a switch mapping to **Latching switch** and use a foot switch that stays down: down = on, up = off, whatever it was before.
+- [ ] Macros tab: each macro slider can be mapped (same as before, now by clicking it).
+- [ ] **Parameters** tab (next to Macros): every parameter of the instrument (and of an insert, via the drop-down) with a **Map** button. Press it, move a knob: the plugin parameter follows the knob. Try a cutoff or a volume you can hear. Does the search box find what you look for? Do very long lists (Kontakt, Reaktor) scroll smoothly?
+- [ ] Not read back: if you change a mapped parameter in the plugin's own window, a knob set to *Pick up* or *Scale* does not know; use *Jump* for those (or tell me if this bothers you).
+- [ ] Perform view: the **MIDI map** button is there too (not while locked). Map START/STOP, TAP, CLICK, the tempo number (click the "120 bpm"), the click-level slider, the part buttons.
+- [ ] Settings > Controls still lists everything, with the parameter's name next to its mapping. New there: *Pan of a slot*, *Click level*, *Tempo*.
+- [ ] Save the rig, open it again: the mappings (including parameter ones) are still there and still work.
+- [ ] No hardware: `just e2e-controls` now also checks pan, effect switches (flip and latching), click level, tempo and a Surge XT parameter.
+
 ## 6. Stability
 - [ ] Kill a Windows plugin's Wine process while the app runs: `pgrep -af yabridge-host`, then `kill -9 <pid>` of one. The app should restart itself from the autosave and name the plugin it quarantined (it comes back with *Retry*).
 - [ ] The 2-hour rehearsal: 6–8 instruments including a Windows one, switching and playing for 2 hours. For an unattended version: `just soak 7200 3 --windows "Six Sines"`, then read the `state:` lines (xruns, held keys, RSS, threads). Expect 0 xruns, 0 held keys at the end, memory flat.

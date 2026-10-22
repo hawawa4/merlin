@@ -6,7 +6,7 @@ use std::sync::atomic::Ordering;
 
 use egui::{Color32, RichText};
 
-use merlin_model::{Format, FxSettings};
+use merlin_model::{ControlAction, Format, FxKind, FxSettings};
 
 use crate::browser;
 use crate::keyboard::{self, COLORS, ZoneView};
@@ -117,9 +117,22 @@ pub enum Action {
     RefreshMidi,
     /// Teach a control: the next one the user moves or presses is mapped to this.
     LearnControl(merlin_model::ControlAction),
+    /// The same, from map mode, with a name to keep with the mapping.
+    LearnTarget(merlin_model::ControlAction, Option<String>),
+    /// Switch MIDI map mode on or off.
+    SetMapMode(bool),
+    /// Script-only: map a control to the first parameter of a plugin whose name has this text.
+    MapParamNamed(
+        merlin_model::SourceKind,
+        usize,
+        Option<usize>,
+        String,
+        bool,
+    ),
     CancelLearn,
     RemoveMapping(usize),
     SetTakeover(usize, merlin_model::Takeover),
+    SetSwitch(usize, merlin_model::Switch),
     SetGlue(usize, merlin_model::Glue),
     /// Script-only: add a mapping without a device (`map cc 20 select 2`).
     AddMapping(merlin_model::Mapping),
@@ -220,6 +233,8 @@ pub enum DockTab {
     Insert(usize),
     Effects,
     Macros,
+    /// Every parameter of the instrument and its inserts, to map to MIDI controls.
+    Params,
 }
 
 /// UI state that is not part of the session.
@@ -243,6 +258,9 @@ pub struct UiState {
     pub preset_query: String,
     /// Search box of the macro parameter picker.
     pub macro_query: String,
+    /// The Parameters tab: which plugin it lists (`None` = the instrument) and its search box.
+    pub param_insert: Option<usize>,
+    pub param_query: String,
     pub favs_only: bool,
     pub dir_text: String,
     pub sound_dir_text: String,
@@ -295,6 +313,8 @@ impl UiState {
             wine_text: String::new(),
             yab_text: String::new(),
             installer_text: String::new(),
+            param_insert: None,
+            param_query: String::new(),
             new_kind: Default::default(),
             new_slot: 0,
             new_base: 0,
@@ -317,6 +337,12 @@ pub fn draw(
     actions: &mut Vec<Action>,
 ) {
     drag_overlay(ui, st);
+    if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::M)) {
+        actions.push(Action::SetMapMode(!s.map_mode));
+    }
+    if s.map_mode && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        actions.push(Action::SetMapMode(false));
+    }
     if ui.input(|i| i.key_pressed(egui::Key::F11)) && !(st.perform && st.locked) {
         actions.push(Action::SetPerform(!st.perform));
     }
@@ -356,6 +382,12 @@ pub fn draw(
             && let Some(i) = s.viewing
         {
             fx_panel(ui, s, i, actions);
+            return;
+        }
+        if st.tab == DockTab::Params
+            && let Some(i) = s.viewing
+        {
+            crate::param_panel::show(ui, s, st, i, actions);
             return;
         }
         if st.tab == DockTab::Macros
@@ -556,7 +588,7 @@ fn drag_overlay(ui: &mut egui::Ui, st: &UiState) {
 }
 
 /// The saved performance states: click one to bring it back; right-click for more.
-fn snapshot_bar(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
+fn snapshot_bar(ui: &mut egui::Ui, s: &mut Session, actions: &mut Vec<Action>) {
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new("Snapshots").strong()).on_hover_text(
             "A snapshot remembers which slots play, their volumes, zones, effects on or off and SoundFont presets. Click one to bring it back; right-click to rename, update or remove it. They are saved in the rig file.",
@@ -565,9 +597,17 @@ fn snapshot_bar(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
         for (n, snap) in s.snapshots().iter().enumerate() {
             let label = format!("{}  {}", n + 1, snap.name);
             let r = ui.selectable_label(current == Some(n), label);
-            if r.clicked() {
+            if r.clicked() && !s.map_mode {
                 actions.push(Action::RecallSnapshot(n));
             }
+            crate::map_mode::target(
+                ui,
+                s,
+                &r,
+                ControlAction::RecallSnapshot { snapshot: n as u8 },
+                None,
+                actions,
+            );
             r.context_menu(|ui| {
                 let mut name = snap.name.clone();
                 if ui
@@ -603,7 +643,7 @@ fn header(ui: &mut egui::Ui, s: &mut Session, st: &UiState, actions: &mut Vec<Ac
         ui.label("Rig");
         let mut name = s.rig.name.clone();
         if ui
-            .add(egui::TextEdit::singleline(&mut name).desired_width(160.0))
+            .add(egui::TextEdit::singleline(&mut name).desired_width(120.0))
             .changed()
         {
             actions.push(Action::RenameRig(name));
@@ -627,6 +667,7 @@ fn header(ui: &mut egui::Ui, s: &mut Session, st: &UiState, actions: &mut Vec<Ac
         {
             actions.push(Action::ToggleSetlist);
         }
+        crate::map_mode::toggle(ui, s, actions);
         if ui
             .button("Perform")
             .on_hover_text("Stage view: big buttons for snapshots, instruments and volume (F11 also, Escape leaves)")
@@ -657,26 +698,24 @@ fn header(ui: &mut egui::Ui, s: &mut Session, st: &UiState, actions: &mut Vec<Ac
                 }
             });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui
-                .add(
-                    egui::Button::new(RichText::new("PANIC").strong().color(Color32::WHITE))
-                        .fill(Color32::from_rgb(0xa0, 0x30, 0x30)),
-                )
-                .clicked()
-            {
+            let p = ui.add(
+                egui::Button::new(RichText::new("PANIC").strong().color(Color32::WHITE))
+                    .fill(Color32::from_rgb(0xa0, 0x30, 0x30)),
+            );
+            if p.clicked() && !s.map_mode {
                 actions.push(Action::Panic);
             }
+            crate::map_mode::target(ui, s, &p, ControlAction::Panic, None, actions);
             let mut master = s.rig.master_volume;
-            if ui
-                .add(
-                    egui::Slider::new(&mut master, 0.0..=1.5)
-                        .fixed_decimals(2)
-                        .text("master"),
-                )
-                .changed()
-            {
+            let m = ui.add(
+                egui::Slider::new(&mut master, 0.0..=1.5)
+                    .fixed_decimals(2)
+                    .text("master"),
+            );
+            if m.changed() {
                 actions.push(Action::SetMaster(master));
             }
+            crate::map_mode::target(ui, s, &m, ControlAction::MasterVolume, None, actions);
             let limiting =
                 f32::from_bits(s.engine.shared.limiter_reduction.swap(0, Ordering::Relaxed));
             if limiting > 0.5 {
@@ -695,12 +734,21 @@ fn header(ui: &mut egui::Ui, s: &mut Session, st: &UiState, actions: &mut Vec<Ac
                     )
                 })
                 .unwrap_or_default();
-            ui.label(format!(
-                "{buf} @ {} kHz · DSP {dsp:.1}% · xruns {xruns} · UI {:.1}% · {:.0} fps",
-                s.sample_rate / 1000,
-                st.status.cpu_self,
-                st.status.frames_per_s
-            ));
+            // The UI's own cost is for development: it goes first when the header is narrow.
+            let mut text = format!(
+                "{buf} @ {} kHz · DSP {dsp:.1}% · xruns {xruns}",
+                s.sample_rate / 1000
+            );
+            let room = ui.available_width();
+            if room > 820.0 {
+                text.push_str(&format!(
+                    " · UI {:.1}% · {:.0} fps",
+                    st.status.cpu_self, st.status.frames_per_s
+                ));
+            } else if room < 520.0 {
+                text = format!("DSP {dsp:.0}% · xruns {xruns}");
+            }
+            ui.label(text);
         });
     });
     if s.scanning() {
@@ -823,8 +871,12 @@ fn unit(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, i: usize, actions:
                 )),
                 None => r,
             };
-            if loaded && r.clicked() {
+            if loaded && r.clicked() && !s.map_mode {
                 actions.push(Action::Select(i, ui.input(|inp| inp.modifiers.shift)));
+            }
+            if loaded {
+                let a = ControlAction::SelectSlot { slot: i as u8 };
+                crate::map_mode::target(ui, s, &r, a, None, actions);
             }
             let led = if active && !mute {
                 color
@@ -847,26 +899,40 @@ fn unit(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, i: usize, actions:
                 slot_cpu_label(ui, s.slot_cpu[i]);
             }
             if loaded {
-                if ui
+                let m = ui
                     .selectable_label(mute, "M")
-                    .on_hover_text("Mute this slot")
-                    .clicked()
-                {
+                    .on_hover_text("Mute this slot");
+                if m.clicked() && !s.map_mode {
                     actions.push(Action::Mute(i));
                 }
+                crate::map_mode::target(
+                    ui,
+                    s,
+                    &m,
+                    ControlAction::ToggleMute { slot: i as u8 },
+                    None,
+                    actions,
+                );
                 ui.label("vol");
-                if ui
+                let v = ui
                     .add(
                         egui::DragValue::new(&mut vol)
                             .range(0.0..=2.0)
                             .speed(0.01)
                             .fixed_decimals(2),
                     )
-                    .on_hover_text("Slot volume (1.00 = unchanged). Drag to change.")
-                    .changed()
-                {
+                    .on_hover_text("Slot volume (1.00 = unchanged). Drag to change.");
+                if v.changed() {
                     actions.push(Action::Volume(i, vol));
                 }
+                crate::map_mode::target(
+                    ui,
+                    s,
+                    &v,
+                    ControlAction::SlotVolume { slot: i as u8 },
+                    None,
+                    actions,
+                );
                 ui.label("zone")
                     .on_hover_text("Key range this slot plays, as MIDI notes (0-127; 60 = middle C). Notes outside it are ignored, so two slots can split the keyboard.");
                 let a = ui.add(egui::DragValue::new(&mut lo).range(0..=127));
@@ -980,6 +1046,7 @@ fn dock_bar(ui: &mut egui::Ui, s: &Session, st: &UiState, actions: &mut Vec<Acti
         }
         tabs.push((DockTab::Effects, "Effects".to_owned()));
         tabs.push((DockTab::Macros, "Macros".to_owned()));
+        tabs.push((DockTab::Params, "Parameters".to_owned()));
         for (tab, label) in tabs {
             if ui.selectable_label(st.tab == tab, label).clicked() {
                 actions.push(Action::Tab(tab));
@@ -998,6 +1065,10 @@ fn dock_bar(ui: &mut egui::Ui, s: &Session, st: &UiState, actions: &mut Vec<Acti
             .filter(|&&e| e)
             .count();
             ui.colored_label(COLORS[i], format!("EFFECTS · {} · {on}/4 on", i + 1));
+            return;
+        }
+        if st.tab == DockTab::Params {
+            ui.colored_label(COLORS[i], format!("PARAMETERS · {}", i + 1));
             return;
         }
         if st.tab == DockTab::Macros {
@@ -1069,7 +1140,7 @@ fn pedal(
     color: Color32,
     enabled: &mut bool,
     body: impl FnOnce(&mut egui::Ui),
-) {
+) -> egui::Response {
     egui::Frame::new()
         .fill(color.gamma_multiply(if *enabled { 0.22 } else { 0.08 }))
         .stroke(egui::Stroke::new(
@@ -1083,13 +1154,19 @@ fn pedal(
             ui.vertical(|ui| {
                 ui.set_width(285.0);
                 ui.spacing_mut().slider_width = 100.0;
-                ui.horizontal(|ui| {
-                    ui.checkbox(enabled, "");
-                    ui.label(RichText::new(title).strong().color(color));
-                });
+                let toggle = ui
+                    .horizontal(|ui| {
+                        let c = ui.checkbox(enabled, "");
+                        ui.label(RichText::new(title).strong().color(color));
+                        c
+                    })
+                    .inner;
                 ui.add_enabled_ui(*enabled, body);
-            });
-        });
+                toggle
+            })
+            .inner
+        })
+        .inner
 }
 
 /// The slot's built-in effects: EQ, compressor, delay, reverb, in signal order.
@@ -1102,7 +1179,7 @@ fn fx_panel(ui: &mut egui::Ui, s: &Session, i: usize, actions: &mut Vec<Action>)
     egui::ScrollArea::vertical().show(ui, |ui| {
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(10.0, 10.0);
-            pedal(
+            let toggle = pedal(
                 ui,
                 "EQ",
                 Color32::from_rgb(0x5a, 0xa9, 0xe0),
@@ -1149,7 +1226,18 @@ fn fx_panel(ui: &mut egui::Ui, s: &Session, i: usize, actions: &mut Vec<Action>)
                     );
                 },
             );
-            pedal(
+            crate::map_mode::target(
+                ui,
+                s,
+                &toggle,
+                ControlAction::ToggleFx {
+                    slot: i as u8,
+                    fx: FxKind::Eq,
+                },
+                None,
+                actions,
+            );
+            let toggle = pedal(
                 ui,
                 "COMPRESSOR",
                 Color32::from_rgb(0xe0, 0xb4, 0x4a),
@@ -1207,7 +1295,18 @@ fn fx_panel(ui: &mut egui::Ui, s: &Session, i: usize, actions: &mut Vec<Action>)
                     );
                 },
             );
-            pedal(
+            crate::map_mode::target(
+                ui,
+                s,
+                &toggle,
+                ControlAction::ToggleFx {
+                    slot: i as u8,
+                    fx: FxKind::Comp,
+                },
+                None,
+                actions,
+            );
+            let toggle = pedal(
                 ui,
                 "DELAY",
                 Color32::from_rgb(0x6c, 0xc9, 0x6a),
@@ -1244,7 +1343,18 @@ fn fx_panel(ui: &mut egui::Ui, s: &Session, i: usize, actions: &mut Vec<Action>)
                     ui.checkbox(&mut fx.delay.ping_pong, "ping-pong");
                 },
             );
-            pedal(
+            crate::map_mode::target(
+                ui,
+                s,
+                &toggle,
+                ControlAction::ToggleFx {
+                    slot: i as u8,
+                    fx: FxKind::Delay,
+                },
+                None,
+                actions,
+            );
+            let toggle = pedal(
                 ui,
                 "REVERB",
                 Color32::from_rgb(0xb0, 0x7a, 0xe0),
@@ -1263,6 +1373,17 @@ fn fx_panel(ui: &mut egui::Ui, s: &Session, i: usize, actions: &mut Vec<Action>)
                     knob(ui, &mut fx.reverb.width, 0.0..=1.0, "width", "", false, 2);
                     knob(ui, &mut fx.reverb.mix, 0.0..=1.0, "mix", "", false, 2);
                 },
+            );
+            crate::map_mode::target(
+                ui,
+                s,
+                &toggle,
+                ControlAction::ToggleFx {
+                    slot: i as u8,
+                    fx: FxKind::Reverb,
+                },
+                None,
+                actions,
             );
         });
     });
@@ -1284,15 +1405,23 @@ fn inserts_section(ui: &mut egui::Ui, s: &Session, i: usize, actions: &mut Vec<A
                 Some(ins) => {
                     ui.label(&ins.plugin.name);
                     let mut on = !ins.bypass;
-                    if ui
-                        .checkbox(&mut on, "on")
-                        .on_hover_text(
-                            "Untick to bypass this effect (audio passes through untouched)",
-                        )
-                        .changed()
-                    {
+                    let c = ui.checkbox(&mut on, "on").on_hover_text(
+                        "Untick to bypass this effect (audio passes through untouched)",
+                    );
+                    if c.changed() && !s.map_mode {
                         actions.push(Action::BypassInsert(i, k));
                     }
+                    crate::map_mode::target(
+                        ui,
+                        s,
+                        &c,
+                        ControlAction::ToggleInsertBypass {
+                            slot: i as u8,
+                            insert: k as u8,
+                        },
+                        None,
+                        actions,
+                    );
                     if ui.small_button("Edit").clicked() {
                         actions.push(Action::Tab(DockTab::Insert(k)));
                     }

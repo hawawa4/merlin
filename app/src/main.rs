@@ -11,7 +11,9 @@ mod browser;
 mod guard;
 mod keyboard;
 mod macro_panel;
+mod map_mode;
 mod marker;
+mod param_panel;
 mod paths;
 mod perf;
 mod perform;
@@ -314,7 +316,8 @@ impl Running {
             || self.ui.settings_open
             || self.ui.perform
             || self.ui.tab == ui::DockTab::Effects
-            || self.ui.tab == ui::DockTab::Macros;
+            || self.ui.tab == ui::DockTab::Macros
+            || self.ui.tab == ui::DockTab::Params;
         let _ = self.session.editors.set_popup_open(covered);
 
         let prims = ctx.tessellate(out.shapes, ppp);
@@ -442,6 +445,20 @@ impl Running {
                 s.start_learn(action);
                 Ok(())
             }
+            Action::MapParamNamed(kind, slot, insert, query, pickup) => {
+                s.map_param_named(kind, slot, insert, &query, pickup)
+            }
+            Action::LearnTarget(action, label) => {
+                s.start_learn_labelled(action, label);
+                Ok(())
+            }
+            Action::SetMapMode(on) => {
+                s.map_mode = on;
+                if !on {
+                    s.cancel_learn();
+                }
+                Ok(())
+            }
             Action::CancelLearn => {
                 s.cancel_learn();
                 Ok(())
@@ -452,6 +469,10 @@ impl Running {
             }
             Action::SetGlue(i, g) => {
                 s.set_mapping_glue(i, g);
+                Ok(())
+            }
+            Action::SetSwitch(i, sw) => {
+                s.set_mapping_switch(i, sw);
                 Ok(())
             }
             Action::SetTakeover(i, t) => {
@@ -820,7 +841,7 @@ impl Running {
                     match tab {
                         ui::DockTab::Plugin => s.show_editor(i),
                         ui::DockTab::Insert(k) => s.show_insert_editor(i, k),
-                        ui::DockTab::Effects | ui::DockTab::Macros => {}
+                        ui::DockTab::Effects | ui::DockTab::Macros | ui::DockTab::Params => {}
                     }
                 }
                 Ok(())
@@ -980,7 +1001,7 @@ impl Running {
                 s.say(format!(
                     "state: rig '{}'{}, xruns {xruns}, DSP {dsp:.1}%, held keys {held}, \
                      RSS {rss_mb} MB, threads {threads}, midi {midi}, master {:.2}, vol1 {:.2}, targets {:?}, dock shows {:?}, \
-                     popup {}, slots {}, perform {}, locked {}, macro1 {:.2}, gain1 {:.2}, position {:?}, tempo {:.0}, transport {} bar {} beat {} beats {}, run {:.1}s, underruns {}, stems {}, cue {:?}",
+                     popup {}, slots {}, perform {}, locked {}, macro1 {:.2}, gain1 {:.2}, position {:?}, tempo {:.0}, transport {} bar {} beat {} beats {}, run {:.1}s, underruns {}, stems {}, cue {:?}, pan1 {:.2}, fx1 {}, bypass1 {}, click {} level {:.2}, mapmode {}, mappings {}, params {:?}",
                     s.rig.name,
                     if s.dirty { " (modified)" } else { "" },
                     s.rig.master_volume,
@@ -1002,7 +1023,28 @@ impl Running {
                     s.run_seconds(),
                     s.engine.shared.backing_underruns.load(std::sync::atomic::Ordering::Relaxed),
                     s.engine.shared.stems_playing.load(std::sync::atomic::Ordering::Relaxed),
-                    s.cue()
+                    s.cue(),
+                    s.rig.slots[0].pan,
+                    {
+                        let f = &s.rig.slots[0].fx;
+                        format!(
+                            "{}{}{}{}",
+                            u8::from(f.eq.enabled),
+                            u8::from(f.comp.enabled),
+                            u8::from(f.delay.enabled),
+                            u8::from(f.reverb.enabled)
+                        )
+                    },
+                    s.rig.slots[0]
+                        .inserts
+                        .iter()
+                        .map(|i| i.as_ref().map_or('-', |i| if i.bypass { 'b' } else { 'o' }))
+                        .collect::<String>(),
+                    s.rig.transport.click,
+                    s.rig.transport.click_volume,
+                    s.map_mode,
+                    s.mappings().len(),
+                    s.param_report()
                 ));
                 Ok(())
             }
@@ -1240,6 +1282,7 @@ fn parse_script() -> Vec<(Duration, Action)> {
                 "tab" => Action::Tab(match words.next()? {
                     "fx" => ui::DockTab::Effects,
                     "macros" => ui::DockTab::Macros,
+                    "params" => ui::DockTab::Params,
                     t if t.starts_with("insert") => ui::DockTab::Insert(
                         t["insert".len()..].parse::<usize>().ok()?.checked_sub(1)?,
                     ),
@@ -1279,9 +1322,11 @@ fn parse_script() -> Vec<(Duration, Action)> {
                     // Then any of: pickup scale invert rel2c relsb reloff step=0.1 min=0.2 max=0.8 soft hard
                     let mut takeover = Takeover::Jump;
                     let mut glue = merlin_model::Glue::default();
+                    let mut switch = merlin_model::Switch::Press;
                     for w in words.by_ref() {
                         use merlin_model::{Curve, Relative};
                         match w {
+                            "latch" => switch = merlin_model::Switch::Level,
                             "pickup" => takeover = Takeover::Pickup,
                             "scale" => takeover = Takeover::Scale,
                             "invert" => glue.invert = true,
@@ -1298,16 +1343,43 @@ fn parse_script() -> Vec<(Duration, Action)> {
                             },
                         }
                     }
-                    Action::AddMapping(Mapping {
-                        source: Source {
+                    let mut mapping = Mapping::new(
+                        Source {
                             device: None,
                             channel: None,
                             kind,
                         },
                         action,
-                        takeover,
-                        glue,
-                    })
+                    );
+                    mapping.takeover = takeover;
+                    mapping.glue = glue;
+                    mapping.switch = switch;
+                    Action::AddMapping(mapping)
+                }
+                "mapmode" => Action::SetMapMode(words.next()? == "on"),
+                // mapparam <cc N> <slot> <inst|insertK> <name part> [pickup]: a plugin parameter
+                // on a control; the name is the first parameter that contains the text.
+                "mapparam" => {
+                    let kind = match words.next()? {
+                        "cc" => merlin_model::SourceKind::Cc {
+                            number: words.next()?.parse().ok()?,
+                        },
+                        _ => return None,
+                    };
+                    let slot = slot(words.next())?;
+                    let insert = match words.next()? {
+                        "inst" => None,
+                        t if t.starts_with("insert") => {
+                            Some(t["insert".len()..].parse::<usize>().ok()?.checked_sub(1)?)
+                        }
+                        _ => return None,
+                    };
+                    let mut rest: Vec<&str> = words.collect();
+                    let pickup = rest.last() == Some(&"pickup");
+                    if pickup {
+                        rest.pop();
+                    }
+                    Action::MapParamNamed(kind, slot, insert, rest.join(" "), pickup)
                 }
                 // learn <action>: the next control the user (or the test controller) sends
                 "learn" => Action::LearnControl(parse_control_action(&mut words)?),
@@ -1471,12 +1543,12 @@ fn parse_script() -> Vec<(Duration, Action)> {
     steps
 }
 
-/// `select 2`, `layer 3`, `mute 1`, `volume 1`, `byvalue 1`, `master`, `macro 1 3`, `selmacro 2`, `selvolume`, `snap 2`, `snapbyvalue 1`, `snapnext`, `snapprev`, `next`, `prev`, `panic`
+/// `pan 1`, `fx 1 reverb`, `insert 1 2`, `clicklevel`, `tempo`, `select 2`, `layer 3`, `mute 1`, `volume 1`, `byvalue 1`, `master`, `macro 1 3`, `selmacro 2`, `selvolume`, `snap 2`, `snapbyvalue 1`, `snapnext`, `snapprev`, `next`, `prev`, `panic`
 /// (slots counted from 1), for the script's `map` and `learn`.
 fn parse_control_action(
     words: &mut std::str::SplitWhitespace<'_>,
 ) -> Option<merlin_model::ControlAction> {
-    use merlin_model::ControlAction as A;
+    use merlin_model::{ControlAction as A, FxKind};
     let num = |w: Option<&str>| w?.parse::<u8>().ok()?.checked_sub(1);
     Some(match words.next()? {
         "select" => A::SelectSlot {
@@ -1521,6 +1593,25 @@ fn parse_control_action(
         "next" => A::NextSlot,
         "prev" => A::PrevSlot,
         "panic" => A::Panic,
+        "pan" => A::SlotPan {
+            slot: num(words.next())?,
+        },
+        "fx" => A::ToggleFx {
+            slot: num(words.next())?,
+            fx: match words.next()? {
+                "eq" => FxKind::Eq,
+                "comp" => FxKind::Comp,
+                "delay" => FxKind::Delay,
+                "reverb" => FxKind::Reverb,
+                _ => return None,
+            },
+        },
+        "insert" => A::ToggleInsertBypass {
+            slot: num(words.next())?,
+            insert: num(words.next())?,
+        },
+        "clicklevel" => A::ClickLevel,
+        "tempo" => A::Tempo,
         _ => return None,
     })
 }

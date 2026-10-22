@@ -14,8 +14,9 @@ default:
 
 # The app. Loads plugins from the standard CLAP folders plus test-assets (Linux and, through
 # our patched Wine, Windows ones). Try: just dev --fresh      just dev --rig my.irig
-# This round: the song timeline. Setlist -> a song -> Timeline "+ Marker": at bar 2 beat 1 go to part 2, at bar 5 show a cue,
-# send a Program Change to your synth... Press START in the Perform view and watch them fire. See docs/qa-checklist.md 5i.
+# This round: MIDI map mode, Ableton style. Press "MIDI map" (Ctrl+M), click a control on screen (a volume, mute, a
+# snapshot, an effect switch, the master...), then move or press something on your MIDI device. The "Parameters" tab maps any
+# plugin parameter. `just fake-keyboard` gives you something to learn from. See docs/qa-checklist.md 5l.
 dev *args:
     cargo build -p merlin --release
     PATH="{{yabridge_dir}}:$PATH" WINELOADER={{patched_wine}} \

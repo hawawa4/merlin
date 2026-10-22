@@ -72,6 +72,17 @@ impl Session {
                         .call(call_id, "setting a parameter", PARAM_CALL_LIMIT);
                     l.plugin.set_param(*id, v);
                 }
+                if let MacroTarget::Param { min, max, .. } = target
+                    && max > min
+                {
+                    let key = (
+                        slot as u8,
+                        insert.unwrap_or(merlin_model::INSTRUMENT),
+                        *id,
+                    );
+                    self.param_values
+                        .insert(key, ((v - min) / (max - min)).clamp(0.0, 1.0) as f32);
+                }
             }
             MacroTarget::Sampler { .. } => {
                 let Some((field, v)) = target.sampler_value(value) else {
@@ -233,6 +244,10 @@ impl Session {
 
     /// A plugin went away: forget what it told us.
     pub(super) fn forget_params(&mut self, slot: usize, insert: Option<usize>) {
+        self.param_values.retain(|&(s, i, _), _| {
+            let insert_is = (i != merlin_model::INSTRUMENT).then_some(i as usize);
+            !(s as usize == slot && (insert.is_none() || insert_is == insert))
+        });
         match insert {
             None => self.param_cache.retain(|&(s, _), _| s != slot),
             Some(i) => {

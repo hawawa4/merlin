@@ -2,7 +2,7 @@
 
 use egui::{Color32, RichText};
 use merlin_hosting::ParamInfo;
-use merlin_model::{MACROS_PER_SLOT, MacroTarget, SamplerField};
+use merlin_model::{ControlAction, MACROS_PER_SLOT, MacroTarget, SamplerField};
 
 use crate::keyboard::COLORS;
 use crate::session::{Session, UI_SLOTS};
@@ -70,12 +70,21 @@ fn card(
                 }
                 let mut v = m.value;
                 ui.spacing_mut().slider_width = 260.0;
-                if ui
-                    .add(egui::Slider::new(&mut v, 0.0..=1.0).fixed_decimals(2))
-                    .changed()
-                {
+                let r = ui.add(egui::Slider::new(&mut v, 0.0..=1.0).fixed_decimals(2));
+                if r.changed() {
                     actions.push(Action::SetMacro(slot, k, v));
                 }
+                crate::map_mode::target(
+                    ui,
+                    s,
+                    &r,
+                    ControlAction::SlotMacro {
+                        slot: slot as u8,
+                        index: k as u8,
+                    },
+                    None,
+                    actions,
+                );
                 picker(ui, s, st, slot, k, actions);
             });
             for (t, target) in m.targets.iter().enumerate() {

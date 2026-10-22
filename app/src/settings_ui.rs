@@ -46,10 +46,13 @@ pub enum ActionKind {
     PrevSnapshot,
     RecallSnapshotByValue,
     Panic,
+    SlotPan,
+    ClickLevel,
+    Tempo,
 }
 
 impl ActionKind {
-    const ALL: [ActionKind; 23] = [
+    const ALL: [ActionKind; 26] = [
         Self::SelectSlot,
         Self::ToggleLayer,
         Self::ToggleMute,
@@ -73,6 +76,9 @@ impl ActionKind {
         Self::PrevSnapshot,
         Self::RecallSnapshotByValue,
         Self::Panic,
+        Self::SlotPan,
+        Self::ClickLevel,
+        Self::Tempo,
     ];
 
     fn name(self) -> &'static str {
@@ -100,6 +106,9 @@ impl ActionKind {
             Self::PrevSnapshot => "Previous snapshot (foot switch)",
             Self::RecallSnapshotByValue => "Recall the snapshot given by the number sent",
             Self::Panic => "Panic (all notes off)",
+            Self::SlotPan => "Pan of a slot (knob)",
+            Self::ClickLevel => "Click level (knob or fader)",
+            Self::Tempo => "Tempo (knob or fader)",
         }
     }
 
@@ -111,6 +120,7 @@ impl ActionKind {
                 | Self::ToggleMute
                 | Self::SlotVolume
                 | Self::SlotMacro
+                | Self::SlotPan
         )
     }
 
@@ -142,6 +152,9 @@ impl ActionKind {
             Self::PrevSnapshot => A::PrevSnapshot,
             Self::RecallSnapshotByValue => A::RecallSnapshotByValue { base },
             Self::Panic => A::Panic,
+            Self::SlotPan => A::SlotPan { slot },
+            Self::ClickLevel => A::ClickLevel,
+            Self::Tempo => A::Tempo,
         }
     }
 }
@@ -517,7 +530,10 @@ fn controls(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<
         .show(ui, |ui| {
             for (i, m) in s.mappings().iter().enumerate() {
                 ui.label(RichText::new(m.source.describe()).strong());
-                ui.label(format!("-> {}", m.action.describe()));
+                ui.label(match &m.label {
+                    Some(name) => format!("-> {} ({name})", m.action.describe()),
+                    None => format!("-> {}", m.action.describe()),
+                });
                 if m.action.is_continuous() {
                     let mut t = m.takeover;
                     egui::ComboBox::from_id_salt(("takeover", i))
@@ -538,6 +554,24 @@ fn controls(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<
                         actions.push(Action::SetTakeover(i, t));
                     }
                     glue_options(ui, i, m, actions);
+                } else if m.action.is_switch() {
+                    use merlin_model::Switch;
+                    let mut sw = m.switch;
+                    egui::ComboBox::from_id_salt(("switch", i))
+                        .selected_text(match sw {
+                            Switch::Press => "Each press flips",
+                            Switch::Level => "Latching switch",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut sw, Switch::Press, "Each press flips")
+                                .on_hover_text("A pad or a momentary foot switch: every press toggles it, the release does nothing");
+                            ui.selectable_value(&mut sw, Switch::Level, "Latching switch")
+                                .on_hover_text("A switch that stays down (sends 127, later 0): on when it sends 64 or more, off below, whatever the state was");
+                        });
+                    if sw != m.switch {
+                        actions.push(Action::SetSwitch(i, sw));
+                    }
+                    ui.label("");
                 } else {
                     ui.label("");
                     ui.label("");

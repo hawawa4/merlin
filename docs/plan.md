@@ -480,6 +480,8 @@ libjack preload (S1), `build-wine.sh` and the patch set (S4).
 
 ### Phase 4: Novation integration (3–4 weeks)
 
+**Generic MIDI mapping first** ✅ (first slice, works with any controller): *MIDI map mode* as in Ableton: the header button (Ctrl+M) tints every mappable control on screen; click one, move a control on the device, and the two are linked (shown as a green badge such as `CC 14`; right-click removes it; learning a control again replaces its source). Mappable on screen: slot select, mute, volume, master, PANIC, snapshots, macros, built-in effect switches, insert on/off, and in the Perform view the transport, tap, click, tempo, click level and part buttons. The *Parameters* dock tab maps any parameter of the instrument or an insert (searchable, virtualised so big lists scroll). New actions: pan, effect on/off, insert bypass, click level, tempo, plugin parameter. Buttons can be read per press (pads, momentary foot switches) or by level (*Latching switch*: 64 and up is on). Tested: control-crate unit tests (including pick-up of a parameter and both switch modes) and `just e2e-controls` with a Surge XT parameter. Not done: parameters are not read back from the plugin (pick-up and scale use the last value this app set), pitch bend and aftertouch as sources, NRPN/14-bit CC, mapping a control to several targets with different ranges from the screen (Settings > Controls has the glue options), controller profiles and the device-specific Novation parts below.
+
 **Device handling:**
 - Detection by Device Inquiry + port index, port-name regexes as a fallback.
 - Hotplug.

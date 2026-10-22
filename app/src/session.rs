@@ -214,6 +214,14 @@ pub struct Session {
     cue: Option<(String, Instant)>,
     /// When the tempo was last tapped.
     taps: Vec<Instant>,
+    /// Where mapped plugin parameters were last put (0..=1 of their range): the plugins cannot
+    /// be asked, and a knob that picks up needs to know.
+    param_values: std::collections::HashMap<merlin_control::ParamKey, f32>,
+    /// The name to keep with the mapping being learned (a plugin parameter's).
+    learn_label: Option<String>,
+    /// MIDI map mode: the controls on screen show what they are mapped to, and clicking one
+    /// teaches it.
+    pub map_mode: bool,
     /// What each plugin said about its parameters, by (slot, insert).
     param_cache:
         std::collections::HashMap<(usize, Option<usize>), Vec<merlin_hosting::ParamInfo>>,
@@ -311,6 +319,9 @@ impl Session {
             pending_start: None,
             cue: None,
             taps: Vec::new(),
+            param_values: Default::default(),
+            learn_label: None,
+            map_mode: false,
             param_cache: Default::default(),
             midi_seen: Default::default(),
             midi_lit: Default::default(),

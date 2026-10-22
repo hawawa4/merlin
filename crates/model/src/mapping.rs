@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{MACROS_PER_SLOT, MAX_SLOTS, MAX_SNAPSHOTS};
+use crate::{MACROS_PER_SLOT, MAX_INSERTS, MAX_SLOTS, MAX_SNAPSHOTS};
 
 /// Which message on which device a mapping listens to.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -27,6 +27,32 @@ pub enum SourceKind {
     /// Any Program Change; the program number is the value.
     Program,
 }
+
+/// One of a slot's built-in effects.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FxKind {
+    Eq,
+    Comp,
+    Delay,
+    Reverb,
+}
+
+impl FxKind {
+    pub const ALL: [FxKind; 4] = [Self::Eq, Self::Comp, Self::Delay, Self::Reverb];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Eq => "EQ",
+            Self::Comp => "Compressor",
+            Self::Delay => "Delay",
+            Self::Reverb => "Reverb",
+        }
+    }
+}
+
+/// `SlotParam::insert` value for the slot's instrument itself (the inserts count from 0).
+pub const INSTRUMENT: u8 = u8::MAX;
 
 /// What a mapping does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -89,6 +115,31 @@ pub enum ControlAction {
     },
     /// All notes off.
     Panic,
+    /// A knob for the pan of a slot (centre of the knob = centre of the stereo field).
+    SlotPan {
+        slot: u8,
+    },
+    /// One of a slot's built-in effects on or off.
+    ToggleFx {
+        slot: u8,
+        fx: FxKind,
+    },
+    /// An insert effect of a slot bypassed or not.
+    ToggleInsertBypass {
+        slot: u8,
+        insert: u8,
+    },
+    /// A knob for the click's level.
+    ClickLevel,
+    /// A knob for the tempo (the transport's whole range).
+    Tempo,
+    /// A knob for any parameter of a slot's instrument (`insert` = [`INSTRUMENT`]) or one of its
+    /// inserts. The parameter's name and range are looked up in the plugin.
+    SlotParam {
+        slot: u8,
+        insert: u8,
+        id: u32,
+    },
 }
 
 impl ControlAction {
@@ -101,6 +152,23 @@ impl ControlAction {
                 | Self::SlotMacro { .. }
                 | Self::SelectedMacro { .. }
                 | Self::SelectedVolume
+                | Self::SlotPan { .. }
+                | Self::ClickLevel
+                | Self::Tempo
+                | Self::SlotParam { .. }
+        )
+    }
+
+    /// Switches a button can follow by its level (a latching foot switch sends 127 then 0:
+    /// "on" and "off", not two presses).
+    pub fn is_switch(&self) -> bool {
+        matches!(
+            self,
+            Self::ToggleMute { .. }
+                | Self::ToggleFx { .. }
+                | Self::ToggleInsertBypass { .. }
+                | Self::ClickToggle
+                | Self::TransportToggle
         )
     }
 
@@ -110,6 +178,10 @@ impl ControlAction {
             | Self::ToggleLayer { slot }
             | Self::ToggleMute { slot }
             | Self::SlotVolume { slot }
+            | Self::SlotPan { slot }
+            | Self::ToggleFx { slot, .. }
+            | Self::ToggleInsertBypass { slot, .. }
+            | Self::SlotParam { slot, .. }
             | Self::SlotMacro { slot, .. } => Some(slot),
             _ => None,
         }
@@ -155,6 +227,25 @@ impl ControlAction {
                 base as usize + 1
             ),
             Self::Panic => "Panic (all notes off)".into(),
+            Self::SlotPan { slot } => format!("Pan of slot {}", slot as usize + 1),
+            Self::ToggleFx { slot, fx } => {
+                format!("{} of slot {} on/off", fx.name(), slot as usize + 1)
+            }
+            Self::ToggleInsertBypass { slot, insert } => format!(
+                "Insert {} of slot {} on/off",
+                insert as usize + 1,
+                slot as usize + 1
+            ),
+            Self::ClickLevel => "Click level".into(),
+            Self::Tempo => "Tempo".into(),
+            Self::SlotParam { slot, insert, id } => {
+                let place = if insert == INSTRUMENT {
+                    String::new()
+                } else {
+                    format!(" · insert {}", insert as usize + 1)
+                };
+                format!("Parameter #{id} of slot {}{place}", slot as usize + 1)
+            }
         }
     }
 }
@@ -268,6 +359,17 @@ impl Glue {
     }
 }
 
+/// How a button mapping reads its control.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Switch {
+    /// Every press flips it (a momentary pad or a foot switch). The release does nothing.
+    #[default]
+    Press,
+    /// The control's level sets it: 64 and above is on, below is off (a latching switch).
+    Level,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Mapping {
     pub source: Source,
@@ -276,9 +378,28 @@ pub struct Mapping {
     pub takeover: Takeover,
     #[serde(default, skip_serializing_if = "Glue::is_default")]
     pub glue: Glue,
+    #[serde(default, skip_serializing_if = "is_press")]
+    pub switch: Switch,
+    /// What to call the target in lists (a parameter's name), kept so it reads even when the
+    /// plugin is gone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+fn is_press(s: &Switch) -> bool {
+    *s == Switch::Press
 }
 
 impl Source {
+    /// A few characters for a badge: "CC 14", "note 36", "PC".
+    pub fn short(&self) -> String {
+        match self.kind {
+            SourceKind::Cc { number } => format!("CC {number}"),
+            SourceKind::Note { key } => format!("note {key}"),
+            SourceKind::Program => "PC".to_owned(),
+        }
+    }
+
     /// "Launchpad · ch 1 · CC 20", slots and channels counted from 1 like people do.
     pub fn describe(&self) -> String {
         let what = match self.kind {
@@ -295,10 +416,29 @@ impl Source {
 }
 
 impl Mapping {
+    /// A mapping with the defaults: jump, no glue, press.
+    pub fn new(source: Source, action: ControlAction) -> Self {
+        Self {
+            source,
+            action,
+            takeover: Takeover::Jump,
+            glue: Glue::default(),
+            switch: Switch::Press,
+            label: None,
+        }
+    }
+
     /// Is it something the engine and the rig can use?
     pub fn is_valid(&self) -> bool {
         self.glue.is_valid()
             && self.action.slot().is_none_or(|s| (s as usize) < MAX_SLOTS)
+            && match self.action {
+                ControlAction::ToggleInsertBypass { insert, .. } => (insert as usize) < MAX_INSERTS,
+                ControlAction::SlotParam { insert, .. } => {
+                    insert == INSTRUMENT || (insert as usize) < MAX_INSERTS
+                }
+                _ => true,
+            }
             && self.source.channel.is_none_or(|c| c < 16)
             && match self.source.kind {
                 SourceKind::Cc { number } => number < 128,
@@ -336,6 +476,8 @@ mod tests {
             action: ControlAction::SelectSlot { slot: 2 },
             takeover: Takeover::Jump,
             glue: Glue::default(),
+            switch: Switch::Press,
+            label: None,
         };
         let json = serde_json::to_string(&m).unwrap();
         assert!(
@@ -379,6 +521,8 @@ mod tests {
             action: ControlAction::Panic,
             takeover: Takeover::Jump,
             glue: Glue::default(),
+            switch: Switch::Press,
+            label: None,
         };
         assert!(ok.is_valid());
         let mut bad = ok.clone();
@@ -435,6 +579,8 @@ mod tests {
             action: ControlAction::MasterVolume,
             takeover: Takeover::Scale,
             glue: Glue::default(),
+            switch: Switch::Press,
+            label: None,
         };
         let json = serde_json::to_string(&m).unwrap();
         assert!(!json.contains("glue"), "{json}");

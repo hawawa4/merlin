@@ -4,8 +4,10 @@
 //! (which slots are loaded, what is selected, the current volumes), get back a list of outcomes.
 //! The app turns those into the same actions the buttons on screen perform.
 
+use std::collections::HashMap;
+
 use merlin_model::{
-    ControlAction, MACROS_PER_SLOT, MAX_SLOTS, Mapping, SourceKind, Takeover,
+    ControlAction, FxKind, MACROS_PER_SLOT, MAX_SLOTS, Mapping, SourceKind, Switch, Takeover,
 };
 
 /// A message from a device, as far as mappings care.
@@ -25,8 +27,11 @@ pub struct Incoming {
     pub message: Message,
 }
 
+/// Where a plugin parameter is addressed: slot, insert (`INSTRUMENT` for the instrument), id.
+pub type ParamKey = (u8, u8, u32);
+
 /// What the mapper needs to know about the rig.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Context {
     /// Bit i set: slot i has an instrument.
     pub loaded: u16,
@@ -41,6 +46,21 @@ pub struct Context {
     /// How many snapshots the rig has, and the one recalled last.
     pub snapshots: usize,
     pub snapshot: Option<usize>,
+    /// Pan of each slot as a knob position (0 = left, 0.5 = centre, 1 = right).
+    pub pans: [f32; MAX_SLOTS],
+    /// The click's level, and the tempo as a position over the transport's range.
+    pub click_level: f32,
+    pub tempo: f32,
+    /// Where the plugin parameters that are mapped sit (0..=1 of their range).
+    pub params: HashMap<ParamKey, f32>,
+    /// What the switches are now, so a latching switch can set them rather than flip them.
+    pub muted: u16,
+    /// Bit i set: slot i's EQ / compressor / delay / reverb (bit 0..3) is on.
+    pub fx_on: [u8; MAX_SLOTS],
+    /// Bit k set: slot i's insert k is bypassed.
+    pub bypassed: [u8; MAX_SLOTS],
+    pub click_on: bool,
+    pub transport_running: bool,
 }
 
 /// What to do. Slots are 0-based.
@@ -61,6 +81,13 @@ pub enum Outcome {
     ClickToggle,
     TapTempo,
     Panic,
+    /// Knob positions (0..=1): the session turns them into the target's own range.
+    SetPan(usize, f32),
+    SetClickLevel(f32),
+    SetTempo(f32),
+    SetParam(ParamKey, f32),
+    ToggleFx(usize, FxKind),
+    ToggleBypass(usize, usize),
 }
 
 #[derive(Clone, Copy, Default)]
@@ -144,6 +171,13 @@ impl Mapper {
                 if let Some(o) = follow(m, state, inc, ctx) {
                     out.push(o);
                 }
+            } else if m.switch == Switch::Level && m.action.is_switch() {
+                // A latching switch says on or off; flip only when it disagrees.
+                if let Some(want) = level_of(&inc.message)
+                    && Some(want) != switch_state(&m.action, ctx)
+                {
+                    out.extend(fire(&m.action, inc, ctx));
+                }
             } else if pressed(&inc.message) {
                 out.extend(fire(&m.action, inc, ctx));
             }
@@ -158,6 +192,42 @@ fn pressed(msg: &Message) -> bool {
         Message::Cc { value, .. } => value >= 64,
         Message::Note { on, velocity, .. } => on && velocity > 0,
         Message::Program { .. } => true,
+    }
+}
+
+/// A message read as a level: on at 64 and above (a key going up is off). Program Change has
+/// no level.
+fn level_of(msg: &Message) -> Option<bool> {
+    match *msg {
+        Message::Cc { value, .. } => Some(value >= 64),
+        Message::Note { on, velocity, .. } => Some(on && velocity > 0),
+        Message::Program { .. } => None,
+    }
+}
+
+/// Whether the thing a switch action flips is "on" now (for a mute: muted; for an insert:
+/// not bypassed). `None` when it is not there.
+fn switch_state(action: &ControlAction, ctx: &Context) -> Option<bool> {
+    Some(match *action {
+        ControlAction::ToggleMute { slot } => ctx.muted & (1 << slot) != 0,
+        ControlAction::ToggleFx { slot, fx } => {
+            ctx.fx_on.get(slot as usize)? & (1 << fx_bit(fx)) != 0
+        }
+        ControlAction::ToggleInsertBypass { slot, insert } => {
+            ctx.bypassed.get(slot as usize)? & (1 << insert) == 0
+        }
+        ControlAction::ClickToggle => ctx.click_on,
+        ControlAction::TransportToggle => ctx.transport_running,
+        _ => return None,
+    })
+}
+
+fn fx_bit(fx: FxKind) -> u8 {
+    match fx {
+        FxKind::Eq => 0,
+        FxKind::Comp => 1,
+        FxKind::Delay => 2,
+        FxKind::Reverb => 3,
     }
 }
 
@@ -246,6 +316,12 @@ fn fire(action: &ControlAction, inc: &Incoming, ctx: &Context) -> Option<Outcome
         ControlAction::NextSong => Some(Outcome::NextSong),
         ControlAction::PrevSong => Some(Outcome::PrevSong),
         ControlAction::Panic => Some(Outcome::Panic),
+        ControlAction::ToggleFx { slot, fx } if loaded(ctx, slot as usize) => {
+            Some(Outcome::ToggleFx(slot as usize, fx))
+        }
+        ControlAction::ToggleInsertBypass { slot, insert } if loaded(ctx, slot as usize) => {
+            Some(Outcome::ToggleBypass(slot as usize, insert as usize))
+        }
         _ => None,
     }
 }
@@ -253,25 +329,28 @@ fn fire(action: &ControlAction, inc: &Incoming, ctx: &Context) -> Option<Outcome
 /// A knob or fader following its value, with jump, pick-up or scale, or an endless encoder
 /// moving it by steps.
 fn follow(m: &Mapping, state: &mut State, inc: &Incoming, ctx: &Context) -> Option<Outcome> {
-    // What the control drives, and where that sits now.
-    let (slot, which_macro, current) = match m.action {
+    // Where the thing sits now, and what to tell the app when it should be somewhere else.
+    let (current, make): (f32, Box<dyn Fn(f32) -> Outcome>) = match m.action {
         ControlAction::SlotVolume { slot } => {
             let s = slot as usize;
             if !loaded(ctx, s) {
                 return None;
             }
-            (Some(s), None, ctx.volumes[s])
+            (ctx.volumes[s], Box::new(move |v| Outcome::SetVolume(s, v)))
         }
         ControlAction::SelectedVolume => {
             let s = ctx.primary.filter(|&s| loaded(ctx, s))?;
-            (Some(s), None, ctx.volumes[s])
+            (ctx.volumes[s], Box::new(move |v| Outcome::SetVolume(s, v)))
         }
         ControlAction::SlotMacro { slot, index } => {
             let (s, k) = (slot as usize, index as usize);
             if !loaded(ctx, s) || k >= MACROS_PER_SLOT {
                 return None;
             }
-            (Some(s), Some(k), ctx.macros[s][k])
+            (
+                ctx.macros[s][k],
+                Box::new(move |v| Outcome::SetMacro(s, k, v)),
+            )
         }
         ControlAction::SelectedMacro { index } => {
             let s = ctx.primary.filter(|&s| loaded(ctx, s))?;
@@ -279,9 +358,31 @@ fn follow(m: &Mapping, state: &mut State, inc: &Incoming, ctx: &Context) -> Opti
             if k >= MACROS_PER_SLOT {
                 return None;
             }
-            (Some(s), Some(k), ctx.macros[s][k])
+            (
+                ctx.macros[s][k],
+                Box::new(move |v| Outcome::SetMacro(s, k, v)),
+            )
         }
-        _ => (None, None, ctx.master),
+        ControlAction::SlotPan { slot } => {
+            let s = slot as usize;
+            if !loaded(ctx, s) {
+                return None;
+            }
+            (ctx.pans[s], Box::new(move |v| Outcome::SetPan(s, v)))
+        }
+        ControlAction::ClickLevel => (ctx.click_level, Box::new(Outcome::SetClickLevel)),
+        ControlAction::Tempo => (ctx.tempo, Box::new(Outcome::SetTempo)),
+        ControlAction::SlotParam { slot, insert, id } => {
+            if !loaded(ctx, slot as usize) {
+                return None;
+            }
+            let key = (slot, insert, id);
+            (
+                *ctx.params.get(&key)?,
+                Box::new(move |v| Outcome::SetParam(key, v)),
+            )
+        }
+        _ => (ctx.master, Box::new(Outcome::SetMaster)),
     };
     let current = current.clamp(0.0, 1.0);
     let glue = &m.glue;
@@ -324,11 +425,7 @@ fn follow(m: &Mapping, state: &mut State, inc: &Incoming, ctx: &Context) -> Opti
             }
         }
     };
-    Some(match (slot, which_macro) {
-        (Some(s), Some(k)) => Outcome::SetMacro(s, k, new),
-        (Some(s), None) => Outcome::SetVolume(s, new),
-        _ => Outcome::SetMaster(new),
-    })
+    Some(make(new))
 }
 
 #[cfg(test)]
@@ -344,10 +441,7 @@ mod tests {
             targets: bits(targets),
             volumes: [1.0; MAX_SLOTS],
             master: 1.0,
-            primary: None,
-            macros: [[0.0; MACROS_PER_SLOT]; MAX_SLOTS],
-            snapshots: 0,
-            snapshot: None,
+            ..Context::default()
         }
     }
 
@@ -360,16 +454,14 @@ mod tests {
     }
 
     fn map(device: Option<&str>, kind: SourceKind, action: ControlAction) -> Mapping {
-        Mapping {
-            source: Source {
+        Mapping::new(
+            Source {
                 device: device.map(str::to_owned),
                 channel: None,
                 kind,
             },
             action,
-            takeover: Takeover::Jump,
-            glue: Glue::default(),
-        }
+        )
     }
 
     #[test]
@@ -762,5 +854,130 @@ mod tests {
         // Nothing plays: nothing to drive.
         c.primary = None;
         assert!(m.handle(&cc("K", 0, 1, 127), &c).is_empty());
+    }
+
+    #[test]
+    fn pan_tempo_click_level_and_a_plugin_parameter_follow_a_knob() {
+        let mut c = ctx(&[0, 1], &[0]);
+        c.params.insert((1, 255, 7), 0.25);
+        let mut m = Mapper::new(&[
+            map(
+                None,
+                SourceKind::Cc { number: 1 },
+                ControlAction::SlotPan { slot: 1 },
+            ),
+            map(None, SourceKind::Cc { number: 2 }, ControlAction::Tempo),
+            map(
+                None,
+                SourceKind::Cc { number: 3 },
+                ControlAction::ClickLevel,
+            ),
+            map(
+                None,
+                SourceKind::Cc { number: 4 },
+                ControlAction::SlotParam {
+                    slot: 1,
+                    insert: 255,
+                    id: 7,
+                },
+            ),
+            map(
+                None,
+                SourceKind::Cc { number: 5 },
+                ControlAction::SlotParam {
+                    slot: 1,
+                    insert: 255,
+                    id: 8,
+                },
+            ),
+        ]);
+        assert_eq!(
+            m.handle(&cc("K", 0, 1, 127), &c),
+            vec![Outcome::SetPan(1, 1.0)]
+        );
+        assert_eq!(
+            m.handle(&cc("K", 0, 2, 0), &c),
+            vec![Outcome::SetTempo(0.0)]
+        );
+        assert_eq!(
+            m.handle(&cc("K", 0, 3, 127), &c),
+            vec![Outcome::SetClickLevel(1.0)]
+        );
+        assert_eq!(
+            m.handle(&cc("K", 0, 4, 127), &c),
+            vec![Outcome::SetParam((1, 255, 7), 1.0)]
+        );
+        // A parameter the session did not report (the plugin is gone) does nothing.
+        assert!(m.handle(&cc("K", 0, 5, 127), &c).is_empty());
+        // A slot with nothing in it neither.
+        assert!(m.handle(&cc("K", 0, 1, 127), &ctx(&[0], &[0])).is_empty());
+    }
+
+    #[test]
+    fn a_parameter_picks_up_from_where_it_sits() {
+        let mut c = ctx(&[0], &[0]);
+        c.params.insert((0, 255, 3), 0.8);
+        let mut one = map(
+            None,
+            SourceKind::Cc { number: 9 },
+            ControlAction::SlotParam {
+                slot: 0,
+                insert: 255,
+                id: 3,
+            },
+        );
+        one.takeover = Takeover::Pickup;
+        let mut m = Mapper::new(&[one]);
+        assert!(m.handle(&cc("K", 0, 9, 10), &c).is_empty(), "far below it");
+        assert!(m.handle(&cc("K", 0, 9, 50), &c).is_empty(), "still below");
+        let out = m.handle(&cc("K", 0, 9, 110), &c);
+        assert_eq!(out.len(), 1, "crossed it");
+    }
+
+    #[test]
+    fn switches_flip_per_press_or_follow_the_level() {
+        let fx = ControlAction::ToggleFx {
+            slot: 0,
+            fx: FxKind::Reverb,
+        };
+        let mut latch = map(None, SourceKind::Cc { number: 11 }, fx);
+        latch.switch = Switch::Level;
+        let mut m = Mapper::new(&[
+            latch,
+            map(
+                None,
+                SourceKind::Cc { number: 12 },
+                ControlAction::ToggleMute { slot: 0 },
+            ),
+            map(
+                None,
+                SourceKind::Cc { number: 13 },
+                ControlAction::ToggleInsertBypass { slot: 0, insert: 1 },
+            ),
+        ]);
+        let mut c = ctx(&[0], &[0]);
+        // Reverb is off: 127 turns it on, 0 (already off) does nothing.
+        assert_eq!(
+            m.handle(&cc("P", 0, 11, 127), &c),
+            vec![Outcome::ToggleFx(0, FxKind::Reverb)]
+        );
+        assert!(m.handle(&cc("P", 0, 11, 0), &c).is_empty());
+        // Reverb is on now: 127 does nothing, 0 turns it off.
+        c.fx_on[0] = 1 << 3;
+        assert!(m.handle(&cc("P", 0, 11, 127), &c).is_empty());
+        assert_eq!(
+            m.handle(&cc("P", 0, 11, 0), &c),
+            vec![Outcome::ToggleFx(0, FxKind::Reverb)]
+        );
+        // A momentary one flips on each press, nothing on release.
+        assert_eq!(
+            m.handle(&cc("P", 0, 12, 127), &c),
+            vec![Outcome::ToggleMute(0)]
+        );
+        assert!(m.handle(&cc("P", 0, 12, 0), &c).is_empty());
+        assert_eq!(
+            m.handle(&cc("P", 0, 13, 127), &c),
+            vec![Outcome::ToggleBypass(0, 1)]
+        );
     }
 }
