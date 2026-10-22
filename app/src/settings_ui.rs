@@ -237,46 +237,68 @@ fn sound_folders(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut
 }
 
 fn midi(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
-    ui.strong("MIDI inputs");
+    use crate::settings::DeviceRole;
+    ui.strong("MIDI devices");
     ui.label(
         RichText::new(
-            "Each connected device gets its own input, so a slot can listen to one device only (zone and channel filters come with the slot settings).",
+            "A keyboard plays the instruments. A controller (pads, knobs, faders) never does: its messages are kept for controlling the app. Turn a device off to leave it alone completely. Devices are remembered by name, so plugging one in again restores its role.",
         )
         .small()
         .weak(),
     );
     ui.add_space(4.0);
-    if s.midi_sources.is_empty() {
-        ui.label("No MIDI devices connected.");
+    let devices = s.midi_devices();
+    if devices.is_empty() {
+        ui.label("No MIDI devices found.");
     }
-    for m in &s.midi_sources {
-        ui.horizontal(|ui| {
-            ui.label(format!("input {}", m.input));
-            ui.label(RichText::new(&m.device).strong());
+    egui::Grid::new("midi-devices")
+        .num_columns(5)
+        .spacing([14.0, 6.0])
+        .show(ui, |ui| {
+            for d in &devices {
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+                let led = if d.active {
+                    status_color(Status::Ok)
+                } else if d.input.is_some() {
+                    Color32::from_gray(90)
+                } else {
+                    Color32::from_gray(45)
+                };
+                ui.painter().circle_filled(rect.center(), 5.0, led);
+                ui.label(RichText::new(&d.name).strong());
+                ui.label(match d.input {
+                    Some(n) => format!("input {n}"),
+                    None if !d.enabled => "off".to_owned(),
+                    None => "not connected (all inputs in use)".to_owned(),
+                });
+                let mut role = d.role;
+                egui::ComboBox::from_id_salt(("midi-role", &d.name))
+                    .selected_text(match role {
+                        DeviceRole::Keyboard => "Keyboard",
+                        DeviceRole::Controller => "Controller",
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut role, DeviceRole::Keyboard, "Keyboard");
+                        ui.selectable_value(&mut role, DeviceRole::Controller, "Controller");
+                    });
+                let mut on = d.enabled;
+                ui.checkbox(&mut on, "use");
+                if role != d.role || on != d.enabled {
+                    actions.push(Action::SetMidiDevice(d.name.clone(), role, on));
+                }
+                ui.end_row();
+            }
         });
-    }
     ui.add_space(6.0);
     if ui.button("Look for new devices").clicked() {
         actions.push(Action::RefreshMidi);
     }
-    if let Some(b) = s.backend() {
-        let others: Vec<String> = b
-            .hardware_midi_sources()
-            .into_iter()
-            .filter(|d| !s.midi_sources.iter().any(|m| &m.device == d))
-            .collect();
-        if !others.is_empty() {
-            ui.add_space(6.0);
-            ui.label(
-                RichText::new("Seen but not connected (all inputs in use):")
-                    .small()
-                    .weak(),
-            );
-            for d in others {
-                ui.label(d);
-            }
-        }
-    }
+    ui.label(
+        RichText::new("New devices are looked for automatically when they are plugged in.")
+            .small()
+            .weak(),
+    );
 }
 
 fn windows(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {

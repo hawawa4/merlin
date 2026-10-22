@@ -89,6 +89,8 @@ pub enum Action {
     Unquarantine(PathBuf, String),
     SetBuffer(u32),
     RefreshMidi,
+    /// What a MIDI device is for, and whether it is used (device name, role, on).
+    SetMidiDevice(String, crate::settings::DeviceRole, bool),
     SaveWine(String, String),
     /// A file was dropped on the window (or the script's `drop`): install, load or open it.
     DropFile(PathBuf),

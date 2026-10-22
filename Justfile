@@ -14,9 +14,10 @@ default:
 
 # The app. Loads plugins from the standard CLAP folders plus test-assets (Linux and, through
 # our patched Wine, Windows ones). Try: just dev --fresh      just dev --rig my.irig
-# This round: SoundFont finishing touches. Select a SoundFont slot: "Shape the sound" has attack,
-# release, brightness, resonance, tuning and voices; drum kits (bank 128) play on their own channel;
-# Settings -> Plugins has a Sound folders section.
+# This round: MIDI device roles. Settings -> MIDI devices lists every device with an activity light, a
+# role (Keyboard plays instruments, Controller never does) and a "use" switch, remembered by name.
+# No keyboard at hand? Run `just fake-keyboard` in another terminal: a pretend keyboard that plugs in
+# for a minute and plays a scale.
 dev *args:
     cargo build -p merlin --release
     PATH="{{yabridge_dir}}:$PATH" WINELOADER={{patched_wine}} \
@@ -31,6 +32,9 @@ dev *args:
 #   gh release upload runtime dist/runtime/* --clobber                           (later)
 # To try the download without publishing: serve the folder (`python3 -m http.server -d dist/runtime`)
 # and set runtime_url = "http://127.0.0.1:8000/runtime-manifest.json" in settings.toml.
+fake-keyboard name="Fake Keyboard" seconds="60":
+    cargo run -q -p merlin-audio-io --release --example fake_keyboard -- "{{name}}" {{seconds}}
+
 package-runtime:
     tools/package-runtime.sh
 

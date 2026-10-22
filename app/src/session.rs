@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
-use merlin_audio_io::{JackBackend, JackClient, MidiSource};
+use merlin_audio_io::{InputRole, JackBackend, JackClient, MidiSource, friendly_name};
 use merlin_embed::{EditorManager, PluginLookup};
 use merlin_engine::{Command, EngineHandle, Filter};
 use merlin_hosting::clap::ClapLibrary;
@@ -45,6 +45,37 @@ pub enum UserEvent {
 enum WindowsMsg {
     Status(String),
     Done(Result<String, String>),
+}
+
+/// A MIDI device as the settings list shows it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MidiDeviceRow {
+    /// The JACK port name.
+    pub port: String,
+    /// What a person calls it; what the settings remember it by.
+    pub name: String,
+    /// The engine input it is connected to, if it is.
+    pub input: Option<u8>,
+    pub role: crate::settings::DeviceRole,
+    pub enabled: bool,
+    /// Sent something in the last moment.
+    pub active: bool,
+}
+
+/// What to do with each MIDI source: the device's saved role, a keyboard if nothing is saved, or
+/// nothing if it was switched off.
+fn midi_policy(
+    prefs: &[crate::settings::MidiDevicePref],
+) -> impl Fn(&str) -> Option<InputRole> + use<> {
+    let prefs = prefs.to_vec();
+    move |port| {
+        let name = friendly_name(port);
+        match prefs.iter().find(|p| p.name == name) {
+            Some(p) if !p.enabled => None,
+            Some(p) => Some(p.role.into()),
+            None => Some(InputRole::Keyboard),
+        }
+    }
 }
 
 /// What a slot costs. The audio part is the share of the block's time budget the slot uses in the
@@ -148,6 +179,9 @@ pub struct Session {
     cli_dirs: Vec<PathBuf>,
     pub settings: Settings,
     scan_rx: Option<mpsc::Receiver<ScanMsg>>,
+    /// MIDI activity: the message count last seen per input, and until when its light stays on.
+    midi_seen: [u32; merlin_engine::MAX_INPUTS],
+    midi_lit: [Option<Instant>; merlin_engine::MAX_INPUTS],
     /// What each slot costs, refreshed by [`Session::update_loads`].
     pub slot_cpu: [SlotCpu; UI_SLOTS],
     /// Wine host CPU readings: pid -> (ticks, when), for the delta.
@@ -196,7 +230,7 @@ impl Session {
         let (engine, handle) = merlin_engine::new(sample_rate as f32, MAX_BLOCK);
         let backend = client.start(engine)?;
         let outputs = backend.connect_outputs();
-        let midi_sources = backend.connect_midi_sources();
+        let midi_sources = backend.connect_midi_sources(&midi_policy(&settings.midi_devices));
         let (font_tx, font_rx) = mpsc::channel();
         let mut s = Self {
             rig: new_rig("Untitled"),
@@ -218,6 +252,8 @@ impl Session {
             cli_dirs,
             settings: settings.clone(),
             scan_rx: None,
+            midi_seen: Default::default(),
+            midi_lit: Default::default(),
             slot_cpu: [SlotCpu::default(); UI_SLOTS],
             host_cpu: Default::default(),
             last_load_update: Instant::now(),
@@ -633,10 +669,107 @@ impl Session {
         Ok(())
     }
 
-    /// Looks for MIDI devices that appeared since the last time and connects them.
+    /// Looks for MIDI devices that appeared since the last time and connects them, as the
+    /// per-device settings say.
     pub fn refresh_midi(&mut self) {
+        let policy = midi_policy(&self.settings.midi_devices);
         if let Some(b) = self.backend.as_ref() {
-            self.midi_sources = b.connect_midi_sources();
+            self.midi_sources = b.connect_midi_sources(&policy);
+        }
+    }
+
+    /// Every MIDI device the system offers, connected or not, for the settings list.
+    pub fn midi_devices(&self) -> Vec<MidiDeviceRow> {
+        let Some(b) = self.backend.as_ref() else {
+            return Vec::new();
+        };
+        let now = Instant::now();
+        b.hardware_midi_sources()
+            .into_iter()
+            .map(|port| {
+                let name = friendly_name(&port);
+                let pref = self.midi_pref(&name);
+                let connected = self.midi_sources.iter().find(|m| m.device == port);
+                MidiDeviceRow {
+                    active: connected
+                        .and_then(|m| self.midi_lit.get(m.input as usize)?.as_ref())
+                        .is_some_and(|t| *t > now),
+                    input: connected.map(|m| m.input),
+                    role: pref.role,
+                    enabled: pref.enabled,
+                    name,
+                    port,
+                }
+            })
+            .collect()
+    }
+
+    fn midi_pref(&self, name: &str) -> crate::settings::MidiDevicePref {
+        self.settings
+            .midi_devices
+            .iter()
+            .find(|p| p.name == name)
+            .cloned()
+            .unwrap_or(crate::settings::MidiDevicePref {
+                name: name.to_owned(),
+                role: Default::default(),
+                enabled: true,
+            })
+    }
+
+    /// Remembers what a device is for (or that it is off) and applies it now.
+    pub fn set_midi_device(
+        &mut self,
+        name: &str,
+        role: crate::settings::DeviceRole,
+        enabled: bool,
+    ) {
+        let pref = crate::settings::MidiDevicePref {
+            name: name.to_owned(),
+            role,
+            enabled,
+        };
+        match self
+            .settings
+            .midi_devices
+            .iter_mut()
+            .find(|p| p.name == name)
+        {
+            Some(p) => *p = pref,
+            None => self.settings.midi_devices.push(pref),
+        }
+        self.save_settings();
+        self.refresh_midi();
+        self.say(format!(
+            "MIDI device {name}: {}",
+            if !enabled {
+                "off"
+            } else if role == crate::settings::DeviceRole::Controller {
+                "controller"
+            } else {
+                "keyboard"
+            }
+        ));
+    }
+
+    /// Is any MIDI input showing activity right now?
+    pub fn midi_active(&self) -> bool {
+        let now = Instant::now();
+        self.midi_lit.iter().flatten().any(|t| *t > now)
+    }
+
+    /// Notes which inputs received MIDI since the last call; their lights stay on briefly.
+    fn update_midi_activity(&mut self) {
+        let Some(b) = self.backend.as_ref() else {
+            return;
+        };
+        let now = Instant::now();
+        for (i, seen) in self.midi_seen.iter_mut().enumerate() {
+            let count = b.stats.midi_activity[i].load(Ordering::Relaxed);
+            if count != *seen {
+                *seen = count;
+                self.midi_lit[i] = Some(now + Duration::from_millis(150));
+            }
         }
     }
 
@@ -653,10 +786,10 @@ impl Session {
         self.refresh_midi();
         let after: Vec<String> = self.midi_sources.iter().map(|m| m.device.clone()).collect();
         for d in after.iter().filter(|d| !before.contains(d)) {
-            self.say(format!("MIDI device connected: {d}"));
+            self.say(format!("MIDI device connected: {}", friendly_name(d)));
         }
         for d in before.iter().filter(|d| !after.contains(d)) {
-            self.say(format!("MIDI device gone: {d}"));
+            self.say(format!("MIDI device gone: {}", friendly_name(d)));
         }
     }
 
@@ -1642,6 +1775,7 @@ impl Session {
 
     /// Refreshes [`Session::slot_cpu`] (call a few times a second).
     pub fn update_loads(&mut self) {
+        self.update_midi_activity();
         let now = Instant::now();
         let dt = now.duration_since(self.last_load_update);
         if dt < Duration::from_millis(250) {
@@ -1802,3 +1936,57 @@ fn sync_report(rt: &merlin_wine::Runtime, prefixes: &[PathBuf]) -> Result<String
 }
 
 const _: () = assert!(UI_SLOTS <= MAX_SLOTS);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::settings::{DeviceRole, MidiDevicePref};
+
+    fn pref(name: &str, role: DeviceRole, enabled: bool) -> MidiDevicePref {
+        MidiDevicePref {
+            name: name.into(),
+            role,
+            enabled,
+        }
+    }
+
+    #[test]
+    fn midi_devices_follow_their_saved_choices_by_name() {
+        let policy = midi_policy(&[
+            pref("Launchpad", DeviceRole::Controller, true),
+            pref("Old Keys", DeviceRole::Keyboard, false),
+        ]);
+        // The names a person reads, from the port names the system uses.
+        assert_eq!(
+            policy("Midi-Bridge:Launchpad (capture)"),
+            Some(InputRole::Controller)
+        );
+        assert_eq!(policy("Old Keys:out"), None, "switched off: not connected");
+        // Nothing saved: a keyboard, so a new device just works.
+        assert_eq!(
+            policy("Midi-Bridge:Brand New (capture)"),
+            Some(InputRole::Keyboard)
+        );
+    }
+
+    #[test]
+    fn device_prefs_survive_the_settings_file() {
+        let s = Settings {
+            midi_devices: vec![pref("Launchpad", DeviceRole::Controller, false)],
+            ..Settings::default()
+        };
+        let text = toml::to_string_pretty(&s).unwrap();
+        assert!(text.contains("role = \"controller\""), "{text}");
+        let back: Settings = toml::from_str(&text).unwrap();
+        assert_eq!(back.midi_devices, s.midi_devices);
+        // Older settings files without any device choices still load.
+        let old: Settings = toml::from_str("frames = 64\n").unwrap();
+        assert!(old.midi_devices.is_empty());
+        // And a device entry that only names the device means "keyboard, on".
+        let sparse: Settings = toml::from_str("[[midi_devices]]\nname = \"X\"\n").unwrap();
+        assert_eq!(
+            sparse.midi_devices,
+            vec![pref("X", DeviceRole::Keyboard, true)]
+        );
+    }
+}

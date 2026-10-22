@@ -5,6 +5,42 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+/// What a MIDI device is for (the setting; `InputRole` is the audio side of it).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DeviceRole {
+    /// Played: its notes go to the instruments.
+    #[default]
+    Keyboard,
+    /// A control surface: never plays instruments.
+    Controller,
+}
+
+impl From<DeviceRole> for merlin_audio_io::InputRole {
+    fn from(r: DeviceRole) -> Self {
+        match r {
+            DeviceRole::Keyboard => Self::Keyboard,
+            DeviceRole::Controller => Self::Controller,
+        }
+    }
+}
+
+/// What the user decided about a MIDI device, remembered by its name so it holds across plugging
+/// it in and out.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MidiDevicePref {
+    pub name: String,
+    #[serde(default)]
+    pub role: DeviceRole,
+    /// Off: the device is left unconnected.
+    #[serde(default = "yes")]
+    pub enabled: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
 /// A release named `runtime` on the project's repository holds the current archive and manifest.
 pub const DEFAULT_RUNTIME_URL: &str =
     "https://github.com/hawawa4/linuxclap/releases/download/runtime/runtime-manifest.json";
@@ -16,6 +52,8 @@ pub struct Settings {
     pub plugin_dirs: Vec<PathBuf>,
     /// Extra folders to look for SoundFonts (`.sf2`, `.sf3`); the standard ones are always searched.
     pub sound_dirs: Vec<PathBuf>,
+    /// Per-device MIDI choices (role, on or off), by device name.
+    pub midi_devices: Vec<MidiDevicePref>,
     /// Audio buffer size asked of PipeWire.
     pub frames: u32,
     /// Most plugin editors kept alive at once.
@@ -38,6 +76,7 @@ impl Default for Settings {
         Self {
             plugin_dirs: Vec::new(),
             sound_dirs: Vec::new(),
+            midi_devices: Vec::new(),
             frames: 128,
             editor_cache: 8,
             wine_loader: None,

@@ -5,8 +5,8 @@
 mod jack_backend;
 
 pub use jack_backend::{
-    HARDWARE_INPUTS, JackBackend, JackClient, MemLock, MidiSource, Stats, VIRTUAL_INPUT,
-    lock_memory, preload_pipewire_jack,
+    HARDWARE_INPUTS, InputRole, JackBackend, JackClient, MemLock, MidiSource, Stats, VIRTUAL_INPUT,
+    friendly_name, lock_memory, preload_pipewire_jack,
 };
 
 use merlin_engine::{Command, Engine, EngineHandle};

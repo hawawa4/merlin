@@ -8,7 +8,7 @@
 //! plus a lock-free virtual input (engine input 0) for the on-screen keyboard.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::time::Instant;
 
 use anyhow::{Context, Result};
@@ -77,6 +77,51 @@ pub fn lock_memory() -> MemLock {
     }
 }
 
+/// What a connected MIDI device is for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum InputRole {
+    /// Played: its notes go to the instruments.
+    #[default]
+    Keyboard,
+    /// A control surface (pads, knobs, faders): its messages never reach the instruments. They
+    /// are counted, so the rack can show activity, and are kept for the control mapping to come.
+    Controller,
+}
+
+impl InputRole {
+    fn bits(self) -> u8 {
+        match self {
+            InputRole::Keyboard => 0,
+            InputRole::Controller => 1,
+        }
+    }
+}
+
+/// A device name a person can read, from the JACK port name PipeWire gives it:
+/// `Midi-Bridge:Launchkey MK3 25: Launchkey MK3 25 MIDI (capture)` -> `Launchkey MK3 25: Launchkey MK3 25 MIDI`,
+/// `BLE MIDI 1:out` -> `BLE MIDI 1`.
+pub fn friendly_name(port: &str) -> String {
+    if let Some(rest) = port.strip_prefix("Midi-Bridge:") {
+        let rest = rest.trim();
+        // Drop the direction PipeWire appends: " (capture)", "(capture_0)".
+        let rest = match rest.rfind('(') {
+            Some(i) if rest.ends_with(')') && rest[i..].contains("capture") => rest[..i].trim_end(),
+            _ => rest,
+        };
+        return rest.to_owned();
+    }
+    match port.rsplit_once(':') {
+        Some((client, tail))
+            if matches!(tail, "out" | "output" | "midi_out" | "capture")
+                || tail.starts_with("capture_")
+                || tail.starts_with("midi_out") =>
+        {
+            client.to_owned()
+        }
+        _ => port.to_owned(),
+    }
+}
+
 /// Counters the callback publishes.
 #[derive(Default)]
 pub struct Stats {
@@ -90,6 +135,8 @@ pub struct Stats {
     pub dropped_midi: AtomicU32,
     /// Set when a port appeared or went away (a device was plugged in or out).
     pub ports_changed: AtomicBool,
+    /// Channel messages received per engine input (index = input), for the activity lights.
+    pub midi_activity: [AtomicU32; merlin_engine::MAX_INPUTS],
 }
 
 struct Notifications(Arc<Stats>);
@@ -145,6 +192,7 @@ impl JackClient {
         let out_names = [out_l.name()?, out_r.name()?];
 
         let (virtual_midi, virtual_rx) = rtrb::RingBuffer::new(VIRTUAL_QUEUE);
+        let roles: Arc<[AtomicU8; HARDWARE_INPUTS]> = Arc::default();
         let stats = Arc::new(Stats::default());
         let callback = Callback {
             engine,
@@ -152,6 +200,7 @@ impl JackClient {
             out_l,
             out_r,
             virtual_rx,
+            roles: roles.clone(),
             events: Vec::with_capacity(MAX_MIDI_PER_CYCLE),
             stats: stats.clone(),
             ftz_set: false,
@@ -162,6 +211,7 @@ impl JackClient {
             stats,
             virtual_midi,
             midi_names,
+            roles,
             out_names,
             sample_rate: self.sample_rate,
         })
@@ -174,6 +224,8 @@ struct Callback {
     out_l: Port<AudioOut>,
     out_r: Port<AudioOut>,
     virtual_rx: rtrb::Consumer<MidiEvent>,
+    /// [`InputRole`] bits per hardware input, set from the main thread.
+    roles: Arc<[AtomicU8; HARDWARE_INPUTS]>,
     events: Vec<MidiEvent>,
     stats: Arc<Stats>,
     ftz_set: bool,
@@ -215,9 +267,14 @@ impl jack::ProcessHandler for Callback {
         }
         self.events.clear();
         for i in 0..self.midi_in.len() {
+            let controller = self.roles[i].load(Ordering::Relaxed) == InputRole::Controller.bits();
             for raw in self.midi_in[i].iter(ps) {
                 // Channel messages only (status 0x80..0xEF), up to three bytes.
                 if !(1..=3).contains(&raw.bytes.len()) || !(0x80..0xF0).contains(&raw.bytes[0]) {
+                    continue;
+                }
+                self.stats.midi_activity[i + 1].fetch_add(1, Ordering::Relaxed);
+                if controller {
                     continue;
                 }
                 let mut data = [0u8; 3];
@@ -254,6 +311,7 @@ pub struct JackBackend {
     pub virtual_midi: rtrb::Producer<MidiEvent>,
     /// JACK port names of our MIDI inputs, index = engine input - 1.
     pub midi_names: Vec<String>,
+    roles: Arc<[AtomicU8; HARDWARE_INPUTS]>,
     pub out_names: [String; 2],
     pub sample_rate: u32,
 }
@@ -265,6 +323,7 @@ pub struct MidiSource {
     pub input: u8,
     /// The source's JACK port name, which is also its device name for filters.
     pub device: String,
+    pub role: InputRole,
 }
 
 impl JackBackend {
@@ -316,38 +375,61 @@ impl JackBackend {
         ports
     }
 
-    /// Connects each hardware MIDI source to its own engine input (up to the limit), keeping
-    /// existing assignments: a source that is already connected to one of our ports stays on
-    /// it. Returns the full source -> input table.
-    pub fn connect_midi_sources(&self) -> Vec<MidiSource> {
+    /// Connects each wanted hardware MIDI source to its own engine input (up to the limit),
+    /// keeping existing assignments: a source that is already connected to one of our ports stays
+    /// on it. `wanted` says what to do with a source (by JACK port name): `Some(role)` to use it,
+    /// `None` to leave it unconnected (and disconnect it if it was). Returns the table of
+    /// connected sources.
+    pub fn connect_midi_sources(
+        &self,
+        wanted: &dyn Fn(&str) -> Option<InputRole>,
+    ) -> Vec<MidiSource> {
         let c = self.client.as_client();
-        let mut table: Vec<Option<String>> = vec![None; HARDWARE_INPUTS];
-        // Keep what is already connected.
+        let mut table: Vec<Option<(String, InputRole)>> = vec![None; HARDWARE_INPUTS];
+        // Keep what is already connected, unless it is no longer wanted.
         for (i, name) in self.midi_names.iter().enumerate() {
-            if let Some(port) = c.port_by_name(name)
-                && let Some(first) = port.get_connections().first()
-            {
-                table[i] = Some(first.clone());
+            let Some(port) = c.port_by_name(name) else {
+                continue;
+            };
+            for source in port.get_connections() {
+                match wanted(&source) {
+                    Some(role) if table[i].is_none() => table[i] = Some((source, role)),
+                    _ => {
+                        let _ = c.disconnect_ports_by_name(&source, name);
+                    }
+                }
             }
         }
         for source in self.hardware_midi_sources() {
-            if table.iter().any(|t| t.as_deref() == Some(&source)) {
+            let Some(role) = wanted(&source) else {
+                continue;
+            };
+            if table
+                .iter()
+                .any(|t| t.as_ref().is_some_and(|(s, _)| *s == source))
+            {
                 continue;
             }
             if let Some(i) = table.iter().position(Option::is_none)
                 && c.connect_ports_by_name(&source, &self.midi_names[i])
                     .is_ok()
             {
-                table[i] = Some(source);
+                table[i] = Some((source, role));
             }
+        }
+        // The roles take effect on the audio thread; unused inputs go back to keyboard.
+        for (i, entry) in table.iter().enumerate() {
+            let role = entry.as_ref().map_or(InputRole::Keyboard, |(_, r)| *r);
+            self.roles[i].store(role.bits(), Ordering::Relaxed);
         }
         table
             .into_iter()
             .enumerate()
             .filter_map(|(i, d)| {
-                d.map(|device| MidiSource {
+                d.map(|(device, role)| MidiSource {
                     input: i as u8 + 1,
                     device,
+                    role,
                 })
             })
             .collect()
@@ -357,5 +439,27 @@ impl JackBackend {
     pub fn stop(self) -> Result<Engine> {
         let (_, _, callback) = self.client.deactivate()?;
         Ok(callback.engine)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn port_names_become_device_names() {
+        assert_eq!(
+            friendly_name("Midi-Bridge:Midi Through: Port-0 (capture)"),
+            "Midi Through: Port-0"
+        );
+        assert_eq!(
+            friendly_name("Midi-Bridge:Launchkey MK3 25: Launchkey MK3 25 MIDI (capture_0)"),
+            "Launchkey MK3 25: Launchkey MK3 25 MIDI"
+        );
+        assert_eq!(friendly_name("BLE MIDI 1:out"), "BLE MIDI 1");
+        assert_eq!(friendly_name("Fake Keyboard:midi_out_1"), "Fake Keyboard");
+        // Anything unrecognised is kept whole, so two different ports never share a name.
+        assert_eq!(friendly_name("synth:keys"), "synth:keys");
+        assert_eq!(friendly_name("plain"), "plain");
     }
 }
