@@ -13,6 +13,9 @@ pub const MAX_PARTS: usize = 64;
 /// Most backing tracks a song can play at once.
 pub const MAX_TRACKS: usize = 16;
 
+/// Most timeline markers in a song.
+pub const MAX_SONG_MARKERS: usize = 128;
+
 pub const MIN_TEMPO: f32 = 20.0;
 pub const MAX_TEMPO: f32 = 300.0;
 
@@ -79,6 +82,82 @@ impl Track {
     }
 }
 
+/// What a timeline marker does when the song's run reaches it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum MarkerAction {
+    /// Enter part `part` (counted from 0) of this song.
+    GoToPart {
+        part: u8,
+    },
+    NextPart,
+    /// Show a message to the player in the Perform view.
+    Cue {
+        text: String,
+    },
+    /// Stop the transport (and the backing tracks).
+    Stop,
+    /// Send a Program Change on the MIDI output (channel 0-15).
+    ProgramChange {
+        channel: u8,
+        program: u8,
+    },
+    /// Send a Control Change on the MIDI output.
+    ControlChange {
+        channel: u8,
+        number: u8,
+        value: u8,
+    },
+}
+
+/// A point on the song's timeline, in bars and beats from the start of the run (bar 1 beat 1 is
+/// the first beat).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Marker {
+    pub bar: u32,
+    pub beat: u8,
+    pub action: MarkerAction,
+}
+
+impl Marker {
+    /// Clock ticks (24 to a beat) from the start of the run, for a song with `beats_per_bar`.
+    pub fn tick(&self, beats_per_bar: u8) -> u64 {
+        let beats = u64::from(self.bar.saturating_sub(1)) * u64::from(beats_per_bar)
+            + u64::from(self.beat.saturating_sub(1));
+        beats * 24
+    }
+
+    /// The bytes it sends on the MIDI output, if it sends any.
+    pub fn midi(&self) -> Option<([u8; 3], u8)> {
+        match self.action {
+            MarkerAction::ProgramChange { channel, program } => {
+                Some(([0xC0 | (channel & 15), program & 127, 0], 2))
+            }
+            MarkerAction::ControlChange {
+                channel,
+                number,
+                value,
+            } => Some(([0xB0 | (channel & 15), number & 127, value & 127], 3)),
+            _ => None,
+        }
+    }
+
+    fn is_valid(&self, beats_per_bar: u8) -> bool {
+        (1..=9999).contains(&self.bar)
+            && (1..=beats_per_bar).contains(&self.beat)
+            && match self.action {
+                MarkerAction::GoToPart { part } => usize::from(part) < MAX_PARTS,
+                MarkerAction::ProgramChange { channel, program } => channel < 16 && program < 128,
+                MarkerAction::ControlChange {
+                    channel,
+                    number,
+                    value,
+                } => channel < 16 && number < 128 && value < 128,
+                _ => true,
+            }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Song {
@@ -90,6 +169,8 @@ pub struct Song {
     pub note: String,
     /// Backing tracks, played from the start of the run.
     pub tracks: Vec<Track>,
+    /// Things that happen at points of the song: a part change, a cue, MIDI to other gear.
+    pub markers: Vec<Marker>,
 }
 
 impl Default for Song {
@@ -101,6 +182,7 @@ impl Default for Song {
             parts: Vec::new(),
             note: String::new(),
             tracks: Vec::new(),
+            markers: Vec::new(),
         }
     }
 }
@@ -129,6 +211,8 @@ impl Song {
             && (1..=16).contains(&self.beats_per_bar)
             && self.parts.len() <= MAX_PARTS
             && self.tracks.len() <= MAX_TRACKS
+            && self.markers.len() <= MAX_SONG_MARKERS
+            && self.markers.iter().all(|m| m.is_valid(self.beats_per_bar))
             && self.tracks.iter().all(|t| (0.0..=2.0).contains(&t.gain))
             && self
                 .parts
@@ -190,6 +274,46 @@ mod tests {
         song.tracks.truncate(1);
         song.tracks[0].gain = 3.0;
         assert!(!song.is_valid(0));
+    }
+
+    #[test]
+    fn markers_know_their_tick_and_their_midi() {
+        let m = Marker {
+            bar: 3,
+            beat: 2,
+            action: MarkerAction::ProgramChange {
+                channel: 1,
+                program: 5,
+            },
+        };
+        // Bar 3 beat 2 in 4/4 is the 10th beat from the start: 9 beats of 24 ticks.
+        assert_eq!(m.tick(4), 9 * 24);
+        assert_eq!(m.midi(), Some(([0xC1, 5, 0], 2)));
+        assert_eq!(
+            Marker {
+                bar: 1,
+                beat: 1,
+                action: MarkerAction::Stop
+            }
+            .tick(3),
+            0
+        );
+        let song = Song {
+            beats_per_bar: 3,
+            markers: vec![m],
+            ..Song::default()
+        };
+        assert!(song.is_valid(0), "beat 2 exists in 3/4");
+        let bad = Song {
+            beats_per_bar: 2,
+            markers: vec![Marker {
+                bar: 1,
+                beat: 3,
+                action: MarkerAction::NextPart,
+            }],
+            ..Song::default()
+        };
+        assert!(!bad.is_valid(0), "there is no beat 3 in 2/4");
     }
 
     #[test]

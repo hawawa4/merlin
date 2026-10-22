@@ -87,7 +87,7 @@ Snapshots are saved inside the rig file, so one file holds the whole setup.
 - [ ] **-**/**+** and **TAP** change the tempo (tap four times); the click follows at once. **CLICK** and its slider mute it and set its level. Count-in off starts straight away.
 - [ ] Settings > Audio > Click output: with a multi-output interface pick two of its outputs: the click leaves the main mix and comes out there only (headphones). Back to "Main outputs" mixes it in again.
 - [ ] Enter a part that has its own tempo (Setlist): the click follows it. Change beats per bar for a song (Setlist) or in Settings > Audio and listen for the accent on beat 1.
-- [ ] MIDI clock: connect the `merlin:clock_out` port to a drum machine or a software that shows incoming tempo (`pw-link merlin:clock_out <port>`); it follows the tempo and starts and stops with START and STOP.
+- [ ] MIDI clock: connect the `merlin:midi_out` port to a drum machine or a software that shows incoming tempo (`pw-link merlin:midi_out <port>`); it follows the tempo and starts and stops with START and STOP.
 - [ ] Settings > Controls: *Start / stop*, *Click on / off*, *Tap tempo* on a foot switch or pad.
 - [ ] Close and reopen the rig: tempo, count-in and click settings are back.
 
@@ -100,6 +100,13 @@ Snapshots are saved inside the rig file, so one file holds the whole setup.
 - [ ] Switch to another song and back (parts, foot switch, Setlist): the tracks of the entered song are the ones that play.
 - [ ] Save, reopen: the tracks are still listed; delete or move a file and open the rig: that track says *cannot play* and the rest still work.
 - [ ] Part tempo overrides change the click but not the recorded stems: expected.
+
+## 5i. Timeline markers
+- [ ] Setlist > a song > Timeline > **+ Marker**: bar 2 beat 1 **Go to part** 2; bar 3 **Cue** "Chorus"; bar 5 **Stop**. Go to the song, Perform view, START: at bar 2 the sound changes to part 2, the cue appears large at bar 3, the transport stops at bar 5. Try it with backing tracks playing too: do the part changes land on the beat?
+- [ ] **Program Change** and **Controller** markers: with a synth or a MIDI monitor connected to the `merlin:midi_out` port (`pw-link merlin:midi_out <port>`), it receives them on the right channel at the right bar, together with the MIDI clock.
+- [ ] Change the song's tempo or beats per bar: the markers keep their bars and beats (they move in time).
+- [ ] Edit a marker while the transport is stopped, press START: the new marker list is used. (Editing while it runs takes effect after the next stop.)
+- [ ] **Next part** marker plus a foot switch mapped to *Next part*: both advance without skipping a part.
 
 ## 6. Stability
 - [ ] Kill a Windows plugin's Wine process while the app runs: `pgrep -af yabridge-host`, then `kill -9 <pid>` of one. The app should restart itself from the autosave and name the plugin it quarantined (it comes back with *Retry*).

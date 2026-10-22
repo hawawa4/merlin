@@ -14,9 +14,8 @@ default:
 
 # The app. Loads plugins from the standard CLAP folders plus test-assets (Linux and, through
 # our patched Wine, Windows ones). Try: just dev --fresh      just dev --rig my.irig
-# This round: backing tracks. Setlist -> add a song, "+ Add track" (type a path, or drop a WAV/FLAC/MP3/OGG on the window),
-# enter the song with "Go", then START in the Perform view: the tracks play after the count-in, stop with STOP, and
-# can be muted per track. Tick "cue" to send one to the click output. See docs/qa-checklist.md section 5h.
+# This round: the song timeline. Setlist -> a song -> Timeline "+ Marker": at bar 2 beat 1 go to part 2, at bar 5 show a cue,
+# send a Program Change to your synth... Press START in the Perform view and watch them fire. See docs/qa-checklist.md 5i.
 dev *args:
     cargo build -p merlin --release
     PATH="{{yabridge_dir}}:$PATH" WINELOADER={{patched_wine}} \

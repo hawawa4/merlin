@@ -580,6 +580,18 @@ impl Running {
                 s.set_click_output(p);
                 Ok(())
             }
+            Action::AddMarker(n, m) => {
+                s.add_marker(n, m);
+                Ok(())
+            }
+            Action::RemoveMarker(n, k) => {
+                s.remove_marker(n, k);
+                Ok(())
+            }
+            Action::EditMarker(n, k, m) => {
+                s.edit_marker(n, k, |old| *old = m);
+                Ok(())
+            }
             Action::AddTrack(n, path) => {
                 s.add_track(n, path);
                 Ok(())
@@ -966,7 +978,7 @@ impl Running {
                 s.say(format!(
                     "state: rig '{}'{}, xruns {xruns}, DSP {dsp:.1}%, held keys {held}, \
                      RSS {rss_mb} MB, threads {threads}, midi {midi}, master {:.2}, vol1 {:.2}, targets {:?}, dock shows {:?}, \
-                     popup {}, slots {}, perform {}, locked {}, macro1 {:.2}, gain1 {:.2}, position {:?}, tempo {:.0}, transport {} bar {} beat {} beats {}, run {:.1}s, underruns {}, stems {}",
+                     popup {}, slots {}, perform {}, locked {}, macro1 {:.2}, gain1 {:.2}, position {:?}, tempo {:.0}, transport {} bar {} beat {} beats {}, run {:.1}s, underruns {}, stems {}, cue {:?}",
                     s.rig.name,
                     if s.dirty { " (modified)" } else { "" },
                     s.rig.master_volume,
@@ -987,7 +999,8 @@ impl Running {
                     s.engine.shared.transport.beats_total(),
                     s.run_seconds(),
                     s.engine.shared.backing_underruns.load(std::sync::atomic::Ordering::Relaxed),
-                    s.engine.shared.stems_playing.load(std::sync::atomic::Ordering::Relaxed)
+                    s.engine.shared.stems_playing.load(std::sync::atomic::Ordering::Relaxed),
+                    s.cue()
                 ));
                 Ok(())
             }
@@ -1361,6 +1374,34 @@ fn parse_script() -> Vec<(Duration, Action)> {
                 "click" => Action::SetClickState(words.next()? == "on"),
                 "tap" => Action::TapTempo,
                 "countin" => Action::SetCountIn(words.next()?.parse().ok()?),
+                // marker S bar beat part N | next | stop | cue text | pc ch prog | cc ch num val
+                "marker" => {
+                    use merlin_model::{Marker, MarkerAction as M};
+                    let n = slot(words.next())?;
+                    let bar = words.next()?.parse().ok()?;
+                    let beat = words.next()?.parse().ok()?;
+                    let action = match words.next()? {
+                        "part" => M::GoToPart {
+                            part: slot(words.next())?.try_into().ok()?,
+                        },
+                        "next" => M::NextPart,
+                        "stop" => M::Stop,
+                        "cue" => M::Cue {
+                            text: words.collect::<Vec<_>>().join(" "),
+                        },
+                        "pc" => M::ProgramChange {
+                            channel: words.next()?.parse().ok()?,
+                            program: words.next()?.parse().ok()?,
+                        },
+                        "cc" => M::ControlChange {
+                            channel: words.next()?.parse().ok()?,
+                            number: words.next()?.parse().ok()?,
+                            value: words.next()?.parse().ok()?,
+                        },
+                        _ => return None,
+                    };
+                    Action::AddMarker(n, Marker { bar, beat, action })
+                }
                 // track add S path | track gain S K v | track cue S K on|off | track mute S K on|off
                 "track" => match words.next()? {
                     "add" => {

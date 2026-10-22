@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use merlin_audio_io::{ControlEvent, friendly_name};
+use merlin_audio_io::{ControlEvent, MARKER_INPUT, friendly_name};
 use merlin_control::{Context, Incoming, Message, Outcome};
 use merlin_model::{ControlAction, Glue, Mapping, Source, SourceKind, Takeover};
 
@@ -73,6 +73,10 @@ impl Session {
     /// Takes in the control messages that arrived: learning one, or running what is mapped.
     pub fn poll_control(&mut self) {
         while let Ok(ev) = self.control_rx.try_recv() {
+            if ev.input == MARKER_INPUT {
+                self.marker_fired(u16::from(ev.data[0]) << 8 | u16::from(ev.data[1]));
+                continue;
+            }
             let Some((channel, message)) = decode(ev.data) else {
                 continue;
             };

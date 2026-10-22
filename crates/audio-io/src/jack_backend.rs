@@ -12,12 +12,15 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::time::Instant;
 
 use anyhow::{Context, Result};
-use merlin_engine::{ClickOut, ClockEvent, Engine, MAX_INPUTS};
+use merlin_engine::{ClickOut, Engine, MAX_INPUTS, MidiOutEvent};
 use merlin_hosting::MidiEvent;
 use jack::{
     AudioOut, Client, ClientOptions, Control, MidiIn, MidiOut, NotificationHandler, Port,
     PortFlags, RawMidi,
 };
+
+/// The `input` of a [`ControlEvent`] that reports a timeline marker (its id is in `data`).
+pub const MARKER_INPUT: u8 = 0xFE;
 
 /// Engine input index of the virtual keyboard.
 pub const VIRTUAL_INPUT: u8 = 0;
@@ -251,7 +254,7 @@ impl JackClient {
         // The click (its own output pair) and the MIDI clock.
         let click_l = client.register_port("click_l", AudioOut::default())?;
         let click_r = client.register_port("click_r", AudioOut::default())?;
-        let clock_out = client.register_port("clock_out", MidiOut::default())?;
+        let clock_out = client.register_port("midi_out", MidiOut::default())?;
         let click_names = [click_l.name()?, click_r.name()?];
         let clock_name = clock_out.name()?;
 
@@ -302,7 +305,7 @@ struct Callback {
     click_l: Port<AudioOut>,
     click_r: Port<AudioOut>,
     clock_out: Port<MidiOut>,
-    clock: Vec<ClockEvent>,
+    clock: Vec<MidiOutEvent>,
     virtual_rx: rtrb::Consumer<MidiEvent>,
     /// [`InputRole`] bits per hardware input, set from the main thread.
     roles: Arc<[AtomicU8; HARDWARE_INPUTS]>,
@@ -412,11 +415,17 @@ impl jack::ProcessHandler for Callback {
         };
         self.engine
             .process_with_click(&self.events, &mut l[..n], &mut r[..n], Some(&mut click));
+        for &id in self.engine.fired_markers() {
+            let _ = self.control_tx.push(ControlEvent {
+                input: MARKER_INPUT,
+                data: [(id >> 8) as u8, id as u8, 0],
+            });
+        }
         let mut writer = self.clock_out.writer(ps);
         for e in &self.clock {
             let _ = writer.write(&RawMidi {
                 time: e.time,
-                bytes: &[e.byte],
+                bytes: e.data(),
             });
         }
 

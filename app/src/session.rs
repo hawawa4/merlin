@@ -24,6 +24,7 @@ mod controls;
 mod macros;
 mod setlist;
 mod snapshots;
+mod timeline;
 mod transport;
 
 use crate::scan_worker::{self, ScanMsg};
@@ -207,6 +208,8 @@ pub struct Session {
     needs_rearm: bool,
     /// START was pressed while the tracks were still loading.
     pending_start: Option<Instant>,
+    /// The text a marker asked to show, and when.
+    cue: Option<(String, Instant)>,
     /// When the tempo was last tapped.
     taps: Vec<Instant>,
     /// What each plugin said about its parameters, by (slot, insert).
@@ -304,6 +307,7 @@ impl Session {
             armed: Vec::new(),
             needs_rearm: false,
             pending_start: None,
+            cue: None,
             taps: Vec::new(),
             param_cache: Default::default(),
             midi_seen: Default::default(),

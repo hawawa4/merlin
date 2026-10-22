@@ -125,12 +125,40 @@ impl TransportShared {
     }
 }
 
-/// A MIDI real-time byte to send `time` frames into the block.
+/// A MIDI message to send `time` frames into the block: the clock and start/stop bytes, and
+/// what timeline markers send (a program change, a controller).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ClockEvent {
+pub struct MidiOutEvent {
     pub time: u32,
-    pub byte: u8,
+    pub bytes: [u8; 3],
+    pub len: u8,
 }
+
+impl MidiOutEvent {
+    pub fn byte(time: u32, byte: u8) -> Self {
+        Self {
+            time,
+            bytes: [byte, 0, 0],
+            len: 1,
+        }
+    }
+
+    pub fn data(&self) -> &[u8] {
+        &self.bytes[..usize::from(self.len)]
+    }
+}
+
+/// A marker on the song's timeline as the audio thread sees it: when it fires (in clock ticks
+/// since the run started), what to tell the main thread, and what to send on MIDI, if anything.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EngineMarker {
+    pub tick: u64,
+    pub id: u16,
+    pub midi: Option<([u8; 3], u8)>,
+}
+
+/// Most markers a song can have.
+pub const MAX_MARKERS: usize = 128;
 
 /// What happened in a block that the rest of the engine has to act on.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -158,6 +186,13 @@ pub struct Transport {
     click_freq: f32,
     click_active: bool,
     click_gain: f32,
+    /// Timeline markers, in tick order, and the next one to fire.
+    markers: Vec<EngineMarker>,
+    next_marker: usize,
+    /// Ticks since the run started.
+    run_tick: u64,
+    /// Markers that fired in the last block.
+    fired: Vec<u16>,
 }
 
 impl Transport {
@@ -177,7 +212,29 @@ impl Transport {
             click_freq: CLICK_FREQ,
             click_active: false,
             click_gain: 0.0,
+            markers: Vec::with_capacity(MAX_MARKERS),
+            next_marker: 0,
+            run_tick: 0,
+            fired: Vec::with_capacity(MAX_MARKERS),
         }
+    }
+
+    /// Adds a marker (kept in tick order). Ignored beyond [`MAX_MARKERS`].
+    pub fn add_marker(&mut self, marker: EngineMarker) {
+        if self.markers.len() < MAX_MARKERS {
+            let at = self.markers.partition_point(|m| m.tick <= marker.tick);
+            self.markers.insert(at, marker);
+        }
+    }
+
+    pub fn clear_markers(&mut self) {
+        self.markers.clear();
+        self.next_marker = 0;
+    }
+
+    /// The ids of the markers that fired in the last [`render`](Self::render).
+    pub fn fired(&self) -> &[u16] {
+        &self.fired
     }
 
     fn trigger_click(&mut self, accent: bool, volume: f32) {
@@ -198,10 +255,11 @@ impl Transport {
         shared: &TransportShared,
         click_l: &mut [f32],
         click_r: &mut [f32],
-        clock: &mut Vec<ClockEvent>,
+        clock: &mut Vec<MidiOutEvent>,
     ) -> TransportEvents {
         let mut events = TransportEvents::default();
         self.run_start = None;
+        self.fired.clear();
         let frames = click_l.len().min(click_r.len());
         clock.clear();
         click_l[..frames].fill(0.0);
@@ -225,10 +283,7 @@ impl Transport {
             REQ_STOP => {
                 events.stopped = self.until_tick.is_some();
                 if self.until_tick.is_some() {
-                    clock.push(ClockEvent {
-                        time: 0,
-                        byte: MIDI_STOP,
-                    });
+                    clock.push(MidiOutEvent::byte(0, MIDI_STOP));
                 }
                 self.until_tick = None;
                 self.running = false;
@@ -259,10 +314,26 @@ impl Transport {
                     shared.bar.store(self.bar, Ordering::Relaxed);
                     shared.beat.store(self.beat_in_bar + 1, Ordering::Relaxed);
                 }
-                clock.push(ClockEvent {
-                    time: at,
-                    byte: MIDI_CLOCK,
-                });
+                if self.running {
+                    while self.next_marker < self.markers.len()
+                        && self.markers[self.next_marker].tick <= self.run_tick
+                    {
+                        let m = self.markers[self.next_marker];
+                        self.next_marker += 1;
+                        if let Some((bytes, len)) = m.midi {
+                            clock.push(MidiOutEvent {
+                                time: at,
+                                bytes,
+                                len,
+                            });
+                        }
+                        if self.fired.len() < self.fired.capacity() {
+                            self.fired.push(m.id);
+                        }
+                    }
+                    self.run_tick += 1;
+                }
+                clock.push(MidiOutEvent::byte(at, MIDI_CLOCK));
                 self.tick = self.tick.wrapping_add(1);
                 until += per_tick;
             }
@@ -307,7 +378,7 @@ impl Transport {
 
     /// A beat begins: moves the count-in or the bar counter on. Returns whether it is the first
     /// beat of a bar (the accent).
-    fn on_beat(&mut self, bpb: u32, at: u32, clock: &mut Vec<ClockEvent>) -> bool {
+    fn on_beat(&mut self, bpb: u32, at: u32, clock: &mut Vec<MidiOutEvent>) -> bool {
         if self.count_in_left > 0 {
             let accent = self.beat_in_bar == 0;
             self.bar = 0;
@@ -318,14 +389,13 @@ impl Transport {
         } else if !self.running {
             // The count-in is over: this beat is bar 1, beat 1.
             self.running = true;
+            self.run_tick = 0;
+            self.next_marker = 0;
             self.run_start = Some(at);
             self.counting = false;
             self.bar = 1;
             self.beat_in_bar = 0;
-            clock.push(ClockEvent {
-                time: at,
-                byte: MIDI_START,
-            });
+            clock.push(MidiOutEvent::byte(at, MIDI_START));
             true
         } else {
             self.beat_in_bar += 1;
@@ -358,7 +428,11 @@ mod tests {
         let mut was_silent = true;
         for b in 0..blocks {
             t.render(shared, &mut l, &mut r, &mut clock);
-            events.extend(clock.iter().map(|e| (b * frames + e.time as usize, e.byte)));
+            events.extend(
+                clock
+                    .iter()
+                    .map(|e| (b * frames + e.time as usize, e.bytes[0])),
+            );
             for (i, &s) in l.iter().enumerate() {
                 let silent = s == 0.0;
                 if was_silent && !silent {
@@ -453,5 +527,62 @@ mod tests {
         let ticks: Vec<_> = events.iter().filter(|e| e.1 == MIDI_CLOCK).collect();
         let gaps: Vec<usize> = ticks.windows(2).map(|w| w[1].0 - w[0].0).collect();
         assert!(gaps.iter().all(|&g| (499..=501).contains(&g)), "{gaps:?}");
+    }
+
+    #[test]
+    fn markers_fire_on_their_tick_and_send_their_midi_in_order_with_the_clock() {
+        let shared = TransportShared::new();
+        shared.set_tempo(120.0);
+        let mut t = Transport::new(SR);
+        // Bar 1 beat 1 (the run start), and 2 beats later with a program change.
+        t.add_marker(EngineMarker {
+            tick: 2 * 24,
+            id: 7,
+            midi: Some(([0xC1, 5, 0], 2)),
+        });
+        t.add_marker(EngineMarker {
+            tick: 0,
+            id: 3,
+            midi: None,
+        });
+        shared.start(0);
+        let (mut l, mut r) = (vec![0.0; 512], vec![0.0; 512]);
+        let mut clock = Vec::with_capacity(256);
+        let mut fired = Vec::new();
+        let mut pc_at = None;
+        let mut last_time = 0usize;
+        for b in 0..200 {
+            t.render(&shared, &mut l, &mut r, &mut clock);
+            // Events leave in time order, or JACK refuses them.
+            for e in &clock {
+                assert!(b * 512 + e.time as usize >= last_time);
+                last_time = b * 512 + e.time as usize;
+                if e.bytes[0] == 0xC1 {
+                    pc_at = Some((last_time, e.data().to_vec()));
+                }
+            }
+            fired.extend(t.fired().iter().map(|&id| (b * 512, id)));
+        }
+        assert_eq!(fired.iter().map(|f| f.1).collect::<Vec<_>>(), vec![3, 7]);
+        // 120 bpm: two beats = 48000 frames; the program change is on that tick.
+        let (at, bytes) = pc_at.expect("no program change was sent");
+        assert!((47_999..=48_001).contains(&at), "{at}");
+        assert_eq!(bytes, vec![0xC1, 5]);
+        // Stopped and started again: the markers fire again from the top.
+        shared.stop();
+        t.render(&shared, &mut l, &mut r, &mut clock);
+        shared.start(0);
+        let mut again = Vec::new();
+        for _ in 0..200 {
+            t.render(&shared, &mut l, &mut r, &mut clock);
+            again.extend_from_slice(t.fired());
+        }
+        assert_eq!(again, vec![3, 7]);
+        t.clear_markers();
+        shared.stop();
+        t.render(&shared, &mut l, &mut r, &mut clock);
+        shared.start(0);
+        t.render(&shared, &mut l, &mut r, &mut clock);
+        assert!(t.fired().is_empty(), "cleared markers stay quiet");
     }
 }

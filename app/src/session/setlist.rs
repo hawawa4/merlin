@@ -70,6 +70,8 @@ impl Session {
             s.tempo = s.tempo.clamp(MIN_TEMPO, MAX_TEMPO);
             s.beats_per_bar = s.beats_per_bar.clamp(1, 16);
             self.dirty = true;
+            // Markers sit on beats of the bar: a new signature moves them.
+            self.markers_changed(n);
         }
     }
 

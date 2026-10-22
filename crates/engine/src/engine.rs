@@ -11,7 +11,7 @@ use crate::events::EventBuf;
 use crate::router::{Filter, Router};
 use merlin_backing::StemReader;
 
-use crate::transport::{ClockEvent, Transport, TransportEvents};
+use crate::transport::{EngineMarker, MidiOutEvent, Transport, TransportEvents};
 
 const COMMAND_QUEUE: usize = 256;
 const RETIRED_QUEUE: usize = 64;
@@ -82,6 +82,9 @@ pub enum Command {
         mute: bool,
         cue: bool,
     },
+    /// Timeline markers of the entered song (ticks since the run started).
+    AddMarker(EngineMarker),
+    ClearMarkers,
     SetMasterVolume(f32),
     /// The master limiter is on by default.
     SetLimiter(bool),
@@ -247,7 +250,8 @@ pub struct Engine {
     transport: Transport,
     click_l: Vec<f32>,
     click_r: Vec<f32>,
-    clock: Vec<ClockEvent>,
+    clock: Vec<MidiOutEvent>,
+    fired: Vec<u16>,
 }
 
 /// Where the click and the MIDI clock go when they are not mixed into the main output.
@@ -255,7 +259,7 @@ pub struct ClickOut<'a> {
     pub l: &'a mut [f32],
     pub r: &'a mut [f32],
     /// Cleared by the caller; events are added with their frame in the whole call.
-    pub clock: &'a mut Vec<ClockEvent>,
+    pub clock: &'a mut Vec<MidiOutEvent>,
 }
 
 /// Creates the engine (for the audio thread) and its handle (for the main thread).
@@ -294,6 +298,7 @@ pub fn new(sample_rate: f32, max_block: usize) -> (Engine, EngineHandle) {
         click_l: vec![0.0; max_block],
         click_r: vec![0.0; max_block],
         clock: Vec::with_capacity(512),
+        fired: Vec::with_capacity(crate::transport::MAX_MARKERS),
     };
     let handle = EngineHandle {
         commands: cmd_tx,
@@ -307,6 +312,11 @@ pub fn new(sample_rate: f32, max_block: usize) -> (Engine, EngineHandle) {
 impl Engine {
     pub fn router(&self) -> &Router {
         &self.router
+    }
+
+    /// Ids of the timeline markers that fired during the last `process` call.
+    pub fn fired_markers(&self) -> &[u16] {
+        &self.fired
     }
 
     fn retire(&mut self, slot: usize) {
@@ -405,6 +415,8 @@ impl Engine {
                     (s.gain, s.mute, s.cue) = (gain, mute, cue);
                 }
             }
+            Command::AddMarker(m) => self.transport.add_marker(m),
+            Command::ClearMarkers => self.transport.clear_markers(),
             Command::SetMasterVolume(v) => self.master_volume = v,
             Command::Panic => {
                 self.router.panic(&mut self.events);
@@ -433,6 +445,7 @@ impl Engine {
         let n = out_l.len().min(out_r.len());
         let mut start = 0;
         let mut next = 0;
+        self.fired.clear();
         while start < n {
             let len = (n - start).min(self.max_block);
             let end = start + len;
@@ -448,6 +461,11 @@ impl Engine {
                 &mut self.click_r[..len],
                 &mut self.clock,
             );
+            for &id in self.transport.fired() {
+                if self.fired.len() < self.fired.capacity() {
+                    self.fired.push(id);
+                }
+            }
             self.block(
                 start,
                 &midi[first..next],
@@ -470,9 +488,9 @@ impl Engine {
             if let Some(c) = click.as_deref_mut() {
                 for e in &self.clock {
                     if c.clock.len() < c.clock.capacity() {
-                        c.clock.push(ClockEvent {
+                        c.clock.push(MidiOutEvent {
                             time: e.time + start as u32,
-                            byte: e.byte,
+                            ..*e
                         });
                     }
                 }

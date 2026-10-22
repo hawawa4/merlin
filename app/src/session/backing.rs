@@ -89,6 +89,7 @@ impl Session {
     /// Takes every track out of the engine and stops decoding.
     pub(super) fn disarm(&mut self) {
         let _ = self.engine.send(Command::ClearStems);
+        let _ = self.engine.send(Command::ClearMarkers);
         self.armed.clear();
         self.armed_song = None;
         self.needs_rearm = false;
@@ -104,6 +105,7 @@ impl Session {
             return;
         }
         let _ = self.engine.send(Command::ClearStems);
+        self.send_markers(n);
         self.armed.clear();
         self.armed_song = Some(n);
         self.needs_rearm = false;

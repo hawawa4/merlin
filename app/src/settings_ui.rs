@@ -340,7 +340,7 @@ fn click_output(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
     });
     ui.strong("Click output");
     ui.label(
-        RichText::new("The metronome. Mixed into the main outputs by default; pick two of your interface's own outputs to hear it in headphones only. The MIDI clock goes out of the \"clock_out\" port (connect it in your patchbay).")
+        RichText::new("The metronome. Mixed into the main outputs by default; pick two of your interface's own outputs to hear it in headphones only. The MIDI clock, and the program changes and controllers that song markers send, go out of the \"midi_out\" port (connect it in your patchbay).")
             .small()
             .weak(),
     );

@@ -275,6 +275,15 @@ fn backing_row(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
 
 /// Where the setlist is: the song and its parts, with Previous / Next part and the other songs.
 fn setlist(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
+    if let Some(cue) = s.cue() {
+        ui.label(
+            RichText::new(cue)
+                .size(40.0)
+                .strong()
+                .color(Color32::from_rgb(0xe0, 0xb4, 0x4a)),
+        );
+        ui.add_space(6.0);
+    }
     if s.songs().is_empty() {
         return;
     }

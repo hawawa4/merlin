@@ -240,7 +240,145 @@ fn song_editor(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut V
         });
         ui.add_space(12.0);
         tracks(ui, s, st, n, actions);
+        ui.add_space(12.0);
+        timeline(ui, s, n, actions);
     });
+}
+
+/// Markers on the song's timeline.
+fn timeline(ui: &mut egui::Ui, s: &Session, n: usize, actions: &mut Vec<Action>) {
+    use merlin_model::{Marker, MarkerAction as M};
+    let Some(song) = s.songs().get(n) else { return };
+    ui.strong("Timeline");
+    ui.label(
+        RichText::new("Things that happen at a bar and beat of the song once the transport runs (bar 1 beat 1 is the first beat after the count-in): enter a part, show a cue to the player, stop, or send a Program Change or controller to other gear on the midi_out port. They follow the song's tempo and beats per bar.")
+            .small()
+            .weak(),
+    );
+    for (k, marker) in song.markers.iter().enumerate() {
+        ui.horizontal(|ui| {
+            let (mut bar, mut beat) = (marker.bar, u32::from(marker.beat));
+            ui.label("bar");
+            let a = ui.add(egui::DragValue::new(&mut bar).range(1..=9999));
+            ui.label("beat");
+            let b =
+                ui.add(egui::DragValue::new(&mut beat).range(1..=u32::from(song.beats_per_bar)));
+            let mut action = marker.action.clone();
+            let kind = |a: &M| match a {
+                M::GoToPart { .. } => 0,
+                M::NextPart => 1,
+                M::Cue { .. } => 2,
+                M::Stop => 3,
+                M::ProgramChange { .. } => 4,
+                M::ControlChange { .. } => 5,
+            };
+            let names = [
+                "Go to part",
+                "Next part",
+                "Cue",
+                "Stop",
+                "Program Change",
+                "Controller",
+            ];
+            let mut chosen = kind(&action);
+            egui::ComboBox::from_id_salt(("marker-kind", n, k))
+                .selected_text(names[chosen])
+                .width(130.0)
+                .show_ui(ui, |ui| {
+                    for (i, name) in names.iter().enumerate() {
+                        ui.selectable_value(&mut chosen, i, *name);
+                    }
+                });
+            if chosen != kind(&action) {
+                action = match chosen {
+                    0 => M::GoToPart { part: 0 },
+                    1 => M::NextPart,
+                    2 => M::Cue {
+                        text: String::new(),
+                    },
+                    3 => M::Stop,
+                    4 => M::ProgramChange {
+                        channel: 0,
+                        program: 0,
+                    },
+                    _ => M::ControlChange {
+                        channel: 0,
+                        number: 0,
+                        value: 0,
+                    },
+                };
+            }
+            match &mut action {
+                M::GoToPart { part } => {
+                    let mut shown = u32::from(*part) + 1;
+                    ui.label("part");
+                    ui.add(
+                        egui::DragValue::new(&mut shown)
+                            .range(1..=merlin_model::MAX_PARTS as u32),
+                    );
+                    *part = (shown - 1) as u8;
+                }
+                M::Cue { text } => {
+                    ui.add(
+                        egui::TextEdit::singleline(text)
+                            .hint_text("message")
+                            .desired_width(260.0),
+                    );
+                }
+                M::ProgramChange { channel, program } => {
+                    let mut ch = u32::from(*channel) + 1;
+                    ui.label("channel");
+                    ui.add(egui::DragValue::new(&mut ch).range(1..=16));
+                    *channel = (ch - 1) as u8;
+                    ui.label("program");
+                    ui.add(egui::DragValue::new(program).range(0..=127));
+                }
+                M::ControlChange {
+                    channel,
+                    number,
+                    value,
+                } => {
+                    let mut ch = u32::from(*channel) + 1;
+                    ui.label("channel");
+                    ui.add(egui::DragValue::new(&mut ch).range(1..=16));
+                    *channel = (ch - 1) as u8;
+                    ui.label("controller");
+                    ui.add(egui::DragValue::new(number).range(0..=127));
+                    ui.label("value");
+                    ui.add(egui::DragValue::new(value).range(0..=127));
+                }
+                M::NextPart | M::Stop => {}
+            }
+            let edited = Marker {
+                bar,
+                beat: beat as u8,
+                action,
+            };
+            if a.changed() || b.changed() || edited != *marker {
+                actions.push(Action::EditMarker(n, k, edited));
+            }
+            if ui
+                .small_button("x")
+                .on_hover_text("Remove the marker")
+                .clicked()
+            {
+                actions.push(Action::RemoveMarker(n, k));
+            }
+        });
+    }
+    if ui.button("+ Marker").clicked() {
+        let last = song.markers.last();
+        actions.push(Action::AddMarker(
+            n,
+            Marker {
+                bar: last.map_or(1, |m| m.bar + 1),
+                beat: 1,
+                action: M::Cue {
+                    text: String::new(),
+                },
+            },
+        ));
+    }
 }
 
 /// The song's backing tracks.

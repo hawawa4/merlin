@@ -150,6 +150,9 @@ pub enum Action {
     /// text (or `sampler:level`, `sampler:brightness`, ... for a SoundFont).
     AddMacroParamNamed(usize, usize, String),
     ToggleSetlist,
+    AddMarker(usize, merlin_model::Marker),
+    RemoveMarker(usize, usize),
+    EditMarker(usize, usize, merlin_model::Marker),
     AddTrack(usize, PathBuf),
     RemoveTrack(usize, usize),
     EditTrack(usize, usize, crate::session::TrackEdit),

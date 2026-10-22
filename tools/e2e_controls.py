@@ -70,6 +70,7 @@ def main():
     setlist_check()
     transport_check()
     backing_check()
+    timeline_check()
 
 
 SNAP_FILE = Path(tempfile.gettempdir()) / "irig-e2e-snapshots.irig"
@@ -228,6 +229,40 @@ def transport_check():
         print(out[-2500:])
         sys.exit(1)
     print(f"ok: the transport counts in, runs and stops: {rows}")
+
+
+TIMELINE_SCRIPT = "; ".join(
+    [
+        "1:load 1 TimGM6mb", "2:song add", "2.1:song tempo 1 240",
+        # Part 1 (volume 1.0) and part 2 (volume 0.4).
+        "2.2:volume 1 1.0", "2.3:part add 1", "2.4:volume 1 0.4", "2.5:part add 1",
+        # At 240 bpm a bar of 4 is one second.
+        "2.6:marker 1 2 1 part 2", "2.7:marker 1 3 1 cue Chorus is coming", "2.8:marker 1 4 1 stop",
+        "2.9:marker 1 1 1 pc 1 5",
+        "3:go 1 1", "3.1:countin 0", "3.2:click off",
+        "5:transport start",
+        "5.5:report", "6.5:report", "7.5:report", "8.5:report",
+        "9.5:quit",
+    ]
+)
+
+
+def timeline_check():
+    out = run(TIMELINE_SCRIPT, "1:B0 1 0", 3)
+    rows = re.findall(
+        r"vol1 ([\d.]+),.*position (Some\(\(\d+, \d+\)\)).*transport (\w+) bar.*cue (None|Some\(\"[^\"]*\"\))", out
+    )
+    wanted = [
+        ("1.00", "Some((1, 1))", "running", "None"),
+        ("0.40", "Some((1, 2))", "running", "None"),
+        ("0.40", "Some((1, 2))", "running", 'Some("Chorus is coming")'),
+        ("0.40", "Some((1, 2))", "stopped", 'Some("Chorus is coming")'),
+    ]
+    if rows != wanted:
+        print(f"FAIL (timeline)\n  {rows}\n  wanted {wanted}")
+        print(out[-3000:])
+        sys.exit(1)
+    print("ok: markers enter a part, show a cue and stop the transport on their bars")
 
 
 def write_wav(path, rate, seconds, hz, amp):

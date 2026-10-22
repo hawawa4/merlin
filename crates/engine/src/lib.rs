@@ -16,7 +16,10 @@ use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64};
 pub use engine::{ClickOut, Command, Engine, EngineHandle, MAX_STEMS, Retired, Stem, new};
 pub use merlin_model::{MAX_SLOTS, SelectMode};
 pub use router::{Filter, MAX_INPUTS, Router};
-pub use transport::{ClockEvent, MIDI_CLOCK, MIDI_START, MIDI_STOP, Transport, TransportShared};
+pub use transport::{
+    EngineMarker, MAX_MARKERS, MIDI_CLOCK, MIDI_START, MIDI_STOP, MidiOutEvent, Transport,
+    TransportShared,
+};
 
 /// State the audio thread publishes for the UI.
 pub struct Shared {
