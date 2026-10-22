@@ -8,7 +8,7 @@
 //! plus a lock-free virtual input (engine input 0) for the on-screen keyboard.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::time::Instant;
 
 use anyhow::{Context, Result};
@@ -88,6 +88,8 @@ pub struct Stats {
     pub last_ns: AtomicU64,
     /// MIDI events dropped because a cycle had too many.
     pub dropped_midi: AtomicU32,
+    /// Set when a port appeared or went away (a device was plugged in or out).
+    pub ports_changed: AtomicBool,
 }
 
 struct Notifications(Arc<Stats>);
@@ -96,6 +98,10 @@ impl NotificationHandler for Notifications {
     fn xrun(&mut self, _: &Client) -> Control {
         self.0.xruns.fetch_add(1, Ordering::Relaxed);
         Control::Continue
+    }
+
+    fn port_registration(&mut self, _: &Client, _: jack::PortId, _: bool) {
+        self.0.ports_changed.store(true, Ordering::Relaxed);
     }
 }
 
@@ -278,6 +284,12 @@ impl JackBackend {
     /// DSP load reported by the server, percent.
     pub fn cpu_load(&self) -> f32 {
         self.client.as_client().cpu_load()
+    }
+
+    /// True once after ports appeared or disappeared since the last call: time to look for new
+    /// MIDI devices.
+    pub fn take_ports_changed(&self) -> bool {
+        self.stats.ports_changed.swap(false, Ordering::Relaxed)
     }
 
     /// Connects our outputs to the first two physical playback ports.

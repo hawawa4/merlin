@@ -432,7 +432,7 @@ libjack preload (S1), `build-wine.sh` and the patch set (S4).
 ### Phase 1: MVP, a playable rack (9–12 weeks)
 
 1. ✅ Workspace, `model`, `engine` with the dummy backend and offline render tests.
-2. ✅ JACK backend, JACK MIDI, automatic hardware connection, stats. (Meters in the UI; hotplug and ALSA sequencer listing still to do.)
+2. ✅ JACK backend, JACK MIDI, automatic hardware connection, stats. (Meters in the UI; MIDI hotplug through JACK port notifications; ALSA sequencer listing still to do.)
 3. ✅ Router and note ownership, exclusive/layer, zones, transpose, panic (property-tested).
 4. ✅ CLAP hosting (instrument) and state; plugin inserts (up to 4 effect plugins per slot, after EQ and compressor, before delay and reverb, with bypass, state in the rig, editor tabs in the dock).
 5. ✅ VST3 hosting and state (`hosting::vst3`, ported from S3 onto the `PluginHandle` traits, with `IMessage`/`IAttributeList`; first audio bus only, no programs/units yet). Scanner reads `.vst3` bundles too.

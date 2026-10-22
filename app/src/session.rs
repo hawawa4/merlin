@@ -311,6 +311,26 @@ impl Session {
         }
     }
 
+    /// Hotplug: when ports came or went, reconnects MIDI devices and says what changed.
+    pub fn poll_midi_hotplug(&mut self) {
+        if !self
+            .backend
+            .as_ref()
+            .is_some_and(|b| b.take_ports_changed())
+        {
+            return;
+        }
+        let before: Vec<String> = self.midi_sources.iter().map(|m| m.device.clone()).collect();
+        self.refresh_midi();
+        let after: Vec<String> = self.midi_sources.iter().map(|m| m.device.clone()).collect();
+        for d in after.iter().filter(|d| !before.contains(d)) {
+            self.say(format!("MIDI device connected: {d}"));
+        }
+        for d in before.iter().filter(|d| !after.contains(d)) {
+            self.say(format!("MIDI device gone: {d}"));
+        }
+    }
+
     fn refresh_found(&mut self) {
         self.found = merlin_scanner::with_feature(&self.entries, "instrument");
         self.effects = merlin_scanner::with_feature(&self.entries, "audio-effect");

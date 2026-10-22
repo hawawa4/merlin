@@ -630,6 +630,7 @@ impl Running {
             }
             self.ask_redraw();
         }
+        self.session.poll_midi_hotplug();
         self.session
             .autosave(Duration::from_secs(self.settings.autosave_secs), false);
     }
