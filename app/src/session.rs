@@ -37,6 +37,14 @@ pub enum UserEvent {
     Scan,
     /// A SoundFont finished decoding on a worker thread.
     Font,
+    /// The Windows plugin installer or sync has news.
+    Windows,
+}
+
+/// Progress of the Windows plugin job (installer, sync) running on a worker thread.
+enum WindowsMsg {
+    Status(String),
+    Done(Result<String, String>),
 }
 
 /// A decoded SoundFont (or why not) for the slot that asked for it.
@@ -127,6 +135,9 @@ pub struct Session {
     cli_dirs: Vec<PathBuf>,
     pub settings: Settings,
     scan_rx: Option<mpsc::Receiver<ScanMsg>>,
+    windows_rx: Option<mpsc::Receiver<WindowsMsg>>,
+    /// What the Windows job is doing, or how the last one ended (for the Settings tab).
+    pub windows_status: String,
     font_tx: mpsc::Sender<FontMsg>,
     font_rx: mpsc::Receiver<FontMsg>,
     /// Per slot: the SoundFont being decoded for it (path and name).
@@ -181,6 +192,8 @@ impl Session {
             cli_dirs,
             settings: settings.clone(),
             scan_rx: None,
+            windows_rx: None,
+            windows_status: String::new(),
             font_tx,
             font_rx,
             loading: vec![None; UI_SLOTS],
@@ -219,8 +232,133 @@ impl Session {
         let mut dirs = merlin_scanner::default_plugin_dirs();
         dirs.extend(self.settings.plugin_dirs.iter().cloned());
         dirs.extend(self.cli_dirs.iter().cloned());
+        // The bridges we make for the Windows plugins installed in our prefix.
+        dirs.push(crate::paths::bridges_dir());
         dirs.dedup();
         self.plugin_dirs = dirs;
+    }
+
+    /// The Wine, yabridge and prefix to use for Windows plugins, if Wine and yabridge are set up.
+    pub fn windows_runtime(&self) -> Option<merlin_wine::Runtime> {
+        // The settings win; otherwise what the environment already says (`just dev` sets
+        // WINELOADER and puts yabridge on the PATH).
+        let wine = self
+            .settings
+            .wine_loader
+            .clone()
+            .or_else(|| std::env::var_os("WINELOADER").map(PathBuf::from))?;
+        let yabridge_dir = self.settings.yabridge_dir.clone().or_else(|| {
+            let path = std::env::var_os("PATH")?;
+            std::env::split_paths(&path)
+                .find(|d| d.join("libyabridge-chainloader-clap.so").is_file())
+        })?;
+        Some(merlin_wine::Runtime {
+            wine,
+            yabridge_dir,
+            prefix: self
+                .settings
+                .wine_prefix
+                .clone()
+                .unwrap_or_else(crate::paths::wine_prefix),
+        })
+    }
+
+    pub fn windows_busy(&self) -> bool {
+        self.windows_rx.is_some()
+    }
+
+    /// Runs `job` on a worker thread; its messages come back as [`UserEvent::Windows`].
+    fn start_windows_job(
+        &mut self,
+        job: impl FnOnce(&mpsc::Sender<WindowsMsg>) -> Result<String> + Send + 'static,
+    ) -> Result<()> {
+        if self.windows_busy() {
+            return Err(anyhow!("a Windows plugin job is already running"));
+        }
+        let (tx, rx) = mpsc::channel();
+        let proxy = self.proxy.clone();
+        std::thread::Builder::new()
+            .name("windows-job".into())
+            .spawn(move || {
+                let done = job(&tx).map_err(|e| format!("{e:#}"));
+                let _ = tx.send(WindowsMsg::Done(done));
+                let _ = proxy.send_event(UserEvent::Windows);
+            })
+            .context("cannot start the Windows plugin job")?;
+        self.windows_rx = Some(rx);
+        Ok(())
+    }
+
+    /// Makes the bridges for the Windows plugins in the prefix, then scans them.
+    pub fn sync_windows_plugins(&mut self) -> Result<()> {
+        let rt = self
+            .windows_runtime()
+            .context("set the Wine program and the yabridge folder first")?;
+        self.windows_status = "looking for Windows plugins...".into();
+        self.start_windows_job(move |_| sync_report(&rt))
+    }
+
+    /// Runs a plugin installer (`.exe` or `.msi`) in the Windows prefix, then syncs. The
+    /// installer's own window opens as usual; this returns at once.
+    pub fn install_windows_plugin(&mut self, file: PathBuf) -> Result<()> {
+        let rt = self
+            .windows_runtime()
+            .context("set the Wine program and the yabridge folder first")?;
+        let mut installer = rt.installer_command(&file)?;
+        let name = file
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        self.windows_status = format!("preparing to install {name}...");
+        self.start_windows_job(move |tx| {
+            if !rt.prefix_ready() {
+                let _ = tx.send(WindowsMsg::Status(
+                    "creating the Windows environment (first time only, about a minute)...".into(),
+                ));
+                rt.ensure_prefix(Duration::from_secs(300))?;
+            }
+            let _ = tx.send(WindowsMsg::Status(format!(
+                "running {name}: finish its installer window, then it is picked up here"
+            )));
+            let status = installer
+                .spawn()
+                .context("cannot start the installer")?
+                .wait()?;
+            if !status.success() {
+                // Many installers return odd codes; what matters is whether plugins appeared.
+                let _ = tx.send(WindowsMsg::Status(format!(
+                    "{name} exited with {status}, looking for plugins anyway..."
+                )));
+            }
+            sync_report(&rt)
+        })
+    }
+
+    /// Takes in what the Windows job reported.
+    pub fn poll_windows(&mut self) {
+        let Some(rx) = self.windows_rx.as_ref() else {
+            return;
+        };
+        let mut finished = None;
+        while let Ok(msg) = rx.try_recv() {
+            match msg {
+                WindowsMsg::Status(t) => self.windows_status = t,
+                WindowsMsg::Done(r) => finished = Some(r),
+            }
+        }
+        let Some(result) = finished else { return };
+        self.windows_rx = None;
+        match result {
+            Ok(text) => {
+                self.windows_status = text.clone();
+                self.say(format!("Windows plugins: {text}"));
+                // New bridges are plugin files like any other.
+                self.start_scan(Vec::new());
+            }
+            Err(e) => {
+                self.windows_status = format!("failed: {e}");
+                self.say(format!("Windows plugins failed: {e}"));
+            }
+        }
     }
 
     pub fn save_settings(&mut self) {
@@ -855,6 +993,10 @@ impl Session {
                 self.poll_fonts();
                 return;
             }
+            UserEvent::Windows => {
+                self.poll_windows();
+                return;
+            }
         };
         match e {
             HostEvent::MainThreadCallback => {
@@ -1345,6 +1487,19 @@ pub fn read_rig(path: &Path) -> Result<Rig> {
         }
     }
     Ok(rig)
+}
+
+/// Makes the bridges and says what happened, in a sentence.
+fn sync_report(rt: &merlin_wine::Runtime) -> Result<String> {
+    let out = crate::paths::bridges_dir();
+    let r = rt.sync_clap_bridges(&out)?;
+    let total = r.created.len() + r.unchanged;
+    Ok(format!(
+        "{total} Windows plugin{} ready ({} new, {} removed)",
+        if total == 1 { "" } else { "s" },
+        r.created.len(),
+        r.removed.len()
+    ))
 }
 
 const _: () = assert!(UI_SLOTS <= MAX_SLOTS);

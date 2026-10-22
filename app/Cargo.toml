@@ -22,6 +22,7 @@ merlin-engine.workspace = true
 merlin-audio-io.workspace = true
 merlin-embed.workspace = true
 merlin-scanner.workspace = true
+merlin-wine.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true

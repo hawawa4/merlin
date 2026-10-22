@@ -425,6 +425,11 @@ impl Running {
                 s.say("saved; restart the app to use the new Wine settings");
                 Ok(())
             }
+            Action::InstallWindows(path) => {
+                let path = PathBuf::from(path.trim().trim_matches('"'));
+                s.install_windows_plugin(path)
+            }
+            Action::SyncWindows => s.sync_windows_plugins(),
             Action::ToggleFavorite(k) => {
                 if let Some(f) = s.found.get(k).cloned() {
                     s.toggle_favorite(&f);
@@ -837,6 +842,8 @@ fn parse_script() -> Vec<(Duration, Action)> {
                 ),
                 "master" => Action::SetMaster(words.next()?.parse().ok()?),
                 "fx" => Action::FxPreset(slot(words.next())?, words.next()?.to_string()),
+                "install" => Action::InstallWindows(words.collect::<Vec<_>>().join(" ")),
+                "sync" => Action::SyncWindows,
                 "fit" => Action::Fit,
                 "on" => Action::NoteOn(words.next()?.parse().ok()?),
                 "off" => Action::NoteOff(words.next()?.parse().ok()?),

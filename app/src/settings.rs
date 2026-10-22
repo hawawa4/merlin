@@ -17,6 +17,8 @@ pub struct Settings {
     /// Wine and yabridge for Windows plugins; the bundled runtime fills these in later.
     pub wine_loader: Option<PathBuf>,
     pub yabridge_dir: Option<PathBuf>,
+    /// Where Windows plugins are installed; the managed prefix when unset.
+    pub wine_prefix: Option<PathBuf>,
     /// Seconds between autosaves; 0 turns autosave off.
     pub autosave_secs: u64,
     /// Browser favourites, as `Session::favorite_key` makes them.
@@ -31,6 +33,7 @@ impl Default for Settings {
             editor_cache: 8,
             wine_loader: None,
             yabridge_dir: None,
+            wine_prefix: None,
             autosave_secs: 30,
             favorites: Vec::new(),
         }

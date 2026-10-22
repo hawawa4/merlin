@@ -857,6 +857,7 @@ dependencies = [
  "merlin-hosting",
  "merlin-model",
  "merlin-scanner",
+ "merlin-wine",
  "libc",
  "pollster",
  "serde",
@@ -944,6 +945,13 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "merlin-wine"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
 ]
 
 [[package]]

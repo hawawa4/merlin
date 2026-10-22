@@ -53,7 +53,7 @@ pub fn show(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<
             SettingsTab::Plugins => plugins(ui, s, st, actions),
             SettingsTab::Audio => audio(ui, s, actions),
             SettingsTab::Midi => midi(ui, s, actions),
-            SettingsTab::Windows => windows(ui, st, actions),
+            SettingsTab::Windows => windows(ui, s, st, actions),
             SettingsTab::Performance => performance(ui, s, st),
         });
 }
@@ -234,7 +234,7 @@ fn midi(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
     }
 }
 
-fn windows(ui: &mut egui::Ui, st: &mut UiState, actions: &mut Vec<Action>) {
+fn windows(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
     ui.strong("Wine and yabridge");
     ui.label(
         RichText::new("Windows plugins run through Wine and yabridge. A bundled, tested runtime will replace these paths; until then they can be set by hand. Changes apply after restarting the app.")
@@ -262,6 +262,8 @@ fn windows(ui: &mut egui::Ui, st: &mut UiState, actions: &mut Vec<Action>) {
     if ui.button("Save").clicked() {
         actions.push(Action::SaveWine(st.wine_text.clone(), st.yab_text.clone()));
     }
+    ui.add_space(12.0);
+    windows_plugins(ui, s, st, actions);
     ui.add_space(8.0);
     ui.strong("In use right now");
     for var in ["WINELOADER", "PATH"] {
@@ -284,6 +286,98 @@ fn windows(ui: &mut egui::Ui, st: &mut UiState, actions: &mut Vec<Action>) {
             }
         ));
     }
+}
+
+/// Installing Windows plugins and what the Wine setup looks like (a small "Wine doctor").
+fn windows_plugins(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
+    ui.strong("Windows plugins");
+    let Some(rt) = s.windows_runtime() else {
+        ui.label(
+            RichText::new(
+                "Set the Wine program and the yabridge folder above to install Windows plugins.",
+            )
+            .small()
+            .weak(),
+        );
+        return;
+    };
+    let check = |ui: &mut egui::Ui, ok: bool, text: String| {
+        ui.horizontal(|ui| {
+            ui.colored_label(
+                status_color(if ok { Status::Ok } else { Status::Fail }),
+                if ok { "OK  " } else { "FAIL" },
+            );
+            ui.label(text);
+        });
+    };
+    check(
+        ui,
+        rt.version().is_some(),
+        format!(
+            "Wine: {}",
+            rt.version().unwrap_or_else(|| "does not run".into())
+        ),
+    );
+    check(
+        ui,
+        rt.chainloader().is_file(),
+        "yabridge: CLAP chainloader".to_owned(),
+    );
+    ui.horizontal(|ui| {
+        let ready = rt.prefix_ready();
+        ui.colored_label(
+            status_color(if ready { Status::Ok } else { Status::Warn }),
+            if ready { "OK  " } else { "WAIT" },
+        );
+        ui.label(format!(
+            "Windows environment: {}{}",
+            rt.prefix.display(),
+            if ready {
+                ""
+            } else {
+                " (made when you install the first plugin)"
+            }
+        ));
+    });
+    ui.add_space(6.0);
+    ui.label("Installer (.exe or .msi)");
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::TextEdit::singleline(&mut st.installer_text)
+                .hint_text("/path/to/Plugin-Setup.exe")
+                .desired_width(460.0),
+        );
+        let busy = s.windows_busy();
+        if ui
+            .add_enabled(
+                !busy && !st.installer_text.trim().is_empty(),
+                egui::Button::new("Install"),
+            )
+            .clicked()
+        {
+            actions.push(Action::InstallWindows(st.installer_text.clone()));
+        }
+        if ui
+            .add_enabled(!busy, egui::Button::new("Look for installed plugins"))
+            .on_hover_text(
+                "Use this after installing a plugin by hand into the Windows environment",
+            )
+            .clicked()
+        {
+            actions.push(Action::SyncWindows);
+        }
+    });
+    if !s.windows_status.is_empty() {
+        ui.label(&s.windows_status);
+    }
+    ui.add_space(4.0);
+    ui.label(
+        RichText::new(
+            "Only 64-bit CLAP plugins are picked up for now. Plugins with copy protection (iLok and the like) may not run. Prefer a native Linux version when there is one.",
+        )
+        .small()
+        .weak(),
+    );
 }
 
 fn performance(ui: &mut egui::Ui, s: &Session, st: &mut UiState) {

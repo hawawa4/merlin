@@ -29,6 +29,7 @@ merlin-dsp = { path = "crates/dsp" }
 merlin-audio-io = { path = "crates/audio-io" }
 merlin-embed = { path = "crates/embed" }
 merlin-scanner = { path = "crates/scanner" }
+merlin-wine = { path = "crates/wine" }
 
 [profile.release]
 debug = 1

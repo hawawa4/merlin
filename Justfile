@@ -14,8 +14,9 @@ default:
 
 # The app. Loads plugins from the standard CLAP folders plus test-assets (Linux and, through
 # our patched Wine, Windows ones). Try: just dev --fresh      just dev --rig my.irig
-# This round: SoundFonts as instruments. Pick one in the browser (badge SoundFont), then choose
-# its sound in the dock's preset list. MuseScore General (SF3) and the system SF2s are found.
+# This round: Windows plugin installer. Settings → Windows → Windows plugins: paste the path of an
+# installer (.exe/.msi), press Install, finish its window; the plugins then show up in the browser.
+# "Look for installed plugins" syncs plugins that are already in the Windows environment.
 dev *args:
     cargo build -p merlin --release
     PATH="{{yabridge_dir}}:$PATH" WINELOADER={{patched_wine}} \

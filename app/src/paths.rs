@@ -31,6 +31,21 @@ pub fn rigs_dir() -> PathBuf {
         .join("rigs")
 }
 
+/// Data that is ours to manage: `~/.local/share/merlin`.
+pub fn data_dir() -> PathBuf {
+    xdg("XDG_DATA_HOME", ".local/share").join("merlin")
+}
+
+/// The Wine prefix our Windows plugins live in.
+pub fn wine_prefix() -> PathBuf {
+    data_dir().join("wineprefix")
+}
+
+/// Bridges (yabridge chainloader copies) for the Windows CLAP plugins in that prefix.
+pub fn bridges_dir() -> PathBuf {
+    data_dir().join("bridges").join("clap")
+}
+
 pub fn settings_file() -> PathBuf {
     config_dir().join("settings.toml")
 }

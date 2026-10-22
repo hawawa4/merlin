@@ -73,6 +73,10 @@ pub enum Action {
     SetBuffer(u32),
     RefreshMidi,
     SaveWine(String, String),
+    /// Run a Windows plugin installer (path) in the managed prefix, then pick up its plugins.
+    InstallWindows(String),
+    /// Make bridges for the Windows plugins already in the prefix.
+    SyncWindows,
     ToggleFavorite(usize),
     /// Load browser entry `k` into a free slot.
     BrowserLoad(usize),
@@ -114,6 +118,7 @@ pub struct UiState {
     pub dir_text: String,
     pub wine_text: String,
     pub yab_text: String,
+    pub installer_text: String,
     pub perf: Option<(std::time::Instant, Vec<perf::Check>)>,
     pub peaks_shown: [f32; UI_SLOTS],
     pub held_key: Option<u8>,
@@ -143,6 +148,7 @@ impl UiState {
             dir_text: String::new(),
             wine_text: String::new(),
             yab_text: String::new(),
+            installer_text: String::new(),
             perf: None,
             peaks_shown: [0.0; UI_SLOTS],
             held_key: None,
