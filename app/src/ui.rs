@@ -376,12 +376,22 @@ fn unit(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, i: usize, actions:
             };
             let (rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
             ui.painter().circle_filled(rect.center(), 5.0, led);
-            ui.add(
-                egui::ProgressBar::new(st.peaks_shown[i].clamp(0.0, 1.0).sqrt())
-                    .desired_width(60.0),
-            );
+            // Level meter (not a switch): a flat bar that stays empty when there is no signal.
+            let (meter, level) = ui.allocate_exact_size(egui::vec2(60.0, 8.0), egui::Sense::hover());
+            ui.painter().rect_filled(meter, 1.0, Color32::from_gray(35));
+            let fill = st.peaks_shown[i].clamp(0.0, 1.0).sqrt();
+            if fill > 0.01 {
+                let mut bar = meter;
+                bar.set_width(meter.width() * fill);
+                ui.painter().rect_filled(bar, 1.0, color);
+            }
+            level.on_hover_text("Output level of this slot");
             if loaded {
-                if ui.selectable_label(mute, "M").clicked() {
+                if ui
+                    .selectable_label(mute, "M")
+                    .on_hover_text("Mute this slot")
+                    .clicked()
+                {
                     actions.push(Action::Mute(i));
                 }
                 ui.label("vol");
@@ -392,18 +402,21 @@ fn unit(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, i: usize, actions:
                             .speed(0.01)
                             .fixed_decimals(2),
                     )
+                    .on_hover_text("Slot volume (1.00 = unchanged). Drag to change.")
                     .changed()
                 {
                     actions.push(Action::Volume(i, vol));
                 }
-                ui.label("zone");
+                ui.label("zone")
+                    .on_hover_text("Key range this slot plays, as MIDI notes (0-127; 60 = middle C). Notes outside it are ignored, so two slots can split the keyboard.");
                 let a = ui.add(egui::DragValue::new(&mut lo).range(0..=127));
                 ui.label("–");
                 let b = ui.add(egui::DragValue::new(&mut hi).range(0..=127));
                 if a.changed() || b.changed() {
                     actions.push(Action::Zone(i, lo, hi));
                 }
-                ui.label("tr");
+                ui.label("tr")
+                    .on_hover_text("Transpose in semitones (-48 to +48)");
                 if ui
                     .add(egui::DragValue::new(&mut tr).range(-48..=48))
                     .changed()
@@ -805,7 +818,13 @@ fn inserts_section(ui: &mut egui::Ui, s: &Session, i: usize, actions: &mut Vec<A
                 Some(ins) => {
                     ui.label(&ins.plugin.name);
                     let mut on = !ins.bypass;
-                    if ui.checkbox(&mut on, "on").changed() {
+                    if ui
+                        .checkbox(&mut on, "on")
+                        .on_hover_text(
+                            "Untick to bypass this effect (audio passes through untouched)",
+                        )
+                        .changed()
+                    {
                         actions.push(Action::BypassInsert(i, k));
                     }
                     if ui.small_button("Edit").clicked() {
