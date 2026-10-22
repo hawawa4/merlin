@@ -454,7 +454,7 @@ libjack preload (S1), `build-wine.sh` and the patch set (S4).
 - **SoundFont instrument** (§4.9): ◐ oxisynth (vendored with four small patches in `vendor/oxisynth`) plays `.sf2`/`.sf3` as instruments: they are scanned from the standard sound folders (and any plugin folder), listed in the browser, a slot shows a searchable preset list and a level control, MIDI Program Change switches presets, decoded files are shared between slots, state is in the rig, and the audio path allocates nothing (tested). Files decode on worker threads (the slot says "loading…"; a rig's fonts decode side by side). Still to do: the per-slot native panel (envelope, filter, tuning), a Sound folders section in Settings.
 - Scanner hardening: quarantine, parallel scans, metadata-only fast paths.
 - Window-capture fallback for floating-only plugins, and the quirks database.
-- Sleeping idle slots, per-slot CPU, optional multi-threaded slot processing.
+- Sleeping idle slots ✅, per-slot CPU ✅ (the engine times each slot per block and the rack row shows its share of the block budget, orange above 50% and red above 80% for the worst recent block; Windows plugins also show their Wine host's CPU), optional multi-threaded slot processing ☐.
 - Performance check panel.
 - Crash marker → safe mode.
 

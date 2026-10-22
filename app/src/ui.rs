@@ -376,6 +376,37 @@ fn header(ui: &mut egui::Ui, s: &mut Session, st: &UiState, actions: &mut Vec<Ac
     }
 }
 
+/// The slot's cost next to its meter: audio-thread share of the block, and for a Windows plugin
+/// the CPU of its Wine host process. Turns orange above half a block, red close to dropouts.
+fn slot_cpu_label(ui: &mut egui::Ui, c: crate::session::SlotCpu) {
+    let pct = c.audio * 100.0;
+    let colour = if c.audio_worst > 0.8 {
+        Color32::from_rgb(0xe0, 0x6c, 0x5a)
+    } else if c.audio_worst > 0.5 {
+        Color32::from_rgb(0xe0, 0xa8, 0x4a)
+    } else {
+        Color32::from_gray(150)
+    };
+    let mut text = format!("{pct:>4.1}%");
+    if let Some(w) = c.wine {
+        text.push_str(&format!(" wine {w:.0}%"));
+    }
+    ui.label(RichText::new(text).monospace().size(11.5).color(colour))
+        .on_hover_text(format!(
+            "Audio thread: {:.1}% of the time available per block (worst recent block {:.0}%). \
+             Above 100% the slot alone would cause a dropout.{}",
+            pct,
+            c.audio_worst * 100.0,
+            match c.wine {
+                Some(w) => format!(
+                    "\nWine host process: {w:.0}% of one CPU core (the plugin's own threads and \
+                     its editor), not part of the audio number."
+                ),
+                None => String::new(),
+            }
+        ));
+}
+
 fn unit(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, i: usize, actions: &mut Vec<Action>) {
     let selected = s.viewing == Some(i);
     let color = COLORS[i];
@@ -466,6 +497,9 @@ fn unit(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, i: usize, actions:
                 ui.painter().rect_filled(bar, 1.0, color);
             }
             level.on_hover_text("Output level of this slot");
+            if loaded {
+                slot_cpu_label(ui, s.slot_cpu[i]);
+            }
             if loaded {
                 if ui
                     .selectable_label(mute, "M")

@@ -47,6 +47,19 @@ enum WindowsMsg {
     Done(Result<String, String>),
 }
 
+/// What a slot costs. The audio part is the share of the block's time budget the slot uses in the
+/// engine; the Wine part is the CPU of its yabridge host process (the plugin's own threads and
+/// its editor), as a percentage of one core.
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
+pub struct SlotCpu {
+    /// Smoothed share of the block budget (0.05 = 5%).
+    pub audio: f32,
+    /// The worst recent block (decays over a few seconds).
+    pub audio_worst: f32,
+    /// `None` for a plugin that runs in our own process.
+    pub wine: Option<f32>,
+}
+
 /// A decoded SoundFont (or why not) for the slot that asked for it.
 struct FontMsg {
     slot: usize,
@@ -135,6 +148,11 @@ pub struct Session {
     cli_dirs: Vec<PathBuf>,
     pub settings: Settings,
     scan_rx: Option<mpsc::Receiver<ScanMsg>>,
+    /// What each slot costs, refreshed by [`Session::update_loads`].
+    pub slot_cpu: [SlotCpu; UI_SLOTS],
+    /// Wine host CPU readings: pid -> (ticks, when), for the delta.
+    host_cpu: std::collections::HashMap<u32, (u64, Instant)>,
+    last_load_update: Instant,
     /// A scan was asked for while one was running: run it next, forgetting these files.
     scan_again: Option<Vec<PathBuf>>,
     windows_rx: Option<mpsc::Receiver<WindowsMsg>>,
@@ -200,6 +218,9 @@ impl Session {
             cli_dirs,
             settings: settings.clone(),
             scan_rx: None,
+            slot_cpu: [SlotCpu::default(); UI_SLOTS],
+            host_cpu: Default::default(),
+            last_load_update: Instant::now(),
             scan_again: None,
             windows_rx: None,
             restart_after_job: false,
@@ -1561,6 +1582,55 @@ impl Session {
         self.inserts
             .iter_mut()
             .for_each(|row| row.iter_mut().for_each(|p| *p = None));
+    }
+
+    /// Refreshes [`Session::slot_cpu`] (call a few times a second).
+    pub fn update_loads(&mut self) {
+        let now = Instant::now();
+        let dt = now.duration_since(self.last_load_update);
+        if dt < Duration::from_millis(250) {
+            return;
+        }
+        self.last_load_update = now;
+        let shared = &self.engine.shared;
+        for i in 0..UI_SLOTS {
+            let avg = f32::from_bits(shared.load[i].load(Ordering::Relaxed));
+            let worst = f32::from_bits(shared.load_max[i].swap(0, Ordering::Relaxed));
+            let c = &mut self.slot_cpu[i];
+            c.audio = avg;
+            c.audio_worst = worst.max(c.audio_worst * 0.9);
+        }
+        // Wine hosts: CPU time since the last reading, per slot (inserts count for their slot).
+        let ticks_per_s = unsafe { libc::sysconf(libc::_SC_CLK_TCK) } as f32;
+        let mut wine: [Option<f32>; UI_SLOTS] = [None; UI_SLOTS];
+        let mut seen = std::collections::HashSet::new();
+        for (id, pid) in self.guard.host_pids() {
+            let slot = if id < UI_SLOTS {
+                id
+            } else {
+                (id - UI_SLOTS) / MAX_INSERTS
+            };
+            let Some(ticks) = guard::cpu_ticks(pid) else {
+                continue;
+            };
+            seen.insert(pid);
+            let pct = match self.host_cpu.insert(pid, (ticks, now)) {
+                Some((before, t0)) if now > t0 => {
+                    ticks.saturating_sub(before) as f32
+                        / ticks_per_s
+                        / now.duration_since(t0).as_secs_f32()
+                        * 100.0
+                }
+                _ => 0.0,
+            };
+            if slot < UI_SLOTS {
+                *wine[slot].get_or_insert(0.0) += pct;
+            }
+        }
+        self.host_cpu.retain(|pid, _| seen.contains(pid));
+        for (c, w) in self.slot_cpu.iter_mut().zip(wine) {
+            c.wine = w;
+        }
     }
 
     /// Peaks since the last call, per slot.

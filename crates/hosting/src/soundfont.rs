@@ -122,7 +122,10 @@ impl Font {
                 })
             })
             .collect();
-        presets.sort_by_key(|p| (p.bank, p.program));
+        // Some fonts list a bank/program twice (MuseScore General has a placeholder named
+        // "Bank:0,Preset0" beside the real piano); keep the real name.
+        presets.sort_by_key(|p| (p.bank, p.program, p.name.starts_with("Bank:")));
+        presets.dedup_by_key(|p| (p.bank, p.program));
         if presets.is_empty() {
             bail!("{} has no presets", path.display());
         }

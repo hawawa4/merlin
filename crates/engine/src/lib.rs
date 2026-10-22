@@ -29,6 +29,11 @@ pub struct Shared {
     pub limiter_reduction: AtomicU32,
     /// Bit i set: slot i is asleep (idle, silent, no tail, and not being processed).
     pub sleeping: AtomicU16,
+    /// Audio-thread time per slot as a fraction of the block's time budget (1.0 = the slot alone
+    /// uses the whole block), smoothed over a few dozen blocks, as `f32` bits.
+    pub load: [AtomicU32; MAX_SLOTS],
+    /// The largest single-block load per slot since the UI last read it (`swap(0)`).
+    pub load_max: [AtomicU32; MAX_SLOTS],
     /// Events dropped because a slot's event list was full.
     pub dropped_events: AtomicU32,
     pub blocks: AtomicU64,
@@ -43,6 +48,8 @@ impl Shared {
             comp_reduction: std::array::from_fn(|_| AtomicU32::new(0)),
             limiter_reduction: AtomicU32::new(0),
             sleeping: AtomicU16::new(0),
+            load: std::array::from_fn(|_| AtomicU32::new(0)),
+            load_max: std::array::from_fn(|_| AtomicU32::new(0)),
             dropped_events: AtomicU32::new(0),
             blocks: AtomicU64::new(0),
         }

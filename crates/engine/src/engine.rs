@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use merlin_dsp::{FxChain, Limiter};
 use merlin_hosting::{Io, MidiEvent, PluginProcessor, ProcessStatus};
@@ -105,6 +106,9 @@ impl EngineHandle {
     }
 }
 
+/// How slowly the per-slot load follows the latest block (per block; about 50 blocks).
+const LOAD_SMOOTHING: f32 = 0.98;
+
 struct SlotRt {
     processor: Option<Box<dyn PluginProcessor>>,
     volume: f32,
@@ -119,6 +123,8 @@ struct SlotRt {
     insert_bypass: [bool; MAX_INSERTS],
     /// Frames of exactly silent output while the instrument sleeps with effects on.
     quiet_frames: usize,
+    /// Smoothed share of the block budget this slot takes (what [`Shared::load`] shows).
+    load_avg: f32,
 }
 
 impl SlotRt {
@@ -135,6 +141,7 @@ impl SlotRt {
             inserts: std::array::from_fn(|_| None),
             insert_bypass: [false; MAX_INSERTS],
             quiet_frames: 0,
+            load_avg: 0.0,
         }
     }
 
@@ -336,11 +343,14 @@ impl Engine {
         self.mix_r[..frames].fill(0.0);
         let mut sleeping = 0u16;
         let fx_idle_frames = (FX_IDLE_SECS * self.sample_rate) as usize;
+        // What one block is allowed to take, for the per-slot load.
+        let budget_ns = frames as f32 / self.sample_rate * 1e9;
         for i in 0..MAX_SLOTS {
             let slot = &mut self.slots[i];
             let Some(processor) = slot.processor.as_mut() else {
                 continue;
             };
+            let started = Instant::now();
             let events = self.events[i].as_slice();
             // A slot that is a keyboard target always runs: no wake-up latency for what is being
             // played, and its editor can see regular process calls. Only idle slots sleep.
@@ -356,6 +366,9 @@ impl Engine {
             let fx_live = effects && slot.quiet_frames < fx_idle_frames;
             if skip_instrument && !fx_live {
                 sleeping |= 1 << i;
+                // A sleeping slot costs nothing: let its load fade out.
+                slot.load_avg *= LOAD_SMOOTHING;
+                self.shared.load[i].store(slot.load_avg.to_bits(), Ordering::Relaxed);
                 continue;
             }
             self.scratch_l[..frames].fill(0.0);
@@ -425,6 +438,10 @@ impl Engine {
             }
             (slot.last_l, slot.last_r) = (tl, tr);
             self.shared.peaks[i].fetch_max(peak.to_bits(), Ordering::Relaxed);
+            let used = started.elapsed().as_nanos() as f32 / budget_ns;
+            slot.load_avg = slot.load_avg * LOAD_SMOOTHING + used * (1.0 - LOAD_SMOOTHING);
+            self.shared.load[i].store(slot.load_avg.to_bits(), Ordering::Relaxed);
+            self.shared.load_max[i].fetch_max(used.to_bits(), Ordering::Relaxed);
         }
         self.shared.sleeping.store(sleeping, Ordering::Relaxed);
 

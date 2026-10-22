@@ -67,6 +67,14 @@ fn processes() -> Vec<(u32, u32, String, char)> {
 }
 
 /// Direct children of this process that are yabridge plugin hosts.
+/// Clock ticks of CPU time (user + system, all threads) a process has used so far.
+pub fn cpu_ticks(pid: u32) -> Option<u64> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let rest: Vec<&str> = stat[stat.rfind(')')? + 2..].split(' ').collect();
+    // After the command name: state is field 0, utime 11, stime 12.
+    Some(rest.get(11)?.parse::<u64>().ok()? + rest.get(12)?.parse::<u64>().ok()?)
+}
+
 pub fn host_children() -> HashSet<u32> {
     let me = std::process::id();
     processes()
@@ -104,6 +112,16 @@ impl Guard {
 
     pub fn register(&self, pid: u32, info: HostInfo) {
         self.hosts.lock().unwrap().insert(pid, info);
+    }
+
+    /// `(slot or insert id, pid)` of every running Wine host.
+    pub fn host_pids(&self) -> Vec<(usize, u32)> {
+        self.hosts
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(&pid, h)| (h.slot, pid))
+            .collect()
     }
 
     /// Call before a plugin is removed on purpose, so its host exiting is not a crash.
