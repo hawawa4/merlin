@@ -30,6 +30,12 @@ dev *args:
 #   gh release upload runtime dist/runtime/* --clobber                           (later)
 # To try the download without publishing: serve the folder (`python3 -m http.server -d dist/runtime`)
 # and set runtime_url = "http://127.0.0.1:8000/runtime-manifest.json" in settings.toml.
+# Plays a short song with two stems and markers over and over (default 100 passes, about 8 minutes): every pass
+# must end stopped by its marker with no underruns or xruns. Needs PipeWire running.
+soak-song passes="100":
+    cargo build --release -p merlin
+    python3 tools/soak_song.py {{passes}}
+
 # Compatibility pass: loads every instrument and effect it finds, one app process each, plays, saves
 # and reopens the rig, and writes docs/compat-matrix.md. `just compat` tries everything (about a
 # minute per Windows plugin); `just compat Podolski Surge` only labels containing those words.

@@ -509,7 +509,7 @@ libjack preload (S1), `build-wine.sh` and the patch set (S4).
 - **Novation hooks:** Launchpad right column = song parts; Launchkey transport and screen = song/part.
 - **Optional:** Ableton Link.
 
-**Exit:** a song with stems and automatic instrument changes plays correctly 100 times in a row in a soak test.
+**Exit:** a song with stems and automatic instrument changes plays correctly 100 times in a row in a soak test. ✅ `just soak-song`: 100 passes of count-in, two stems (one resampled), a part change and a stop on their bars: all passes correct, no underruns, memory flat (127 to 129 MB); one xrun in 8 minutes on this machine, which has no realtime scheduling.
 
 ### Phase 6: remaining formats (3–5 weeks)
 
