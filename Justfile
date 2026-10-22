@@ -14,9 +14,9 @@ default:
 
 # The app. Loads plugins from the standard CLAP folders plus test-assets (Linux and, through
 # our patched Wine, Windows ones). Try: just dev --fresh      just dev --rig my.irig
-# This round: macros. Select a slot, open the "Macros" tab next to Effects, press "+ parameter..." on a
-# macro and pick something to move (a SoundFont offers level, brightness, ...), then drag the knob. Map
-# a controller knob to it in Settings -> Controls. See docs/qa-checklist.md section 5d.
+# This round: knob options. Settings -> Controls: a knob mapping has an "options" button (invert, range,
+# curve, endless-encoder kinds) and a takeover of Jump, Pick up or Scale. New actions "Macro / Volume of
+# the slot that plays" follow whatever you select. See docs/qa-checklist.md section 5e.
 dev *args:
     cargo build -p merlin --release
     PATH="{{yabridge_dir}}:$PATH" WINELOADER={{patched_wine}} \

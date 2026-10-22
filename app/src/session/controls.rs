@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use merlin_audio_io::{ControlEvent, friendly_name};
 use merlin_control::{Context, Incoming, Message, Outcome};
-use merlin_model::{ControlAction, Mapping, Source, SourceKind, Takeover};
+use merlin_model::{ControlAction, Glue, Mapping, Source, SourceKind, Takeover};
 
 use super::{MAX_SLOTS, Session, UI_SLOTS, UserEvent};
 
@@ -109,6 +109,7 @@ impl Session {
             targets: self.targets.iter().fold(0, |m, &i| m | 1 << i),
             volumes: std::array::from_fn(|i| self.rig.slots.get(i).map_or(1.0, |s| s.volume)),
             master: self.rig.master_volume,
+            primary: self.targets.first().copied(),
             macros: std::array::from_fn(|i| {
                 std::array::from_fn(|k| {
                     self.rig
@@ -153,6 +154,17 @@ impl Session {
         if index < self.rig.mappings.len() {
             self.rig.mappings.remove(index);
             self.mappings_changed();
+        }
+    }
+
+    pub fn set_mapping_glue(&mut self, index: usize, glue: Glue) {
+        if let Some(m) = self.rig.mappings.get_mut(index) {
+            m.glue = glue;
+            if m.is_valid() {
+                self.mappings_changed();
+            } else {
+                m.glue = Glue::default();
+            }
         }
     }
 
@@ -251,6 +263,7 @@ impl Session {
             } else {
                 Takeover::Jump
             },
+            glue: Glue::default(),
         };
         self.cancel_learn();
         self.say(format!(

@@ -1198,6 +1198,7 @@ impl Session {
             self.targets = vec![i];
         }
         self.rig.selected = self.targets.clone();
+        self.mapper.selection_changed();
         self.dirty = true;
         self.show_editor(i);
     }

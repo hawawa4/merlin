@@ -60,6 +60,12 @@ pub enum ControlAction {
         slot: u8,
         index: u8,
     },
+    /// A knob for a macro of whichever slot plays now (the first selected one).
+    SelectedMacro {
+        index: u8,
+    },
+    /// A fader for the volume of whichever slot plays now.
+    SelectedVolume,
     /// Recall a snapshot.
     RecallSnapshot {
         snapshot: u8,
@@ -79,7 +85,11 @@ impl ControlAction {
     pub fn is_continuous(&self) -> bool {
         matches!(
             self,
-            Self::SlotVolume { .. } | Self::MasterVolume | Self::SlotMacro { .. }
+            Self::SlotVolume { .. }
+                | Self::MasterVolume
+                | Self::SlotMacro { .. }
+                | Self::SelectedMacro { .. }
+                | Self::SelectedVolume
         )
     }
 
@@ -110,6 +120,10 @@ impl ControlAction {
             }
             Self::SlotVolume { slot } => format!("Volume of slot {}", slot as usize + 1),
             Self::MasterVolume => "Master volume".into(),
+            Self::SelectedMacro { index } => {
+                format!("Macro {} of the slot that plays", index as usize + 1)
+            }
+            Self::SelectedVolume => "Volume of the slot that plays".into(),
             Self::SlotMacro { slot, index } => {
                 format!("Macro {} of slot {}", index as usize + 1, slot as usize + 1)
             }
@@ -136,14 +150,114 @@ pub enum Takeover {
     Jump,
     /// The knob does nothing until it passes the current value, so it never makes a jump.
     Pickup,
+    /// The value moves with the knob but is scaled so both reach the end of their range
+    /// together: no jump, and no dead stretch.
+    Scale,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// How a knob's position turns into the value.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Curve {
+    #[default]
+    Linear,
+    /// Fine control at the low end (position squared).
+    Soft,
+    /// Fine control at the high end (square root of the position).
+    Hard,
+}
+
+/// An endless encoder sends how far it turned, not where it is. The encodings differ by maker.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Relative {
+    /// An ordinary knob or fader.
+    #[default]
+    Off,
+    /// 1..63 up, 127..65 down.
+    TwosComplement,
+    /// 1..63 up, 65..127 down.
+    SignedBit,
+    /// 64 is still, above is up, below is down.
+    BinaryOffset,
+}
+
+impl Relative {
+    /// How many steps (up positive) the value means; `None` for a plain knob.
+    pub fn steps(self, value: u8) -> Option<i32> {
+        let v = i32::from(value);
+        match self {
+            Self::Off => None,
+            Self::TwosComplement => Some(if v < 64 { v } else { v - 128 }),
+            Self::SignedBit => Some(if v < 64 { v } else { -(v - 64) }),
+            Self::BinaryOffset => Some(v - 64),
+        }
+    }
+}
+
+/// What happens between the control and the value: range, direction, response curve, and
+/// whether the control is an endless encoder.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Glue {
+    /// Flip the direction.
+    pub invert: bool,
+    /// The value at the bottom and the top of the knob's travel (0..=1 of the target's range).
+    pub min: f32,
+    pub max: f32,
+    pub curve: Curve,
+    pub relative: Relative,
+    /// For an encoder: how much one step moves the value (a fraction of the range).
+    pub step: f32,
+}
+
+impl Default for Glue {
+    fn default() -> Self {
+        Self {
+            invert: false,
+            min: 0.0,
+            max: 1.0,
+            curve: Curve::Linear,
+            relative: Relative::Off,
+            step: 0.01,
+        }
+    }
+}
+
+impl Glue {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    fn is_valid(&self) -> bool {
+        (0.0..=1.0).contains(&self.min)
+            && (0.0..=1.0).contains(&self.max)
+            && self.step.is_finite()
+            && self.step > 0.0
+            && self.step <= 1.0
+    }
+
+    /// A knob position (0..=1) as the value it asks for.
+    pub fn shape(&self, x: f32) -> f32 {
+        let x = x.clamp(0.0, 1.0);
+        let x = if self.invert { 1.0 - x } else { x };
+        let x = match self.curve {
+            Curve::Linear => x,
+            Curve::Soft => x * x,
+            Curve::Hard => x.sqrt(),
+        };
+        self.min + (self.max - self.min) * x
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Mapping {
     pub source: Source,
     pub action: ControlAction,
     #[serde(default)]
     pub takeover: Takeover,
+    #[serde(default, skip_serializing_if = "Glue::is_default")]
+    pub glue: Glue,
 }
 
 impl Source {
@@ -165,7 +279,8 @@ impl Source {
 impl Mapping {
     /// Is it something the engine and the rig can use?
     pub fn is_valid(&self) -> bool {
-        self.action.slot().is_none_or(|s| (s as usize) < MAX_SLOTS)
+        self.glue.is_valid()
+            && self.action.slot().is_none_or(|s| (s as usize) < MAX_SLOTS)
             && self.source.channel.is_none_or(|c| c < 16)
             && match self.source.kind {
                 SourceKind::Cc { number } => number < 128,
@@ -174,7 +289,9 @@ impl Mapping {
             }
             && match self.action {
                 ControlAction::SelectByValue { base } => (base as usize) < MAX_SLOTS,
-                ControlAction::SlotMacro { index, .. } => (index as usize) < MACROS_PER_SLOT,
+                ControlAction::SlotMacro { index, .. } | ControlAction::SelectedMacro { index } => {
+                    (index as usize) < MACROS_PER_SLOT
+                }
                 ControlAction::RecallSnapshot { snapshot: n }
                 | ControlAction::RecallSnapshotByValue { base: n } => (n as usize) < MAX_SNAPSHOTS,
                 _ => true,
@@ -200,6 +317,7 @@ mod tests {
             source: cc(20),
             action: ControlAction::SelectSlot { slot: 2 },
             takeover: Takeover::Jump,
+            glue: Glue::default(),
         };
         let json = serde_json::to_string(&m).unwrap();
         assert!(
@@ -242,6 +360,7 @@ mod tests {
             source: cc(1),
             action: ControlAction::Panic,
             takeover: Takeover::Jump,
+            glue: Glue::default(),
         };
         assert!(ok.is_valid());
         let mut bad = ok.clone();
@@ -252,8 +371,55 @@ mod tests {
         let mut bad = ok.clone();
         bad.source.channel = Some(16);
         assert!(!bad.is_valid());
-        let mut bad = ok;
+        let mut bad = ok.clone();
         bad.source.kind = SourceKind::Cc { number: 200 };
         assert!(!bad.is_valid());
+        let mut bad = ok;
+        bad.glue.step = 0.0;
+        assert!(!bad.is_valid());
+    }
+
+    #[test]
+    fn glue_shapes_a_knob_and_reads_encoders() {
+        let g = Glue {
+            min: 0.2,
+            max: 0.8,
+            ..Glue::default()
+        };
+        assert!((g.shape(0.0) - 0.2).abs() < 1e-6 && (g.shape(1.0) - 0.8).abs() < 1e-6);
+        let inv = Glue {
+            invert: true,
+            ..Glue::default()
+        };
+        assert_eq!(inv.shape(0.0), 1.0);
+        let soft = Glue {
+            curve: Curve::Soft,
+            ..Glue::default()
+        };
+        assert!(soft.shape(0.5) < 0.5);
+        let hard = Glue {
+            curve: Curve::Hard,
+            ..Glue::default()
+        };
+        assert!(hard.shape(0.5) > 0.5);
+        // The three ways an endless encoder says "one step down".
+        assert_eq!(Relative::TwosComplement.steps(127), Some(-1));
+        assert_eq!(Relative::SignedBit.steps(65), Some(-1));
+        assert_eq!(Relative::BinaryOffset.steps(63), Some(-1));
+        assert_eq!(Relative::TwosComplement.steps(3), Some(3));
+        assert_eq!(Relative::Off.steps(3), None);
+    }
+
+    #[test]
+    fn a_mapping_without_glue_keeps_its_file_short() {
+        let m = Mapping {
+            source: cc(1),
+            action: ControlAction::MasterVolume,
+            takeover: Takeover::Scale,
+            glue: Glue::default(),
+        };
+        let json = serde_json::to_string(&m).unwrap();
+        assert!(!json.contains("glue"), "{json}");
+        assert_eq!(serde_json::from_str::<Mapping>(&json).unwrap(), m);
     }
 }

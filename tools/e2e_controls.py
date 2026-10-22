@@ -66,6 +66,7 @@ def main():
     controls_check()
     snapshots_check()
     macros_check()
+    selection_check()
 
 
 SNAP_FILE = Path(tempfile.gettempdir()) / "irig-e2e-snapshots.irig"
@@ -133,6 +134,32 @@ def macros_check():
         print(out[-3000:])
         sys.exit(1)
     print(f"ok: a macro knob moves a SoundFont's level, and a snapshot restores it: {seq}")
+
+
+SEL_SCRIPT = "; ".join(
+    [
+        "1:load 1 TimGM6mb", "1.2:load 2 TimGM6mb",
+        "4:macrotarget 1 1 sampler:level", "4.1:macrotarget 2 1 sampler:level", "4.2:select 1",
+        # An endless encoder (two's complement, 10% a step) turning the macro of the slot that plays.
+        "4.3:map cc 41 selmacro 1 rel2c step=0.1",
+        "9.8:select 2",
+    ]
+    + [f"{t}:report" for t in (5, 7.5, 8.5, 10.5)]
+    + ["12:quit"]
+)
+# Up two steps, down one, then (after slot 2 is selected) up five: that must go to slot 2.
+SEL_CONTROLS = "1:B0 41 2; 2:B0 41 127; 4:B0 41 5"
+
+
+def selection_check():
+    out = run(SEL_SCRIPT, SEL_CONTROLS, 8)
+    seq = [(float(m), float(g)) for m, g in re.findall(r"macro1 ([\d.]+), gain1 ([\d.-]+)", out)]
+    wanted = [(0.5, 1.0), (0.7, 1.4), (0.6, 1.2), (0.6, 1.2)]
+    if len(seq) != 4 or any(abs(a - c) > 0.02 or abs(b - d) > 0.03 for (a, b), (c, d) in zip(seq, wanted)):
+        print(f"FAIL (selection)\n  (macro, gain) {seq}, wanted {wanted}")
+        print(out[-3000:])
+        sys.exit(1)
+    print(f"ok: an encoder moves the macro of the slot that plays, and follows the selection: {seq}")
 
 
 def controls_check():

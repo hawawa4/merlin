@@ -66,6 +66,14 @@ Snapshots are saved inside the rig file, so one file holds the whole setup.
 - [ ] Perform view: macros that have targets appear as sliders on their instrument's tile.
 - [ ] Try a Windows plugin (Surge XT Windows, Six Sines) as a macro target; the app must stay responsive.
 
+## 5e. Knob options and encoders (needs a controller with knobs, ideally an endless encoder)
+- [ ] Map a fader to *Master volume*, press **options**: *Invert* flips it; *range* 20% to 60% confines it; *Soft*/*Hard* change how it feels near the ends.
+- [ ] Takeover *Scale*: set the master to about 80%, put the knob low, turn it up. The volume rises a little and both reach the top together, with no jump.
+- [ ] Endless encoder: map it to *Master volume* or a macro, **options** > kind. Try the three encodings until turning right goes up and left goes down by one step per click. Adjust *step*.
+- [ ] *Macro of the slot that plays*: map 8 knobs to macros 1-8. Select a slot, turn a knob: its macro moves. Select another slot: the same knobs now move that slot's macros (with Pick up, only after they reach the macro's position).
+- [ ] *Volume of the slot that plays* behaves the same for one fader.
+- [ ] Save, reopen: options (range, curve, kind) and takeover are kept.
+
 ## 6. Stability
 - [ ] Kill a Windows plugin's Wine process while the app runs: `pgrep -af yabridge-host`, then `kill -9 <pid>` of one. The app should restart itself from the autosave and name the plugin it quarantined (it comes back with *Retry*).
 - [ ] The 2-hour rehearsal: 6–8 instruments including a Windows one, switching and playing for 2 hours. For an unattended version: `just soak 7200 3 --windows "Six Sines"`, then read the `state:` lines (xruns, held keys, RSS, threads). Expect 0 xruns, 0 held keys at the end, memory flat.

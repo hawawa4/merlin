@@ -19,7 +19,7 @@ mod snapshot;
 
 pub use fx::{CompSettings, DelaySettings, EqSettings, FxSettings, ReverbSettings};
 pub use macros::{MACROS_PER_SLOT, MAX_MACRO_TARGETS, Macro, MacroTarget, SamplerField};
-pub use mapping::{ControlAction, Mapping, Source, SourceKind, Takeover};
+pub use mapping::{ControlAction, Curve, Glue, Mapping, Relative, Source, SourceKind, Takeover};
 pub use migrate::{Migration, migrate};
 pub use snapshot::{MAX_SNAPSHOTS, PresetChoice, SlotSnapshot, Snapshot};
 

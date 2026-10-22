@@ -32,6 +32,8 @@ pub enum ActionKind {
     SlotVolume,
     MasterVolume,
     SlotMacro,
+    SelectedMacro,
+    SelectedVolume,
     RecallSnapshot,
     NextSnapshot,
     PrevSnapshot,
@@ -40,7 +42,7 @@ pub enum ActionKind {
 }
 
 impl ActionKind {
-    const ALL: [ActionKind; 14] = [
+    const ALL: [ActionKind; 16] = [
         Self::SelectSlot,
         Self::ToggleLayer,
         Self::ToggleMute,
@@ -50,6 +52,8 @@ impl ActionKind {
         Self::SlotVolume,
         Self::MasterVolume,
         Self::SlotMacro,
+        Self::SelectedMacro,
+        Self::SelectedVolume,
         Self::RecallSnapshot,
         Self::NextSnapshot,
         Self::PrevSnapshot,
@@ -68,6 +72,8 @@ impl ActionKind {
             Self::SlotVolume => "Volume of a slot (fader or knob)",
             Self::MasterVolume => "Master volume (fader or knob)",
             Self::SlotMacro => "Macro of a slot (knob or fader)",
+            Self::SelectedMacro => "Macro of the slot that plays (knob or fader)",
+            Self::SelectedVolume => "Volume of the slot that plays (fader or knob)",
             Self::RecallSnapshot => "Recall a snapshot",
             Self::NextSnapshot => "Next snapshot (foot switch)",
             Self::PrevSnapshot => "Previous snapshot (foot switch)",
@@ -101,6 +107,8 @@ impl ActionKind {
             Self::SlotVolume => A::SlotVolume { slot },
             Self::MasterVolume => A::MasterVolume,
             Self::SlotMacro => A::SlotMacro { slot, index: base },
+            Self::SelectedMacro => A::SelectedMacro { index: base },
+            Self::SelectedVolume => A::SelectedVolume,
             Self::RecallSnapshot => A::RecallSnapshot { snapshot: slot },
             Self::NextSnapshot => A::NextSnapshot,
             Self::PrevSnapshot => A::PrevSnapshot,
@@ -365,7 +373,10 @@ fn controls(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<
             ui.add(egui::DragValue::new(&mut shown).range(1..=crate::session::UI_SLOTS));
             st.new_base = shown - 1;
         }
-        if st.new_kind == ActionKind::SlotMacro {
+        if matches!(
+            st.new_kind,
+            ActionKind::SlotMacro | ActionKind::SelectedMacro
+        ) {
             ui.label("macro");
             let mut shown = st.new_base + 1;
             ui.add(
@@ -420,7 +431,7 @@ fn controls(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<
         ui.label("No mappings yet.");
     }
     egui::Grid::new("mappings")
-        .num_columns(4)
+        .num_columns(5)
         .spacing([14.0, 6.0])
         .show(ui, |ui| {
             for (i, m) in s.mappings().iter().enumerate() {
@@ -432,17 +443,22 @@ fn controls(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<
                         .selected_text(match t {
                             Takeover::Jump => "Jump",
                             Takeover::Pickup => "Pick up",
+                            Takeover::Scale => "Scale",
                         })
                         .show_ui(ui, |ui| {
                             ui.selectable_value(&mut t, Takeover::Jump, "Jump")
                                 .on_hover_text("The value jumps to wherever the knob is");
+                            ui.selectable_value(&mut t, Takeover::Scale, "Scale")
+                                .on_hover_text("The value moves with the knob, scaled so both reach the end of their range together: no jump and no dead stretch");
                             ui.selectable_value(&mut t, Takeover::Pickup, "Pick up")
                                 .on_hover_text("The knob does nothing until it reaches the current value, so it never makes a jump");
                         });
                     if t != m.takeover {
                         actions.push(Action::SetTakeover(i, t));
                     }
+                    glue_options(ui, i, m, actions);
                 } else {
+                    ui.label("");
                     ui.label("");
                 }
                 if ui.small_button("remove").clicked() {
@@ -451,6 +467,83 @@ fn controls(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<
                 ui.end_row();
             }
         });
+}
+
+/// Range, direction, curve and encoder settings of a knob mapping.
+fn glue_options(
+    ui: &mut egui::Ui,
+    index: usize,
+    m: &merlin_model::Mapping,
+    actions: &mut Vec<Action>,
+) {
+    use merlin_model::{Curve, Relative};
+    ui.menu_button("options", |ui| {
+        let mut g = m.glue;
+        ui.checkbox(&mut g.invert, "Invert (turn up = lower)");
+        ui.horizontal(|ui| {
+            ui.label("range");
+            let (mut lo, mut hi) = (g.min * 100.0, g.max * 100.0);
+            ui.add(egui::DragValue::new(&mut lo).range(0.0..=100.0).suffix("%"));
+            ui.label("to");
+            ui.add(egui::DragValue::new(&mut hi).range(0.0..=100.0).suffix("%"));
+            (g.min, g.max) = (lo / 100.0, hi / 100.0);
+        });
+        egui::ComboBox::from_label("response")
+            .selected_text(match g.curve {
+                Curve::Linear => "Linear",
+                Curve::Soft => "Soft (fine at the bottom)",
+                Curve::Hard => "Hard (fine at the top)",
+            })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut g.curve, Curve::Linear, "Linear");
+                ui.selectable_value(&mut g.curve, Curve::Soft, "Soft (fine at the bottom)");
+                ui.selectable_value(&mut g.curve, Curve::Hard, "Hard (fine at the top)");
+            });
+        egui::ComboBox::from_label("kind")
+            .selected_text(match g.relative {
+                Relative::Off => "Knob or fader",
+                Relative::TwosComplement => "Endless encoder (two's complement)",
+                Relative::SignedBit => "Endless encoder (sign bit)",
+                Relative::BinaryOffset => "Endless encoder (offset 64)",
+            })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut g.relative, Relative::Off, "Knob or fader");
+                ui.selectable_value(
+                    &mut g.relative,
+                    Relative::TwosComplement,
+                    "Endless encoder (two's complement)",
+                )
+                .on_hover_text("1..63 up, 127..65 down: most encoders");
+                ui.selectable_value(
+                    &mut g.relative,
+                    Relative::SignedBit,
+                    "Endless encoder (sign bit)",
+                )
+                .on_hover_text("1..63 up, 65..127 down");
+                ui.selectable_value(
+                    &mut g.relative,
+                    Relative::BinaryOffset,
+                    "Endless encoder (offset 64)",
+                )
+                .on_hover_text("64 is still, above is up, below is down");
+            });
+        if g.relative != Relative::Off {
+            ui.horizontal(|ui| {
+                ui.label("step");
+                let mut pct = g.step * 100.0;
+                ui.add(
+                    egui::DragValue::new(&mut pct)
+                        .range(0.1..=100.0)
+                        .speed(0.1)
+                        .suffix("%"),
+                );
+                g.step = pct / 100.0;
+            });
+        }
+        if g != m.glue {
+            actions.push(Action::SetGlue(index, g));
+        }
+    });
 }
 
 fn midi(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {

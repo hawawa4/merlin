@@ -34,6 +34,8 @@ pub struct Context {
     pub targets: u16,
     pub volumes: [f32; MAX_SLOTS],
     pub master: f32,
+    /// The first slot that plays now, for the controls that follow the selection.
+    pub primary: Option<usize>,
     /// Where each slot's macros sit.
     pub macros: [[f32; MACROS_PER_SLOT]; MAX_SLOTS],
     /// How many snapshots the rig has, and the one recalled last.
@@ -85,6 +87,18 @@ impl Mapper {
         }
         self.mappings = mappings.to_vec();
         self.state = state;
+    }
+
+    /// What plays changed: the controls that follow the selection start over.
+    pub fn selection_changed(&mut self) {
+        for (m, s) in self.mappings.iter().zip(self.state.iter_mut()) {
+            if matches!(
+                m.action,
+                ControlAction::SelectedMacro { .. } | ControlAction::SelectedVolume
+            ) {
+                *s = State::default();
+            }
+        }
     }
 
     /// The knobs have to be picked up again (the values they control were changed elsewhere).
@@ -222,48 +236,90 @@ fn fire(action: &ControlAction, inc: &Incoming, ctx: &Context) -> Option<Outcome
     }
 }
 
-/// A knob or fader following its value, with jump or pick-up.
+/// A knob or fader following its value, with jump, pick-up or scale, or an endless encoder
+/// moving it by steps.
 fn follow(m: &Mapping, state: &mut State, inc: &Incoming, ctx: &Context) -> Option<Outcome> {
-    let x = value_of(&inc.message) as f32 / 127.0;
-    let mut which_macro = None;
-    let (slot, current) = match m.action {
+    // What the control drives, and where that sits now.
+    let (slot, which_macro, current) = match m.action {
         ControlAction::SlotVolume { slot } => {
             let s = slot as usize;
             if !loaded(ctx, s) {
                 return None;
             }
-            (Some(s), ctx.volumes[s].clamp(0.0, 1.0))
+            (Some(s), None, ctx.volumes[s])
+        }
+        ControlAction::SelectedVolume => {
+            let s = ctx.primary.filter(|&s| loaded(ctx, s))?;
+            (Some(s), None, ctx.volumes[s])
         }
         ControlAction::SlotMacro { slot, index } => {
             let (s, k) = (slot as usize, index as usize);
             if !loaded(ctx, s) || k >= MACROS_PER_SLOT {
                 return None;
             }
-            which_macro = Some(k);
-            (Some(s), ctx.macros[s][k].clamp(0.0, 1.0))
+            (Some(s), Some(k), ctx.macros[s][k])
         }
-        _ => (None, ctx.master.clamp(0.0, 1.0)),
+        ControlAction::SelectedMacro { index } => {
+            let s = ctx.primary.filter(|&s| loaded(ctx, s))?;
+            let k = index as usize;
+            if k >= MACROS_PER_SLOT {
+                return None;
+            }
+            (Some(s), Some(k), ctx.macros[s][k])
+        }
+        _ => (None, None, ctx.master),
     };
-    let last = state.last.replace(x);
-    if m.takeover == Takeover::Pickup && !state.picked_up {
-        // Close enough, or the knob went across the value since the last message.
-        let near = (x - current).abs() <= 1.5 / 127.0;
-        let crossed = last.is_some_and(|l| (l - current) * (x - current) <= 0.0);
-        if !(near || crossed) {
-            return None;
+    let current = current.clamp(0.0, 1.0);
+    let glue = &m.glue;
+    let value = value_of(&inc.message);
+    let new = if let Some(steps) = glue.relative.steps(value) {
+        // An encoder: it says how far it turned, so there is nothing to pick up.
+        let steps = if glue.invert { -steps } else { steps };
+        (current + steps as f32 * glue.step).clamp(glue.min.min(glue.max), glue.min.max(glue.max))
+    } else {
+        let y = glue.shape(f32::from(value) / 127.0);
+        let last = state.last.replace(y);
+        match m.takeover {
+            Takeover::Jump => y,
+            Takeover::Pickup => {
+                if !state.picked_up {
+                    // Close enough, or the knob went across the value since the last message.
+                    let near = (y - current).abs() <= 1.5 / 127.0;
+                    let crossed = last.is_some_and(|l| (l - current) * (y - current) <= 0.0);
+                    if !(near || crossed) {
+                        return None;
+                    }
+                    state.picked_up = true;
+                }
+                y
+            }
+            Takeover::Scale => {
+                // The first message only says where the knob is.
+                let l = last?;
+                if y > l {
+                    if l >= 1.0 {
+                        return None;
+                    }
+                    current + (1.0 - current) * (y - l) / (1.0 - l)
+                } else {
+                    if l <= 0.0 {
+                        return None;
+                    }
+                    current * y / l
+                }
+            }
         }
-        state.picked_up = true;
-    }
+    };
     Some(match (slot, which_macro) {
-        (Some(s), Some(k)) => Outcome::SetMacro(s, k, x),
-        (Some(s), None) => Outcome::SetVolume(s, x),
-        _ => Outcome::SetMaster(x),
+        (Some(s), Some(k)) => Outcome::SetMacro(s, k, new),
+        (Some(s), None) => Outcome::SetVolume(s, new),
+        _ => Outcome::SetMaster(new),
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use merlin_model::Source;
+    use merlin_model::{Curve, Glue, Relative, Source};
 
     use super::*;
 
@@ -274,6 +330,7 @@ mod tests {
             targets: bits(targets),
             volumes: [1.0; MAX_SLOTS],
             master: 1.0,
+            primary: None,
             macros: [[0.0; MACROS_PER_SLOT]; MAX_SLOTS],
             snapshots: 0,
             snapshot: None,
@@ -297,6 +354,7 @@ mod tests {
             },
             action,
             takeover: Takeover::Jump,
+            glue: Glue::default(),
         }
     }
 
@@ -568,5 +626,127 @@ mod tests {
             ControlAction::SlotMacro { slot: 5, index: 0 },
         )]);
         assert!(m.handle(&cc("K", 0, 40, 64), &c).is_empty());
+    }
+
+    fn knob(action: ControlAction, takeover: Takeover, glue: Glue) -> Mapper {
+        let mut m = map(None, SourceKind::Cc { number: 50 }, action);
+        m.takeover = takeover;
+        m.glue = glue;
+        Mapper::new(&[m])
+    }
+
+    #[test]
+    fn range_curve_and_direction_shape_the_value() {
+        let glue = Glue {
+            min: 0.2,
+            max: 0.6,
+            invert: true,
+            ..Glue::default()
+        };
+        let mut m = knob(ControlAction::MasterVolume, Takeover::Jump, glue);
+        let c = ctx(&[0], &[0]);
+        assert_eq!(
+            m.handle(&cc("K", 0, 50, 0), &c),
+            vec![Outcome::SetMaster(0.6)]
+        );
+        let Some(Outcome::SetMaster(v)) = m.handle(&cc("K", 0, 50, 127), &c).pop() else {
+            panic!("no outcome");
+        };
+        assert!((v - 0.2).abs() < 1e-6);
+        let mut m = knob(
+            ControlAction::MasterVolume,
+            Takeover::Jump,
+            Glue {
+                curve: Curve::Soft,
+                ..Glue::default()
+            },
+        );
+        let Some(Outcome::SetMaster(v)) = m.handle(&cc("K", 0, 50, 64), &c).pop() else {
+            panic!("no outcome");
+        };
+        assert!(v < 0.3, "soft curve: {v}");
+    }
+
+    #[test]
+    fn an_encoder_moves_the_value_by_steps() {
+        let glue = Glue {
+            relative: Relative::TwosComplement,
+            step: 0.1,
+            ..Glue::default()
+        };
+        let mut m = knob(ControlAction::MasterVolume, Takeover::Jump, glue);
+        let mut c = ctx(&[0], &[0]);
+        c.master = 0.5;
+        assert_eq!(
+            m.handle(&cc("E", 0, 50, 2), &c),
+            vec![Outcome::SetMaster(0.7)]
+        );
+        let Some(Outcome::SetMaster(v)) = m.handle(&cc("E", 0, 50, 127), &c).pop() else {
+            panic!("no outcome");
+        };
+        assert!((v - 0.4).abs() < 1e-6, "one step down: {v}");
+        // It stops at the ends.
+        c.master = 0.95;
+        assert_eq!(
+            m.handle(&cc("E", 0, 50, 10), &c),
+            vec![Outcome::SetMaster(1.0)]
+        );
+    }
+
+    #[test]
+    fn scale_takeover_meets_at_the_ends_without_a_jump() {
+        let mut m = knob(
+            ControlAction::MasterVolume,
+            Takeover::Scale,
+            Glue::default(),
+        );
+        let mut c = ctx(&[0], &[0]);
+        c.master = 0.8;
+        // The knob is at 0.25 (somewhere far from 0.8): the first message only reports it.
+        assert!(m.handle(&cc("K", 0, 50, 32), &c).is_empty());
+        // Moving up closes the gap proportionally: the value goes up a bit, not to the knob.
+        let Some(Outcome::SetMaster(v)) = m.handle(&cc("K", 0, 50, 64), &c).pop() else {
+            panic!("no outcome");
+        };
+        assert!(v > 0.8 && v < 0.9, "scaled up: {v}");
+        // Moving down reduces it proportionally.
+        let Some(Outcome::SetMaster(v)) = m.handle(&cc("K", 0, 50, 32), &c).pop() else {
+            panic!("no outcome");
+        };
+        assert!(v < 0.8 && v > 0.3, "scaled down: {v}");
+        // All the way up reaches the top.
+        let Some(Outcome::SetMaster(v)) = m.handle(&cc("K", 0, 50, 127), &c).pop() else {
+            panic!("no outcome");
+        };
+        assert!(v > 0.99, "{v}");
+    }
+
+    #[test]
+    fn controls_that_follow_the_selection_drive_the_slot_that_plays() {
+        let mut m = Mapper::new(&[
+            map(
+                None,
+                SourceKind::Cc { number: 1 },
+                ControlAction::SelectedMacro { index: 3 },
+            ),
+            map(
+                None,
+                SourceKind::Cc { number: 2 },
+                ControlAction::SelectedVolume,
+            ),
+        ]);
+        let mut c = ctx(&[0, 2], &[2]);
+        c.primary = Some(2);
+        assert_eq!(
+            m.handle(&cc("K", 0, 1, 127), &c),
+            vec![Outcome::SetMacro(2, 3, 1.0)]
+        );
+        assert_eq!(
+            m.handle(&cc("K", 0, 2, 127), &c),
+            vec![Outcome::SetVolume(2, 1.0)]
+        );
+        // Nothing plays: nothing to drive.
+        c.primary = None;
+        assert!(m.handle(&cc("K", 0, 1, 127), &c).is_empty());
     }
 }

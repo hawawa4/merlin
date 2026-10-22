@@ -447,6 +447,10 @@ impl Running {
                 s.remove_mapping(i);
                 Ok(())
             }
+            Action::SetGlue(i, g) => {
+                s.set_mapping_glue(i, g);
+                Ok(())
+            }
             Action::SetTakeover(i, t) => {
                 s.set_mapping_takeover(i, t);
                 Ok(())
@@ -1009,7 +1013,7 @@ fn parse_script() -> Vec<(Duration, Action)> {
     let Ok(script) = std::env::var("MERLIN_SCRIPT") else {
         return Vec::new();
     };
-    script
+    let mut steps = script
         .split(';')
         .filter_map(|item| {
             let (at, cmd) = item.trim().split_once(':')?;
@@ -1088,11 +1092,28 @@ fn parse_script() -> Vec<(Duration, Action)> {
                         _ => return None,
                     };
                     let action = parse_control_action(&mut words)?;
-                    let takeover = if words.next() == Some("pickup") {
-                        Takeover::Pickup
-                    } else {
-                        Takeover::Jump
-                    };
+                    // Then any of: pickup scale invert rel2c relsb reloff step=0.1 min=0.2 max=0.8 soft hard
+                    let mut takeover = Takeover::Jump;
+                    let mut glue = merlin_model::Glue::default();
+                    for w in words.by_ref() {
+                        use merlin_model::{Curve, Relative};
+                        match w {
+                            "pickup" => takeover = Takeover::Pickup,
+                            "scale" => takeover = Takeover::Scale,
+                            "invert" => glue.invert = true,
+                            "rel2c" => glue.relative = Relative::TwosComplement,
+                            "relsb" => glue.relative = Relative::SignedBit,
+                            "reloff" => glue.relative = Relative::BinaryOffset,
+                            "soft" => glue.curve = Curve::Soft,
+                            "hard" => glue.curve = Curve::Hard,
+                            _ => match w.split_once('=') {
+                                Some(("step", v)) => glue.step = v.parse().ok()?,
+                                Some(("min", v)) => glue.min = v.parse().ok()?,
+                                Some(("max", v)) => glue.max = v.parse().ok()?,
+                                _ => return None,
+                            },
+                        }
+                    }
                     Action::AddMapping(Mapping {
                         source: Source {
                             device: None,
@@ -1101,6 +1122,7 @@ fn parse_script() -> Vec<(Duration, Action)> {
                         },
                         action,
                         takeover,
+                        glue,
                     })
                 }
                 // learn <action>: the next control the user (or the test controller) sends
@@ -1163,10 +1185,13 @@ fn parse_script() -> Vec<(Duration, Action)> {
             };
             Some((at, action))
         })
-        .collect()
+        .collect::<Vec<_>>();
+    // Run in time order whatever order they were written in (the sort keeps ties in order).
+    steps.sort_by_key(|(at, _)| *at);
+    steps
 }
 
-/// `select 2`, `layer 3`, `mute 1`, `volume 1`, `byvalue 1`, `master`, `macro 1 3`, `snap 2`, `snapbyvalue 1`, `snapnext`, `snapprev`, `next`, `prev`, `panic`
+/// `select 2`, `layer 3`, `mute 1`, `volume 1`, `byvalue 1`, `master`, `macro 1 3`, `selmacro 2`, `selvolume`, `snap 2`, `snapbyvalue 1`, `snapnext`, `snapprev`, `next`, `prev`, `panic`
 /// (slots counted from 1), for the script's `map` and `learn`.
 fn parse_control_action(
     words: &mut std::str::SplitWhitespace<'_>,
@@ -1190,6 +1215,10 @@ fn parse_control_action(
             base: num(words.next())?,
         },
         "master" => A::MasterVolume,
+        "selmacro" => A::SelectedMacro {
+            index: num(words.next())?,
+        },
+        "selvolume" => A::SelectedVolume,
         "macro" => A::SlotMacro {
             slot: num(words.next())?,
             index: num(words.next())?,

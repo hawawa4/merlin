@@ -94,6 +94,7 @@ pub enum Action {
     CancelLearn,
     RemoveMapping(usize),
     SetTakeover(usize, merlin_model::Takeover),
+    SetGlue(usize, merlin_model::Glue),
     /// Script-only: add a mapping without a device (`map cc 20 select 2`).
     AddMapping(merlin_model::Mapping),
     /// What a MIDI device is for, and whether it is used (device name, role, on).
