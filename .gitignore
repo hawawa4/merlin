@@ -4,3 +4,4 @@
 /test-assets/
 /runtime/
 /dist/
+__pycache__/
