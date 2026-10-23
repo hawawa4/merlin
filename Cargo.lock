@@ -1319,6 +1319,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "merlin-recorder"
+version = "0.0.0"
+dependencies = [
+ "rtrb",
+]
+
+[[package]]
 name = "merlin-scanner"
 version = "0.0.0"
 dependencies = [

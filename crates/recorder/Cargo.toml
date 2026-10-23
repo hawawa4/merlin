@@ -1,0 +1,10 @@
+[package]
+name = "merlin-recorder"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "A rolling MIDI capture: the last minutes of what was played, kept in memory, saved as a Standard MIDI File on request"
+
+[dependencies]
+rtrb.workspace = true

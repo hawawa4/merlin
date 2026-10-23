@@ -32,6 +32,7 @@ merlin-scanner = { path = "crates/scanner" }
 merlin-wine = { path = "crates/wine" }
 merlin-control = { path = "crates/control" }
 merlin-backing = { path = "crates/backing" }
+merlin-recorder = { path = "crates/recorder" }
 
 # Device support: independent of the app (see devices/README.md).
 surface-api = { path = "devices/surface-api" }
