@@ -25,6 +25,12 @@ use merlin_hosting::vst2::Vst2Library;
 use merlin_hosting::vst3::Vst3Library;
 use serde::{Deserialize, Serialize};
 
+/// The folder `merlin-bridge` puts its bridges for other plugin hosts in, below `~/.clap`,
+/// `~/.vst3` and `~/.vst`. Scans skip it: the app makes its own bridges, and these would show
+/// every Windows plugin twice. Must equal `merlin_wine::layout::DAW_BRIDGES_DIR`
+/// (the app has a test for that).
+pub const DAW_BRIDGES_DIR: &str = "merlin-bridges";
+
 /// How deep below a scan folder `.clap` files are looked for (vendors use subfolders).
 const MAX_DEPTH: usize = 3;
 
@@ -159,7 +165,10 @@ pub fn find_clap_files(dirs: &[PathBuf]) -> Vec<(PathBuf, bool)> {
                 if windows || vst2 {
                     out.push((p, windows));
                 }
-            } else if p.is_dir() && depth < MAX_DEPTH {
+            } else if p.is_dir()
+                && depth < MAX_DEPTH
+                && !(depth == 0 && p.file_name().is_some_and(|n| n == DAW_BRIDGES_DIR))
+            {
                 walk(&p, depth + 1, vst2, out);
             }
         }
@@ -411,6 +420,25 @@ mod tests {
                 .iter()
                 .any(|(n, _)| n == "libsomething.so" || n == "libSurge.so"),
             "{names:?}"
+        );
+    }
+
+    #[test]
+    fn the_folder_of_bridges_for_other_hosts_is_not_scanned() {
+        let d = tempdir("daw-bridges");
+        std::fs::create_dir_all(d.join(DAW_BRIDGES_DIR)).unwrap();
+        std::fs::write(d.join(DAW_BRIDGES_DIR).join("x.clap"), b"x").unwrap();
+        std::fs::create_dir_all(d.join("Vendor").join(DAW_BRIDGES_DIR)).unwrap();
+        std::fs::write(d.join("Vendor/y.clap"), b"x").unwrap();
+        // Only directly below a scan folder: the same name deeper down is just a folder.
+        std::fs::write(d.join("Vendor").join(DAW_BRIDGES_DIR).join("z.clap"), b"x").unwrap();
+        let found: Vec<_> = find_clap_files(&[d.clone()])
+            .into_iter()
+            .map(|(p, _)| p.strip_prefix(&d).unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            found,
+            ["Vendor/merlin-bridges/z.clap", "Vendor/y.clap"]
         );
     }
 

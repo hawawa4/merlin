@@ -95,6 +95,55 @@ pub fn installed(root: &Path) -> Option<Installed> {
     describe(root, id.trim())
 }
 
+/// The stable name of the current runtime: `<root>/current` is a link to `<root>/<id>`. Bridges
+/// made for other plugin hosts link through it, so a new runtime reaches them without a new sync.
+pub const CURRENT_LINK: &str = "current";
+
+/// Name of the file in `yabridge/` that tells bridges which Wine prefix a plugin outside every
+/// prefix uses (see `vendor/yabridge/PATCHES.md`).
+pub const DEFAULT_PREFIX_FILE: &str = "default-wineprefix";
+
+impl Installed {
+    /// Where `<root>/current` reaches this runtime's yabridge folder.
+    pub fn stable_yabridge_dir(root: &Path) -> PathBuf {
+        root.join(CURRENT_LINK).join("yabridge")
+    }
+
+    /// Writes `yabridge/default-wineprefix`: the prefix a plugin that is in no prefix runs in
+    /// (rather than `~/.wine`). Needed again after each runtime update: the file lives in the
+    /// runtime's own folder.
+    pub fn set_default_prefix(&self, prefix: &Path) -> Result<()> {
+        let file = self.yabridge_dir.join(DEFAULT_PREFIX_FILE);
+        let text = format!("{}\n", prefix.display());
+        if std::fs::read_to_string(&file).is_ok_and(|t| t == text) {
+            return Ok(());
+        }
+        std::fs::write(&file, text).with_context(|| format!("cannot write {}", file.display()))
+    }
+}
+
+/// Points `<root>/current` at runtime `id`, atomically.
+fn point_current(root: &Path, id: &str) -> Result<()> {
+    let link = root.join(CURRENT_LINK);
+    if std::fs::read_link(&link).is_ok_and(|t| t == Path::new(id)) {
+        return Ok(());
+    }
+    let tmp = root.join(format!("{CURRENT_LINK}.tmp"));
+    let _ = std::fs::remove_file(&tmp);
+    std::os::unix::fs::symlink(id, &tmp)?;
+    std::fs::rename(&tmp, &link).context("cannot update the `current` link")
+}
+
+/// [`installed`], and makes sure `<root>/current` reaches it (a runtime installed before that
+/// link existed gets one).
+pub fn ensure_current(root: &Path) -> Result<Option<Installed>> {
+    let Some(have) = installed(root) else {
+        return Ok(None);
+    };
+    point_current(root, &have.id)?;
+    Ok(Some(have))
+}
+
 /// How far an install is.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Progress {
@@ -205,8 +254,10 @@ pub fn unpack(archive: &Path, dest: &Path) -> Result<()> {
 pub fn install(manifest_url: &str, root: &Path, progress: &dyn Fn(Progress)) -> Result<Installed> {
     progress(Progress::Manifest);
     let manifest = Manifest::parse(&fetch_text(manifest_url)?)?;
+    let previous = installed(root);
     if let Some(have) = describe(root, &manifest.id) {
         std::fs::write(root.join("CURRENT"), &manifest.id)?;
+        point_current(root, &manifest.id)?;
         return Ok(have);
     }
     let work = root.join("download");
@@ -244,10 +295,18 @@ pub fn install(manifest_url: &str, root: &Path, progress: &dyn Fn(Progress)) -> 
     let Some(have) = describe(root, &manifest.id) else {
         bail!("the archive did not contain wine/bin/wine and yabridge/");
     };
+    // The new runtime keeps the prefix the old one named for plugins outside every prefix.
+    if let Some(prefix) = previous
+        .as_ref()
+        .and_then(|p| std::fs::read_to_string(p.yabridge_dir.join(DEFAULT_PREFIX_FILE)).ok())
+    {
+        let _ = std::fs::write(have.yabridge_dir.join(DEFAULT_PREFIX_FILE), prefix);
+    }
     // Last: only now does the new runtime become the current one.
     let tmp = root.join("CURRENT.tmp");
     std::fs::File::create(&tmp)?.write_all(manifest.id.as_bytes())?;
     std::fs::rename(&tmp, root.join("CURRENT"))?;
+    point_current(root, &manifest.id)?;
     remove_old(root, &manifest.id);
     Ok(have)
 }
@@ -379,6 +438,11 @@ mod tests {
         .unwrap();
         assert_eq!(got.id, "wine-1_y");
         assert_eq!(installed(&root), Some(got.clone()));
+        assert_eq!(
+            std::fs::read_link(root.join(CURRENT_LINK)).unwrap(),
+            Path::new("wine-1_y")
+        );
+        assert!(root.join(CURRENT_LINK).join("wine/bin/wine").is_file());
         let steps = steps.lock().unwrap().clone();
         assert_eq!(steps.first(), Some(&"manifest"));
         assert_eq!(&steps[steps.len() - 2..], ["verify", "unpack"]);
@@ -395,6 +459,30 @@ mod tests {
             install(&url(&manifest), &root, &|_| {}).unwrap().id,
             "wine-1_y"
         );
+    }
+
+    #[test]
+    fn a_runtime_from_before_the_current_link_gets_one() {
+        let root = tempdir("nolink");
+        let id = "wine-0_y";
+        std::fs::create_dir_all(root.join(id).join("wine/bin")).unwrap();
+        std::fs::create_dir_all(root.join(id).join("yabridge")).unwrap();
+        std::fs::write(root.join(id).join("wine/bin/wine"), b"x").unwrap();
+        std::fs::write(
+            root.join(id)
+                .join("yabridge/libyabridge-chainloader-clap.so"),
+            b"x",
+        )
+        .unwrap();
+        assert!(
+            ensure_current(&root).unwrap().is_none(),
+            "no CURRENT file yet"
+        );
+        std::fs::write(root.join("CURRENT"), id).unwrap();
+        assert_eq!(ensure_current(&root).unwrap().unwrap().id, id);
+        assert!(root.join(CURRENT_LINK).join("yabridge").is_dir());
+        // Again: nothing to do.
+        assert!(ensure_current(&root).unwrap().is_some());
     }
 
     #[test]
@@ -474,11 +562,24 @@ mod tests {
             return;
         }
         let (site, root) = (tempdir("upsite"), tempdir("uproot"));
-        install(&url(&publish(&site, "wine-1_y", &[])), &root, &|_| {}).unwrap();
+        let first = install(&url(&publish(&site, "wine-1_y", &[])), &root, &|_| {}).unwrap();
+        first.set_default_prefix(Path::new("/some/prefix")).unwrap();
         let site2 = tempdir("upsite2");
         install(&url(&publish(&site2, "wine-2_y", &[])), &root, &|_| {}).unwrap();
         assert_eq!(installed(&root).unwrap().id, "wine-2_y");
         assert!(!root.join("wine-1_y").exists(), "old runtimes are removed");
+        // The link bridges go through follows, and the prefix they use survives the update.
+        assert_eq!(
+            std::fs::read_link(root.join(CURRENT_LINK)).unwrap(),
+            Path::new("wine-2_y")
+        );
+        assert_eq!(
+            std::fs::read_to_string(
+                Installed::stable_yabridge_dir(&root).join(DEFAULT_PREFIX_FILE)
+            )
+            .unwrap(),
+            "/some/prefix\n"
+        );
     }
 
     #[test]

@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+pub mod layout;
 pub mod runtime;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -181,9 +182,18 @@ impl Runtime {
     /// Makes (and tidies) the bridges for this prefix's Windows VST2 plugins, and those in
     /// `extra_dirs` (folders the user pointed at), in `out_dir`.
     pub fn sync_vst2_bridges(&self, extra_dirs: &[PathBuf], out_dir: &Path) -> Result<SyncReport> {
+        self.sync_vst2_bridges_with(extra_dirs, out_dir, Placement::Copy)
+    }
+
+    pub fn sync_vst2_bridges_with(
+        &self,
+        extra_dirs: &[PathBuf],
+        out_dir: &Path,
+        placement: Placement,
+    ) -> Result<SyncReport> {
         let mut dirs = self.vst2_dirs();
         dirs.extend(extra_dirs.iter().filter(|d| d.is_dir()).cloned());
-        sync_vst2_bridges(&dirs, &self.vst2_chainloader(), out_dir)
+        sync_vst2_bridges_with(&dirs, &self.vst2_chainloader(), out_dir, placement)
     }
 
     pub fn vst3_chainloader(&self) -> PathBuf {
@@ -192,12 +202,33 @@ impl Runtime {
 
     /// Makes (and tidies) the bridges for this prefix's Windows VST3 plugins in `out_dir`.
     pub fn sync_vst3_bridges(&self, out_dir: &Path) -> Result<SyncReport> {
-        sync_vst3_bridges(&self.vst3_dirs(), &self.vst3_chainloader(), out_dir)
+        self.sync_vst3_bridges_with(out_dir, Placement::Copy)
+    }
+
+    pub fn sync_vst3_bridges_with(
+        &self,
+        out_dir: &Path,
+        placement: Placement,
+    ) -> Result<SyncReport> {
+        sync_vst3_bridges_with(
+            &self.vst3_dirs(),
+            &self.vst3_chainloader(),
+            out_dir,
+            placement,
+        )
     }
 
     /// Makes (and tidies) the bridges for this prefix's Windows CLAP plugins in `out_dir`.
     pub fn sync_clap_bridges(&self, out_dir: &Path) -> Result<SyncReport> {
-        sync_clap_bridges(&self.clap_dirs(), &self.chainloader(), out_dir)
+        self.sync_clap_bridges_with(out_dir, Placement::Copy)
+    }
+
+    pub fn sync_clap_bridges_with(
+        &self,
+        out_dir: &Path,
+        placement: Placement,
+    ) -> Result<SyncReport> {
+        sync_clap_bridges_with(&self.clap_dirs(), &self.chainloader(), out_dir, placement)
     }
 }
 
@@ -225,6 +256,74 @@ fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<()> {
     }
 }
 
+/// How a bridge gets its yabridge chainloader.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Placement {
+    /// A copy of the chainloader. It does not know where its runtime is, so whoever loads it
+    /// must put yabridge on `PATH` and set `WINELOADER` (the app does).
+    #[default]
+    Copy,
+    /// A symlink to the chainloader. The bridge finds its runtime from there (see
+    /// `vendor/yabridge/PATCHES.md`), so any plugin host can load it as it is, and a runtime
+    /// update reaches it without a new sync when the link goes through a stable path.
+    Link,
+}
+
+/// The chainloader a sync puts in place, as a copy or as a link.
+struct Chainloader<'a> {
+    path: &'a Path,
+    bytes: Vec<u8>,
+    placement: Placement,
+}
+
+impl<'a> Chainloader<'a> {
+    fn new(path: &'a Path, placement: Placement, what: &str) -> Result<Self> {
+        if !path.is_file() {
+            bail!(
+                "yabridge's {what} chainloader is missing: {}",
+                path.display()
+            );
+        }
+        let bytes = match placement {
+            Placement::Copy => std::fs::read(path)?,
+            Placement::Link => Vec::new(),
+        };
+        Ok(Self {
+            path,
+            bytes,
+            placement,
+        })
+    }
+
+    /// Is `bridge` already what this sync would make?
+    fn is_placed(&self, bridge: &Path) -> bool {
+        match self.placement {
+            Placement::Copy => {
+                // A link left from an earlier sync in the other mode is not a copy.
+                std::fs::symlink_metadata(bridge).is_ok_and(|m| m.is_file())
+                    && std::fs::read(bridge).is_ok_and(|b| b == self.bytes)
+            }
+            Placement::Link => std::fs::read_link(bridge).is_ok_and(|t| t == self.path),
+        }
+    }
+
+    /// Makes `bridge`, beside it and then renamed, so a running host never sees half of one.
+    fn place(&self, bridge: &Path) -> Result<()> {
+        let tmp = bridge.with_extension("tmp");
+        let _ = std::fs::remove_file(&tmp);
+        match self.placement {
+            Placement::Copy => {
+                std::fs::write(&tmp, &self.bytes)?;
+                set_executable(&tmp)?;
+            }
+            Placement::Link => std::os::unix::fs::symlink(self.path, &tmp)
+                .with_context(|| format!("cannot link {}", bridge.display()))?,
+        }
+        std::fs::rename(&tmp, bridge)?;
+        Ok(())
+    }
+}
+
 /// What a sync did.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct SyncReport {
@@ -238,17 +337,30 @@ pub struct SyncReport {
     pub skipped: Skipped,
 }
 
-fn find_windows_claps(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+/// The 64-bit Windows `.clap` files below `dir`. Other files named `.clap` (Linux plugins in a
+/// folder of mixed plugins) are left alone; 32-bit Windows ones are reported as skipped.
+fn find_windows_claps(
+    dir: &Path,
+    depth: usize,
+    out: &mut Vec<PathBuf>,
+    skipped: &mut Vec<(PathBuf, String)>,
+) {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return;
     };
     let mut paths: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
     paths.sort();
     for p in paths {
-        if p.extension().is_some_and(|e| e == "clap") {
-            out.push(p);
+        if p.extension().is_some_and(|e| e == "clap") && p.is_file() {
+            match pe_arch(&p) {
+                Some(PeArch::X64) => out.push(p),
+                Some(PeArch::X86) => {
+                    skipped.push((p, "32-bit (yabridge here runs 64-bit plugins)".into()))
+                }
+                _ => {}
+            }
         } else if p.is_dir() && depth < MAX_DEPTH {
-            find_windows_claps(&p, depth + 1, out);
+            find_windows_claps(&p, depth + 1, out, skipped);
         }
     }
 }
@@ -261,19 +373,24 @@ pub fn sync_clap_bridges(
     chainloader: &Path,
     out_dir: &Path,
 ) -> Result<SyncReport> {
-    if !chainloader.is_file() {
-        bail!(
-            "yabridge's CLAP chainloader is missing: {}",
-            chainloader.display()
-        );
-    }
-    let wanted_bytes = std::fs::read(chainloader)?;
+    sync_clap_bridges_with(plugin_dirs, chainloader, out_dir, Placement::Copy)
+}
+
+/// [`sync_clap_bridges`] with a choice of how the chainloader is placed.
+pub fn sync_clap_bridges_with(
+    plugin_dirs: &[PathBuf],
+    chainloader: &Path,
+    out_dir: &Path,
+    placement: Placement,
+) -> Result<SyncReport> {
+    let chainloader = Chainloader::new(chainloader, placement, "CLAP")?;
     let mut report = SyncReport::default();
     let mut wanted: Vec<PathBuf> = Vec::new();
 
     for dir in plugin_dirs {
-        let mut files = Vec::new();
-        find_windows_claps(dir, 0, &mut files);
+        let (mut files, mut skipped) = (Vec::new(), Vec::new());
+        find_windows_claps(dir, 0, &mut files, &mut skipped);
+        report.skipped.extend(skipped);
         for real in files {
             let rel = real.strip_prefix(dir).unwrap_or(&real);
             let bridge = out_dir.join(rel);
@@ -282,17 +399,12 @@ pub fn sync_clap_bridges(
             if let Some(parent) = bridge.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            let same_bridge = std::fs::read(&bridge).is_ok_and(|b| b == wanted_bytes);
             let same_link = std::fs::read_link(&link).is_ok_and(|t| t == real);
-            if same_bridge && same_link {
+            if chainloader.is_placed(&bridge) && same_link {
                 report.unchanged += 1;
                 continue;
             }
-            // Write beside and rename, so a running app never sees half a chainloader.
-            let tmp = bridge.with_extension("tmp");
-            std::fs::write(&tmp, &wanted_bytes)?;
-            set_executable(&tmp)?;
-            std::fs::rename(&tmp, &bridge)?;
+            chainloader.place(&bridge)?;
             let _ = std::fs::remove_file(&link);
             std::os::unix::fs::symlink(&real, &link)
                 .with_context(|| format!("cannot link {}", link.display()))?;
@@ -436,13 +548,17 @@ pub fn sync_vst3_bridges(
     chainloader: &Path,
     out_dir: &Path,
 ) -> Result<SyncReport> {
-    if !chainloader.is_file() {
-        bail!(
-            "yabridge's VST3 chainloader is missing: {}",
-            chainloader.display()
-        );
-    }
-    let wanted_bytes = std::fs::read(chainloader)?;
+    sync_vst3_bridges_with(plugin_dirs, chainloader, out_dir, Placement::Copy)
+}
+
+/// [`sync_vst3_bridges`] with a choice of how the chainloader is placed.
+pub fn sync_vst3_bridges_with(
+    plugin_dirs: &[PathBuf],
+    chainloader: &Path,
+    out_dir: &Path,
+    placement: Placement,
+) -> Result<SyncReport> {
+    let chainloader = Chainloader::new(chainloader, placement, "VST3")?;
     let mut report = SyncReport::default();
     let mut wanted: Vec<PathBuf> = Vec::new();
 
@@ -464,7 +580,6 @@ pub fn sync_vst3_bridges(
             wanted.push(bundle.clone());
             std::fs::create_dir_all(so.parent().unwrap())?;
             std::fs::create_dir_all(link.parent().unwrap())?;
-            let same_so = std::fs::read(&so).is_ok_and(|b| b == wanted_bytes);
             let same_link = std::fs::read_link(&link).is_ok_and(|t| t == m.module);
             if let Some(res) = &m.resources {
                 let rl = bundle.join("Contents/Resources");
@@ -474,14 +589,11 @@ pub fn sync_vst3_bridges(
                     let _ = std::os::unix::fs::symlink(res, &rl);
                 }
             }
-            if same_so && same_link {
+            if chainloader.is_placed(&so) && same_link {
                 report.unchanged += 1;
                 continue;
             }
-            let tmp = so.with_extension("tmp");
-            std::fs::write(&tmp, &wanted_bytes)?;
-            set_executable(&tmp)?;
-            std::fs::rename(&tmp, &so)?;
+            chainloader.place(&so)?;
             let _ = std::fs::remove_file(&link);
             std::os::unix::fs::symlink(&m.module, &link)
                 .with_context(|| format!("cannot link {}", link.display()))?;
@@ -577,13 +689,17 @@ pub fn sync_vst2_bridges(
     chainloader: &Path,
     out_dir: &Path,
 ) -> Result<SyncReport> {
-    if !chainloader.is_file() {
-        bail!(
-            "yabridge's VST2 chainloader is missing: {}",
-            chainloader.display()
-        );
-    }
-    let wanted_bytes = std::fs::read(chainloader)?;
+    sync_vst2_bridges_with(plugin_dirs, chainloader, out_dir, Placement::Copy)
+}
+
+/// [`sync_vst2_bridges`] with a choice of how the chainloader is placed.
+pub fn sync_vst2_bridges_with(
+    plugin_dirs: &[PathBuf],
+    chainloader: &Path,
+    out_dir: &Path,
+    placement: Placement,
+) -> Result<SyncReport> {
+    let chainloader = Chainloader::new(chainloader, placement, "VST2")?;
     let mut report = SyncReport::default();
     let mut wanted: Vec<PathBuf> = Vec::new();
     for dir in plugin_dirs {
@@ -598,16 +714,12 @@ pub fn sync_vst2_bridges(
             if let Some(parent) = bridge.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            let same_bridge = std::fs::read(&bridge).is_ok_and(|b| b == wanted_bytes);
             let same_link = std::fs::read_link(&link).is_ok_and(|t| t == real);
-            if same_bridge && same_link {
+            if chainloader.is_placed(&bridge) && same_link {
                 report.unchanged += 1;
                 continue;
             }
-            let tmp = bridge.with_extension("tmp");
-            std::fs::write(&tmp, &wanted_bytes)?;
-            set_executable(&tmp)?;
-            std::fs::rename(&tmp, &bridge)?;
+            chainloader.place(&bridge)?;
             let _ = std::fs::remove_file(&link);
             std::os::unix::fs::symlink(&real, &link)
                 .with_context(|| format!("cannot link {}", link.display()))?;
@@ -684,8 +796,8 @@ mod tests {
         let prefix = root.join("prefix");
         let claps = prefix.join("drive_c/Program Files/Common Files/CLAP");
         std::fs::create_dir_all(claps.join("u-he")).unwrap();
-        std::fs::write(claps.join("Six Sines.clap"), b"MZ six").unwrap();
-        std::fs::write(claps.join("u-he/Diva.clap"), b"MZ diva").unwrap();
+        std::fs::write(claps.join("Six Sines.clap"), pe(0x8664)).unwrap();
+        std::fs::write(claps.join("u-he/Diva.clap"), pe(0x8664)).unwrap();
         std::fs::write(claps.join("readme.txt"), b"x").unwrap();
         let yab = root.join("yabridge");
         std::fs::create_dir_all(&yab).unwrap();
@@ -782,7 +894,7 @@ mod tests {
             .prefix
             .join("drive_c/users/hawa/AppData/Local/Programs/Common/CLAP");
         std::fs::create_dir_all(&user).unwrap();
-        std::fs::write(user.join("Odin.clap"), b"MZ").unwrap();
+        std::fs::write(user.join("Odin.clap"), pe(0x8664)).unwrap();
         assert_eq!(rt.clap_dirs().len(), 2);
         assert_eq!(rt.sync_clap_bridges(&out).unwrap().created.len(), 3);
     }
@@ -967,5 +1079,87 @@ mod tests {
         let after = rt.sync_vst2_bridges(&[], &out).unwrap();
         assert_eq!(after.removed.len(), 1);
         assert!(!synth.exists());
+    }
+
+    #[test]
+    fn linked_bridges_point_at_the_chainloader_and_follow_it() {
+        let (rt, out) = fixture("linked");
+        let report = rt.sync_clap_bridges_with(&out, Placement::Link).unwrap();
+        assert_eq!(report.created.len(), 2);
+        for name in ["Six Sines", "u-he/Diva"] {
+            let bridge = out.join(format!("{name}.clap"));
+            assert_eq!(std::fs::read_link(&bridge).unwrap(), rt.chainloader());
+            assert!(out.join(format!("{name}.clap-win")).exists());
+        }
+        // Nothing to do the second time, and the chainloader itself is not rewritten.
+        let again = rt.sync_clap_bridges_with(&out, Placement::Link).unwrap();
+        assert_eq!((again.created.len(), again.unchanged), (0, 2));
+        // Copies from an earlier sync become links, and links become copies.
+        let back = rt.sync_clap_bridges(&out).unwrap();
+        assert_eq!(back.created.len(), 2);
+        assert!(
+            !std::fs::symlink_metadata(out.join("Six Sines.clap"))
+                .unwrap()
+                .is_symlink()
+        );
+        let relinked = rt.sync_clap_bridges_with(&out, Placement::Link).unwrap();
+        assert_eq!(relinked.created.len(), 2);
+        // A bridge whose plugin is gone is removed, link and all.
+        std::fs::remove_file(
+            rt.prefix
+                .join("drive_c/Program Files/Common Files/CLAP/u-he/Diva.clap"),
+        )
+        .unwrap();
+        let report = rt.sync_clap_bridges_with(&out, Placement::Link).unwrap();
+        assert_eq!(report.removed, vec![out.join("u-he/Diva.clap")]);
+        assert!(std::fs::symlink_metadata(out.join("u-he/Diva.clap")).is_err());
+    }
+
+    #[test]
+    fn linked_vst3_and_vst2_bridges_work_the_same_way() {
+        let (rt, out) = vst3_fixture("linked3");
+        let report = rt.sync_vst3_bridges_with(&out, Placement::Link).unwrap();
+        assert_eq!(report.created.len(), 3);
+        let so = out.join("Podolski(x64).vst3/Contents/x86_64-linux/Podolski(x64).so");
+        assert_eq!(std::fs::read_link(&so).unwrap(), rt.vst3_chainloader());
+        let again = rt.sync_vst3_bridges_with(&out, Placement::Link).unwrap();
+        assert_eq!((again.created.len(), again.unchanged), (0, 3));
+
+        let dll_dir = rt.prefix.join("drive_c/Program Files/VstPlugins");
+        std::fs::create_dir_all(&dll_dir).unwrap();
+        std::fs::write(
+            dll_dir.join("Synth.dll"),
+            [pe(0x8664), b"VSTPluginMain".to_vec()].concat(),
+        )
+        .unwrap();
+        std::fs::write(rt.vst2_chainloader(), b"ELF vst2").unwrap();
+        let vst2_out = out.join("vst2");
+        let report = rt
+            .sync_vst2_bridges_with(&[], &vst2_out, Placement::Link)
+            .unwrap();
+        assert_eq!(report.created.len(), 1);
+        let bridge = vst2_out.join("VstPlugins/Synth.so");
+        assert_eq!(std::fs::read_link(&bridge).unwrap(), rt.vst2_chainloader());
+    }
+
+    #[test]
+    fn a_linux_clap_in_a_mixed_folder_is_not_bridged_and_a_32_bit_one_is_reported() {
+        let (rt, out) = fixture("mixed");
+        let dir = rt.prefix.join("drive_c/Program Files/Common Files/CLAP");
+        std::fs::write(dir.join("Native.clap"), b"\x7fELF native plugin").unwrap();
+        std::fs::write(dir.join("Old32.clap"), pe(0x014c)).unwrap();
+        let report = rt.sync_clap_bridges(&out).unwrap();
+        assert_eq!(
+            report.created.len(),
+            2,
+            "only the two 64-bit Windows plugins"
+        );
+        assert!(!out.join("Native.clap").exists() && !out.join("Old32.clap").exists());
+        let names: Vec<_> = report
+            .skipped
+            .iter()
+            .map(|(p, _)| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["Old32.clap"]);
     }
 }

@@ -41,9 +41,7 @@ fn yes() -> bool {
     true
 }
 
-/// A release named `runtime` on the project's repository holds the current archive and manifest.
-pub const DEFAULT_RUNTIME_URL: &str =
-    "https://github.com/hawawa4/linuxclap/releases/download/runtime/runtime-manifest.json";
+pub use merlin_wine::layout::DEFAULT_RUNTIME_URL;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]

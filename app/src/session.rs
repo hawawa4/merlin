@@ -498,6 +498,11 @@ impl Session {
         self.windows_status = "contacting the download server...".into();
         self.restart_after_job = true;
         let changed = self.runtime_changed.clone();
+        let prefix = self
+            .settings
+            .wine_prefix
+            .clone()
+            .unwrap_or_else(crate::paths::wine_prefix);
         let started = self.start_windows_job(move |tx| {
             let last = std::cell::Cell::new(String::new());
             let say = |text: String| {
@@ -514,6 +519,9 @@ impl Session {
                 Progress::Verifying => say("checking the download...".into()),
                 Progress::Unpacking => say("unpacking...".into()),
             })?;
+            // Bridges made for other plugin hosts (`merlin-bridge`) use this prefix for
+            // plugins that are in no prefix; a new runtime must say so too.
+            let _ = installed.set_default_prefix(&prefix);
             // Wine is chosen at startup: a restart is needed unless this process already runs
             // with exactly this runtime.
             let in_use = std::env::var_os("WINELOADER").is_some_and(|w| w == installed.wine);

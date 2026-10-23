@@ -11,7 +11,7 @@ fn xdg(var: &str, fallback: &str) -> PathBuf {
 
 /// Settings: `~/.config/merlin`.
 pub fn config_dir() -> PathBuf {
-    xdg("XDG_CONFIG_HOME", ".config").join("merlin")
+    merlin_wine::layout::config_dir()
 }
 
 /// Plugin cache: `~/.cache/merlin`.
@@ -33,17 +33,17 @@ pub fn rigs_dir() -> PathBuf {
 
 /// Data that is ours to manage: `~/.local/share/merlin`.
 pub fn data_dir() -> PathBuf {
-    xdg("XDG_DATA_HOME", ".local/share").join("merlin")
+    merlin_wine::layout::data_dir()
 }
 
 /// The downloaded Wine + yabridge pair ("Windows plugin support").
 pub fn runtime_dir() -> PathBuf {
-    data_dir().join("runtime")
+    merlin_wine::layout::runtime_dir()
 }
 
 /// The Wine prefix our Windows plugins live in.
 pub fn wine_prefix() -> PathBuf {
-    data_dir().join("wineprefix")
+    merlin_wine::layout::wine_prefix()
 }
 
 /// Bridges (yabridge chainloader copies) for the Windows CLAP plugins in that prefix.
@@ -97,6 +97,14 @@ pub fn rig_file_name(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_scan_skips_the_folder_the_bridge_tool_writes() {
+        assert_eq!(
+            merlin_scanner::DAW_BRIDGES_DIR,
+            merlin_wine::layout::DAW_BRIDGES_DIR
+        );
+    }
 
     #[test]
     fn rig_names_become_safe_file_names() {

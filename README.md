@@ -12,6 +12,7 @@ map, zones, layers, save/open and autosave. Each slot has built-in effects (EQ, 
 - [docs/research.md](docs/research.md): existing products and technical research
 - [docs/plan.md](docs/plan.md): architecture and roadmap
 - [docs/wine.md](docs/wine.md): the Wine + yabridge runtime, our patches, and what could go upstream
+- [crates/bridge](crates/bridge/): `merlin-bridge`, Windows plugins for other plugin hosts (REAPER, Bitwig, Ardour)
 - [spikes/](spikes/): throwaway experiments that answered the Phase 0 questions
 - [crates/](crates/): the product, built up in the order of the plan's Phase 1:
   `model` (rig, slots, filters), `hosting` (plugin API, CLAP host, built-in instruments),

@@ -49,6 +49,18 @@ Already applied in `vendor/yabridge` (about 45 lines, `src/common/communication/
 
 The yabridge fork finds its own runtime, so a bridge also works when a DAW loads it with no environment set up (`vendor/yabridge/PATCHES.md`, items 2 and 3). A runtime folder holds `yabridge/` and `wine/` side by side. A bridge that is a **symlink** to `yabridge/libyabridge-chainloader-*.so` finds the libraries, `yabridge-host.exe` and `wine/bin/wine` from there; a *copied* chainloader (what the app writes today) still relies on `PATH` and `WINELOADER`, as before. A plugin inside a Wine prefix uses that prefix; one outside every prefix uses the prefix named on the first line of `yabridge/default-wineprefix`, if that file exists, and otherwise `~/.wine` like stock yabridge. `tools/check-standalone-bridge.sh` checks both cases in a clean environment (no `PATH` entry, no `WINELOADER`, a throwaway `HOME`).
 
+## `merlin-bridge`: Windows plugins for other plugin hosts
+
+[crates/bridge](../crates/bridge/) is a small command line tool that makes our Wine and yabridge usable from REAPER, Bitwig, Ardour and any other host, without the app. It is `yabridgectl` with the runtime included (`just bridge --help`):
+
+- `runtime install` downloads the same Wine + yabridge archive the app uses, into the same folder (`~/.local/share/merlin/runtime`), so installing it from either place serves both.
+- `sync [FOLDER...]` makes a bridge for every 64-bit Windows CLAP, VST3 and VST2 plugin in the Wine prefix the app uses and in each folder named (folders are remembered in `~/.config/merlin/bridge.json`). Bridges go to `~/.clap/merlin-bridges`, `~/.vst3/merlin-bridges` and `~/.vst/merlin-bridges`, one subfolder per source. Plugin files are never touched.
+- `install FILE.exe|.msi` runs an installer in the prefix, then syncs. `forget FOLDER` and `clean` remove bridges. `status` shows what is installed and bridged, and warns when `yabridgectl` has bridged the same plugins (a host would list them twice).
+
+Bridges here are **symlinks** (`Placement::Link`) to `<runtime>/current/yabridge/libyabridge-chainloader-*.so`. `current` is a link to the active runtime that the runtime install keeps up to date (the app's install too), so a runtime update needs no new `sync`; `sync` is for installing or removing plugins. The app keeps making its own copied bridges in `~/.local/share/merlin/bridges` and its scan skips `merlin-bridges`, so it does not list plugins twice.
+
+Not covered: nothing watches the folders, so a new plugin needs a `sync`; the tool does not stop a plugin that is known to crash Wine (Cardinal) from being bridged; a folder inside someone's own Wine prefix runs in that prefix with our Wine (`sync` says so).
+
 ## Known limits
 
 - **64-bit plugins only.** The bitbridge is off, and Wine 11's default WoW64 mode is incompatible with it.

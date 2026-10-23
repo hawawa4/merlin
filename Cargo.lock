@@ -987,6 +987,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "merlin-bridge"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "merlin-wine",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "merlin-control"
 version = "0.0.0"
 dependencies = [

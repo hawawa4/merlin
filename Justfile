@@ -254,3 +254,7 @@ listen:
             [ -f "$w" ] && { echo "▶ $(basename "$w")"; pw-play "$w"; }; \
         done; \
     done
+
+# Windows plugins for other plugin hosts (REAPER, Bitwig, Ardour...). Try: just bridge --help
+bridge *args:
+    cargo run --release -q -p merlin-bridge -- {{args}}
