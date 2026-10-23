@@ -473,9 +473,7 @@ fn controls(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<
         ) {
             ui.label("macro");
             let mut shown = st.new_base + 1;
-            ui.add(
-                egui::DragValue::new(&mut shown).range(1..=merlin_model::MACROS_PER_SLOT),
-            );
+            ui.add(egui::DragValue::new(&mut shown).range(1..=merlin_model::MACROS_PER_SLOT));
             st.new_base = shown - 1;
         }
         if st.new_kind == ActionKind::RecallSnapshot {

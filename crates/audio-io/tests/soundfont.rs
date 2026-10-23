@@ -8,9 +8,7 @@ use assert_no_alloc::{AllocDisabler, assert_no_alloc};
 use merlin_audio_io::{Item, OfflineRenderer};
 use merlin_engine::{Command, SelectMode};
 use merlin_hosting::soundfont::{Font, SoundFontPlugin, info_for, is_soundfont};
-use merlin_hosting::{
-    Io, MidiEvent, PluginHandle, PluginProcessor, ProcessStatus, SamplerTone,
-};
+use merlin_hosting::{Io, MidiEvent, PluginHandle, PluginProcessor, ProcessStatus, SamplerTone};
 use merlin_model::Format;
 
 #[global_allocator]

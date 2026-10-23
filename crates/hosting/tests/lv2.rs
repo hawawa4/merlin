@@ -18,10 +18,7 @@ fn surge() -> Option<PathBuf> {
     p.join("manifest.ttl").exists().then_some(p)
 }
 
-fn render(
-    proc: &mut dyn merlin_hosting::PluginProcessor,
-    events: &[MidiEvent],
-) -> Vec<f32> {
+fn render(proc: &mut dyn merlin_hosting::PluginProcessor, events: &[MidiEvent]) -> Vec<f32> {
     let (mut l, mut r) = (vec![0.0; 128], vec![0.0; 128]);
     proc.process(
         &mut Io {

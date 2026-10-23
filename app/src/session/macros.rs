@@ -147,11 +147,7 @@ impl Session {
                 if let MacroTarget::Param { min, max, .. } = target
                     && max > min
                 {
-                    let key = (
-                        slot as u8,
-                        insert.unwrap_or(merlin_model::INSTRUMENT),
-                        *id,
-                    );
+                    let key = (slot as u8, insert.unwrap_or(merlin_model::INSTRUMENT), *id);
                     self.param_values
                         .insert(key, ((v - min) / (max - min)).clamp(0.0, 1.0) as f32);
                 }

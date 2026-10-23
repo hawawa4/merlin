@@ -289,10 +289,7 @@ impl Session {
     }
 
     /// The plugin and call id a mapped parameter lives in.
-    fn param_target(
-        &self,
-        key: merlin_control::ParamKey,
-    ) -> Option<(usize, Option<usize>)> {
+    fn param_target(&self, key: merlin_control::ParamKey) -> Option<(usize, Option<usize>)> {
         let (slot, insert, _) = key;
         let slot = slot as usize;
         (slot < UI_SLOTS).then_some(())?;

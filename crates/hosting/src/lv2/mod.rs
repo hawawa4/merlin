@@ -22,8 +22,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
-use merlin_model::Format;
 use libloading::os::unix::Library;
+use merlin_model::Format;
 
 use crate::{
     EditorSize, ParamInfo, PluginEditor, PluginHandle, PluginInfo, PluginProcessor, Waker,

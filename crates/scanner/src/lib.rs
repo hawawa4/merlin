@@ -378,10 +378,7 @@ mod tests {
     }
 
     fn tempdir(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!(
-            "merlin-scanner-{name}-{}",
-            std::process::id()
-        ));
+        let d = std::env::temp_dir().join(format!("merlin-scanner-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
@@ -436,10 +433,7 @@ mod tests {
             .into_iter()
             .map(|(p, _)| p.strip_prefix(&d).unwrap().to_string_lossy().into_owned())
             .collect();
-        assert_eq!(
-            found,
-            ["Vendor/merlin-bridges/z.clap", "Vendor/y.clap"]
-        );
+        assert_eq!(found, ["Vendor/merlin-bridges/z.clap", "Vendor/y.clap"]);
     }
 
     #[test]

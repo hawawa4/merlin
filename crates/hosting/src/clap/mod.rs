@@ -75,12 +75,7 @@ impl ClapLibrary {
             .find(|p| p.id == plugin_id)
             .with_context(|| format!("no plugin '{plugin_id}' in {}", self.path.display()))?;
         let id = CString::new(plugin_id)?;
-        let host_info = HostInfo::new(
-            "Merlin",
-            "Merlin",
-            "",
-            env!("CARGO_PKG_VERSION"),
-        )?;
+        let host_info = HostInfo::new("Merlin", "Merlin", "", env!("CARGO_PKG_VERSION"))?;
         let poller_waker = waker.clone();
         let instance = PluginInstance::<ClapHost>::new(
             |_| Shared::new(waker),

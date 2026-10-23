@@ -12,12 +12,12 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::time::Instant;
 
 use anyhow::{Context, Result};
-use merlin_engine::{ClickOut, Engine, MAX_INPUTS, MidiOutEvent};
-use merlin_hosting::MidiEvent;
 use jack::{
     AudioOut, Client, ClientOptions, Control, MidiIn, MidiOut, NotificationHandler, Port,
     PortFlags, RawMidi,
 };
+use merlin_engine::{ClickOut, Engine, MAX_INPUTS, MidiOutEvent};
+use merlin_hosting::MidiEvent;
 
 /// The `input` of a [`ControlEvent`] that reports a timeline marker (its id is in `data`).
 pub const MARKER_INPUT: u8 = 0xFE;

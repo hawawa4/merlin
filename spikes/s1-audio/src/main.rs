@@ -253,10 +253,7 @@ fn main() -> Result<()> {
         }
     }
     let midi_sources = c.ports(None, Some("8 bit raw midi"), PortFlags::IS_OUTPUT);
-    for src in midi_sources
-        .iter()
-        .filter(|p| !p.starts_with("merlin"))
-    {
+    for src in midi_sources.iter().filter(|p| !p.starts_with("merlin")) {
         match c.connect_ports_by_name(src, &midi_in_name) {
             Ok(()) => println!("connected {src} -> midi_in"),
             Err(e) => println!("could not connect {src}: {e}"),

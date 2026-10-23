@@ -5,9 +5,7 @@ use std::process::Command;
 use std::sync::Arc;
 
 use merlin_hosting::vst2::Vst2Library;
-use merlin_hosting::{
-    HostEvent, Io, MidiEvent, PluginHandle, ProcessStatus, Waker, host_time,
-};
+use merlin_hosting::{HostEvent, Io, MidiEvent, PluginHandle, ProcessStatus, Waker, host_time};
 
 struct Nobody;
 impl Waker for Nobody {

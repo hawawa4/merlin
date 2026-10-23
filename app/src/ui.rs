@@ -122,13 +122,7 @@ pub enum Action {
     /// Switch MIDI map mode on or off.
     SetMapMode(bool),
     /// Script-only: map a control to the first parameter of a plugin whose name has this text.
-    MapParamNamed(
-        merlin_model::SourceKind,
-        usize,
-        Option<usize>,
-        String,
-        bool,
-    ),
+    MapParamNamed(merlin_model::SourceKind, usize, Option<usize>, String, bool),
     CancelLearn,
     RemoveMapping(usize),
     SetTakeover(usize, merlin_model::Takeover),
@@ -158,12 +152,7 @@ pub enum Action {
     RenameRig(String),
     SetMacro(usize, usize, f32),
     RenameMacro(usize, usize, String),
-    AddMacroParam(
-        usize,
-        usize,
-        Option<usize>,
-        merlin_hosting::ParamInfo,
-    ),
+    AddMacroParam(usize, usize, Option<usize>, merlin_hosting::ParamInfo),
     AddMacroSampler(usize, usize, merlin_model::SamplerField),
     RemoveMacroTarget(usize, usize, usize),
     SetMacroRange(usize, usize, usize, f32, f32),

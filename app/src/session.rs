@@ -236,8 +236,7 @@ pub struct Session {
     /// teaches it.
     pub map_mode: bool,
     /// What each plugin said about its parameters, by (slot, insert).
-    param_cache:
-        std::collections::HashMap<(usize, Option<usize>), Vec<merlin_hosting::ParamInfo>>,
+    param_cache: std::collections::HashMap<(usize, Option<usize>), Vec<merlin_hosting::ParamInfo>>,
     /// MIDI activity: the message count last seen per input, and until when its light stays on.
     midi_seen: [u32; merlin_engine::MAX_INPUTS],
     midi_lit: [Option<Instant>; merlin_engine::MAX_INPUTS],
@@ -1090,11 +1089,8 @@ impl Session {
             proxy: Mutex::new(self.proxy.clone()),
             slot: i,
         });
-        let plugin: Box<dyn PluginHandle> = if merlin_hosting::soundfont::is_soundfont(path)
-        {
-            Box::new(merlin_hosting::soundfont::SoundFontPlugin::open(
-                path,
-            )?)
+        let plugin: Box<dyn PluginHandle> = if merlin_hosting::soundfont::is_soundfont(path) {
+            Box::new(merlin_hosting::soundfont::SoundFontPlugin::open(path)?)
         } else if path.extension().is_some_and(|e| e == "vst3") {
             Box::new(Vst3Library::load(path)?.create(id, waker)?)
         } else if path.extension().is_some_and(|e| e == "so") {
@@ -1549,9 +1545,7 @@ impl Session {
         let transport = &self.engine.shared.transport;
         merlin_hosting::host_time::set_tempo(transport.tempo());
         merlin_hosting::host_time::set_playing(transport.running());
-        merlin_hosting::host_time::set_beats_per_bar(u32::from(
-            self.rig.transport.beats_per_bar,
-        ));
+        merlin_hosting::host_time::set_beats_per_bar(u32::from(self.rig.transport.beats_per_bar));
         // While backing tracks are being re-armed or waited for, look again soon.
         let backing = (self.needs_rearm || self.pending_start.is_some())
             .then(|| now + Duration::from_millis(50));

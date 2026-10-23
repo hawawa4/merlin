@@ -173,10 +173,7 @@ fn song_editor(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut V
                             if ui
                                 .add(
                                     egui::DragValue::new(&mut t)
-                                        .range(
-                                            merlin_model::MIN_TEMPO
-                                                ..=merlin_model::MAX_TEMPO,
-                                        )
+                                        .range(merlin_model::MIN_TEMPO..=merlin_model::MAX_TEMPO)
                                         .suffix(" bpm"),
                                 )
                                 .changed()
@@ -313,8 +310,7 @@ fn timeline(ui: &mut egui::Ui, s: &Session, n: usize, actions: &mut Vec<Action>)
                     let mut shown = u32::from(*part) + 1;
                     ui.label("part");
                     ui.add(
-                        egui::DragValue::new(&mut shown)
-                            .range(1..=merlin_model::MAX_PARTS as u32),
+                        egui::DragValue::new(&mut shown).range(1..=merlin_model::MAX_PARTS as u32),
                     );
                     *part = (shown - 1) as u8;
                 }
