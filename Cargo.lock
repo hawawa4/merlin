@@ -934,159 +934,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "merlin"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "egui",
- "egui-wgpu",
- "egui-winit",
- "merlin-audio-io",
- "merlin-backing",
- "merlin-control",
- "merlin-embed",
- "merlin-engine",
- "merlin-hosting",
- "merlin-model",
- "merlin-scanner",
- "merlin-wine",
- "launchkey-mk3",
- "libc",
- "pollster",
- "rtrb",
- "serde",
- "serde_json",
- "surface-api",
- "toml",
- "wgpu",
- "winit",
-]
-
-[[package]]
-name = "merlin-audio-io"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "assert_no_alloc",
- "merlin-engine",
- "merlin-hosting",
- "merlin-model",
- "jack",
- "libc",
- "rtrb",
-]
-
-[[package]]
-name = "merlin-backing"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "rtrb",
- "rubato",
- "symphonia",
-]
-
-[[package]]
-name = "merlin-bridge"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "merlin-wine",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "merlin-control"
-version = "0.0.0"
-dependencies = [
- "merlin-model",
- "surface-api",
-]
-
-[[package]]
-name = "merlin-dsp"
-version = "0.0.0"
-dependencies = [
- "merlin-model",
-]
-
-[[package]]
-name = "merlin-embed"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "merlin-hosting",
- "merlin-model",
- "x11rb",
-]
-
-[[package]]
-name = "merlin-engine"
-version = "0.0.0"
-dependencies = [
- "assert_no_alloc",
- "merlin-backing",
- "merlin-dsp",
- "merlin-hosting",
- "merlin-model",
- "proptest",
- "rtrb",
-]
-
-[[package]]
-name = "merlin-hosting"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "clack-extensions",
- "clack-host",
- "merlin-model",
- "libc",
- "libloading 0.9.0",
- "oxisynth",
- "oxrdf",
- "oxttl",
- "rtrb",
- "serde",
- "vst3",
- "x11rb",
-]
-
-[[package]]
-name = "merlin-model"
-version = "0.0.0"
-dependencies = [
- "base64",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "merlin-scanner"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "merlin-hosting",
- "merlin-model",
- "libc",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "merlin-wine"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "ruzstd",
- "serde",
- "serde_json",
- "sha2",
- "tar",
-]
-
-[[package]]
 name = "itertools"
 version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1341,6 +1188,159 @@ name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
+
+[[package]]
+name = "merlin"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "egui",
+ "egui-wgpu",
+ "egui-winit",
+ "launchkey-mk3",
+ "libc",
+ "merlin-audio-io",
+ "merlin-backing",
+ "merlin-control",
+ "merlin-embed",
+ "merlin-engine",
+ "merlin-hosting",
+ "merlin-model",
+ "merlin-scanner",
+ "merlin-wine",
+ "pollster",
+ "rtrb",
+ "serde",
+ "serde_json",
+ "surface-api",
+ "toml",
+ "wgpu",
+ "winit",
+]
+
+[[package]]
+name = "merlin-audio-io"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "assert_no_alloc",
+ "jack",
+ "libc",
+ "merlin-engine",
+ "merlin-hosting",
+ "merlin-model",
+ "rtrb",
+]
+
+[[package]]
+name = "merlin-backing"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "rtrb",
+ "rubato",
+ "symphonia",
+]
+
+[[package]]
+name = "merlin-bridge"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "merlin-wine",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "merlin-control"
+version = "0.0.0"
+dependencies = [
+ "merlin-model",
+ "surface-api",
+]
+
+[[package]]
+name = "merlin-dsp"
+version = "0.0.0"
+dependencies = [
+ "merlin-model",
+]
+
+[[package]]
+name = "merlin-embed"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "merlin-hosting",
+ "merlin-model",
+ "x11rb",
+]
+
+[[package]]
+name = "merlin-engine"
+version = "0.0.0"
+dependencies = [
+ "assert_no_alloc",
+ "merlin-backing",
+ "merlin-dsp",
+ "merlin-hosting",
+ "merlin-model",
+ "proptest",
+ "rtrb",
+]
+
+[[package]]
+name = "merlin-hosting"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clack-extensions",
+ "clack-host",
+ "libc",
+ "libloading 0.9.0",
+ "merlin-model",
+ "oxisynth",
+ "oxrdf",
+ "oxttl",
+ "rtrb",
+ "serde",
+ "vst3",
+ "x11rb",
+]
+
+[[package]]
+name = "merlin-model"
+version = "0.0.0"
+dependencies = [
+ "base64",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "merlin-scanner"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "merlin-hosting",
+ "merlin-model",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "merlin-wine"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "ruzstd",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tar",
+]
 
 [[package]]
 name = "multiversion_no_op"
