@@ -1,6 +1,5 @@
 /target
 *.wav
-/spikes/*/out/
 /test-assets/
 /runtime/
 /dist/

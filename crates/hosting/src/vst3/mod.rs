@@ -1,4 +1,4 @@
-//! VST3 hosting on the `vst3` crate (plan §4.5, decision from spike S3: Rust only, no C++ shim).
+//! VST3 hosting on the `vst3` crate (plan §4.5, decision from Phase 0: Rust only, no C++ shim).
 //!
 //! Library loading and class enumeration, plugin instances (component, controller, connection,
 //! editor view), the host objects they call back into, and the audio-thread processor.

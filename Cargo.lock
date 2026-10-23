@@ -918,12 +918,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e17592d60ebacc7d5e169f4663c5f84f9161cc90328abcfe8456f41e4dfcb284"
 
 [[package]]
-name = "hound"
-version = "3.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "62adaabb884c94955b19907d60019f4e145d091c75345379e70d1ee696f7854f"
-
-[[package]]
 name = "indexmap"
 version = "2.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1457,16 +1451,6 @@ checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
 dependencies = [
  "autocfg",
  "libm",
-]
-
-[[package]]
-name = "num_cpus"
-version = "1.17.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91df4bbde75afed763b708b7eee1e8e7651e02d97f6d5dd763e89367e957b23b"
-dependencies = [
- "hermit-abi",
- "libc",
 ]
 
 [[package]]
@@ -2233,36 +2217,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9278fb35b3e730abe136e9b395b5b81b96d06b9f5478a50f0c8430a2237b22de"
 
 [[package]]
-name = "rtsan-standalone"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fd1b6d61d69481a68e555916d3a52213846f5c2d2140bdc74ebc308e2338fc3"
-dependencies = [
- "rtsan-standalone-macros",
- "rtsan-standalone-sys",
-]
-
-[[package]]
-name = "rtsan-standalone-macros"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8320af894782374141c8e0d4521ee613a8f24d7ab08b6ad359881311e37b9ef"
-dependencies = [
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "rtsan-standalone-sys"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "362a9c531f731e574a870cdb28ee7d81178ba7a87ed54380eb9b8d8f0c3b5301"
-dependencies = [
- "num_cpus",
- "tempfile",
-]
-
-[[package]]
 name = "rubato"
 version = "0.16.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2354,107 +2308,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustysynth"
-version = "1.3.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e2fafc9b46be0b8ad0a15bb17406e34b4602987c90d12509ca71710ab545b40f"
-
-[[package]]
-name = "rustysynth-ext"
-version = "1.5.0-alpha.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f68ec88333cfee6199f9ca58f68b57d7a4504c3e11fd6d3a6632dec6e9f20149"
-dependencies = [
- "lewton",
-]
-
-[[package]]
 name = "ruzstd"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a7c1c839d570d835527c9a5e4db7cb2198683a988cb9d7293fc8674e6bd58fc8"
 dependencies = [
  "twox-hash",
-]
-
-[[package]]
-name = "s1-audio"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "assert_no_alloc",
- "jack",
- "libc",
-]
-
-[[package]]
-name = "s2-clap-embed"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "clack-extensions",
- "clack-host",
- "egui",
- "egui-wgpu",
- "egui-winit",
- "jack",
- "libc",
- "pollster",
- "rtrb",
- "wgpu",
- "winit",
- "x11rb",
-]
-
-[[package]]
-name = "s3-vst3-embed"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "egui",
- "egui-wgpu",
- "egui-winit",
- "jack",
- "libc",
- "libloading 0.9.0",
- "pollster",
- "rtrb",
- "vst3",
- "wgpu",
- "winit",
- "x11rb",
-]
-
-[[package]]
-name = "s5-rack"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "clack-extensions",
- "clack-host",
- "egui",
- "egui-wgpu",
- "egui-winit",
- "jack",
- "libc",
- "pollster",
- "rtrb",
- "wgpu",
- "winit",
- "x11rb",
-]
-
-[[package]]
-name = "s6-soundfont"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "hound",
- "libloading 0.9.0",
- "oxisynth",
- "rtsan-standalone",
- "rustysynth",
- "rustysynth-ext",
 ]
 
 [[package]]

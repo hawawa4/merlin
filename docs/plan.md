@@ -298,7 +298,7 @@ Because the whole app is an X11 client, we can create **child windows inside our
 - **The rack unit shows a preset picker** (bank/program) and a small native panel: volume envelope offsets, filter cutoff/resonance, reverb/chorus send to the slot's own FX, polyphony, tuning. MIDI Program Change on the slot's input switches presets.
 - **Loading:** samples load on a worker thread (with a progress indicator) and are shared when several slots use the same file. Memory use is shown.
 
-**Engine: oxisynth** ✅ decided (spike S6, see [spikes/README.md](../spikes/README.md)).
+**Engine: oxisynth** ✅ decided (spike S6; the spike code is gone from the tree, see Phase 0 below).
 
 [oxisynth](https://github.com/PolyMeilex/oxisynth) is a pure-Rust port of FluidSynth
 (LGPL-2.1, fine under our GPLv3). It sounds like FluidSynth, handles SF2 modulators and SF3
@@ -307,7 +307,7 @@ already proven on MuseScore_General.sf3 in a sibling project (musepractice). Not
 the implementation:
 - **Patch one allocation:** `inner_noteon` collects a 64-entry `Vec` on every note-on.
   Replace it with a stack array and upstream the fix; carry it via `[patch.crates-io]`
-  until released. Keep an RTSan test (`just s6-rtsan`) in CI.
+  until released. Keep an RTSan test in CI.
 - **SF3 load** decodes all samples up front (~2.4 s and ~230 MiB for MuseScore General):
   load on a worker thread, share decoded fonts between slots, consider caching decoded PCM.
 - **No public preset list:** add an accessor in the same upstream patch (the spike probes
@@ -416,6 +416,8 @@ The dock can be collapsed, or **maximised** (rack shrinks to a strip) for large 
 
 ### Phase 0: technical spikes (3 weeks)
 
+*The spike code and its notes were removed once Phase 1 had taken what it needed; they are in git history (the last commit that has `spikes/` is the parent of the one that removed it).*
+
 | Spike | What | Passes when |
 |---|---|---|
 | S1 audio | `jack` crate on PipeWire: MIDI keyboard → sine → out | Round-trip measured with `jack_iodelay` at 64/128 frames. Realtime priority via rtkit. PipeWire's libjack loads without `pw-jack`. |
@@ -427,7 +429,7 @@ The dock can be collapsed, or **maximised** (rack shrinks to a strip) for large 
 
 **Exit:** go/no-go on Rust-only VST3, embedding approach confirmed for CLAP, VST3 and Wine, Wine + yabridge pair chosen, SoundFont engine chosen.
 
-**Phase 0 result: GO** (all six spikes done, details in `spikes/README.md`; remaining items are manual input checks, not open questions):
+**Phase 0 result: GO** (all six spikes done; remaining items are manual input checks, not open questions):
 
 | Question | Answer |
 |---|---|

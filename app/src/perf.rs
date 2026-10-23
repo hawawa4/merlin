@@ -346,7 +346,7 @@ mod tests {
 
     #[test]
     fn this_machines_situation_is_diagnosed_with_the_exact_fix() {
-        // The dev machine in spike S1: no realtime limit, not in the pipewire group, no rtkit.
+        // The dev machine in Phase 0: no realtime limit, not in the pipewire group, no rtkit.
         let p = PerfInputs {
             rtprio_limit: Some(0),
             memlock_limit: Some(8 * MIB),

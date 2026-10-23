@@ -76,6 +76,6 @@ We build on Wine Staging (the build script applies Staging's patchset, then ours
 
 ## Maintenance checklist
 
-- Moving to a new Wine version: change the default in `tools/build-wine.sh`, run `just wine-build`, check the three patches still apply (`patch --dry-run`), then run `just compat` and `just s4-matrix-vblank`.
+- Moving to a new Wine version: change the default in `tools/build-wine.sh`, run `just wine-build`, check the three patches still apply (`patch --dry-run`), then run `just compat` (the compatibility pass).
 - Moving yabridge: replace the contents of `vendor/yabridge` with the new upstream commit in one commit, re-apply the patch in a second, update `vendor/yabridge/UPSTREAM_COMMIT`, then `just yabridge-build`. yabridge is compiled against the Wine we ship (`winegcc` from `runtime/wine-*/`), so rebuild it whenever Wine changes. Rerun the same checks.
 - Publishing: `just package-runtime`, then upload the archive and `runtime-manifest.json` to the release the app downloads from (`DEFAULT_RUNTIME_URL` in `app/src/settings.rs`; a repo-specific URL that must change when the project moves).

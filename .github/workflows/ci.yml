@@ -9,7 +9,7 @@ env:
 
 jobs:
   crates:
-    # The product crates only. The spikes need X11/Vulkan/Wine and are not built here.
+    # The product crates only (the app needs X11/Vulkan and Wine for some tests).
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
