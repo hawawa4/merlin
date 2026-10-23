@@ -176,7 +176,8 @@ MIDI keyboard.
 
 - **yabridge** built from master `b580a9f7` (2026-08-02, 57 commits after 5.1.1: Wine 10/11
   embedding rework, cursor-offset fixes) in its upstream CI image
-  `robbert/docker-yabridge:focal` (`tools/build-yabridge.sh`, `just yabridge-build`). No host
+  `robbert/docker-yabridge:focal` (at the time of the spike; it is now vendored in `vendor/yabridge`
+  and built against our own Wine by `tools/build-yabridge.sh`, `just yabridge-build`). No host
   build dependencies; the system Wine has no headers, and we need a reproducible build to
   ship anyway. Output in `runtime/yabridge-<commit>/` (gitignored).
 - **Wine:** 11.20 Staging from `/opt/wine-staging`, pinned with `WINELOADER`. Test prefix in

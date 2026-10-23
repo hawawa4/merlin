@@ -1,44 +1,45 @@
 #!/usr/bin/env bash
-# Builds yabridge at a pinned commit, plus our patches (build-support/yabridge-patches/), in its
-# upstream CI image (no host build deps needed).
-# Output: runtime/yabridge-<commit>-patched/ with the plugin libraries and Wine host binaries.
+# Builds the vendored yabridge (vendor/yabridge, with our patches already applied) against our own
+# patched Wine (tools/build-wine.sh), in Docker. 64-bit only, no bitbridge.
+# Usage: tools/build-yabridge.sh [wine-dir-name]    (default: wine-11.20-vblank, under runtime/)
+# Output: runtime/yabridge-<upstream commit>-<wine-dir-name>/ with the plugin libraries and the
+# Wine host binaries. The meson subprojects (asio, bitsery, clap, ...) are downloaded into
+# vendor/yabridge/subprojects/ (git-ignored there); the first build needs network.
 set -euo pipefail
 
-COMMIT="${1:-b580a9f7}"   # master, 2026-08-02: Wine 10/11 embedding + cursor-offset fixes
-IMAGE="robbert/docker-yabridge:focal"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SRC="$ROOT/runtime/src/yabridge"
-PATCHES="$ROOT/build-support/yabridge-patches"
-OUT="$ROOT/runtime/yabridge-$COMMIT-patched"
+WINE_NAME="${1:-wine-11.20-vblank}"
+WINE="$ROOT/runtime/$WINE_NAME"
+SRC="$ROOT/vendor/yabridge"
+COMMIT="$(cat "$SRC/UPSTREAM_COMMIT")"
+IMAGE="merlin-yabridge-build"
+OUT="$ROOT/runtime/yabridge-$COMMIT-$WINE_NAME"
+BUILD="$ROOT/runtime/src/yabridge-build-$WINE_NAME"
 
+[ -x "$WINE/bin/winegcc" ] || { echo "no Wine at $WINE (run: just wine-build)" >&2; exit 1; }
 if [ -e "$OUT/libyabridge-clap.so" ]; then
     echo "already built: $OUT"
     exit 0
 fi
 
-mkdir -p "$ROOT/runtime/src"
-[ -d "$SRC/.git" ] || git clone https://github.com/robbert-vdh/yabridge.git "$SRC"
-git -C "$SRC" fetch --quiet origin
-git -C "$SRC" checkout --quiet "$COMMIT"
-git -C "$SRC" checkout --quiet -- src   # drop any previous patching
-for p in "$PATCHES"/*.patch; do
-    echo "applying $(basename "$p")"
-    git -C "$SRC" apply "$p"
-done
-rm -rf "$SRC/build"
+docker build -q -t "$IMAGE" "$ROOT/build-support/yabridge" >/dev/null
+rm -rf "$BUILD" && mkdir -p "$BUILD"
 
-docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -e WINEPREFIX=/tmp/prefix \
-    -v "$SRC:/src" -w /src "$IMAGE" bash -c '
+# Wine was configured with --prefix=/out, so it is mounted at /out.
+docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -e PATH="/out/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+    -e WINEPREFIX=/tmp/prefix -e WINEDEBUG=-all \
+    -v "$SRC:/src" -v "$BUILD:/build" -v "$WINE:/out:ro" -w /src "$IMAGE" bash -c '
         set -e
-        git config --global --add safe.directory /src
-        meson setup build --buildtype=release --cross-file=cross-wine.conf \
+        wine --version
+        meson setup /build --buildtype=release --cross-file=cross-wine.conf \
             --unity=on --unity-size=10000 -Dbitbridge=false
-        ninja -C build
-        strip build/libyabridge{,-chainloader}-{clap,vst2,vst3}.so build/yabridge-host.exe.so'
+        ninja -C /build
+        strip /build/libyabridge{,-chainloader}-{clap,vst2,vst3}.so /build/yabridge-host.exe.so'
 
 mkdir -p "$OUT"
-cp "$SRC"/build/libyabridge{,-chainloader}-{clap,vst2,vst3}.so \
-   "$SRC"/build/yabridge-host.exe{,.so} "$OUT/"
+cp "$BUILD"/libyabridge{,-chainloader}-{clap,vst2,vst3}.so \
+   "$BUILD"/yabridge-host.exe{,.so} "$OUT/"
 echo "$COMMIT" > "$OUT/COMMIT"
+cat "$WINE/VERSION" > "$OUT/WINE"
 echo "built: $OUT"
 ls -la "$OUT"

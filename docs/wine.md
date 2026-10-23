@@ -11,7 +11,7 @@ Windows plugins run in **our own patched Wine 11.20 (Staging)**, bridged by a **
 | Piece | Version | Where it comes from | Our changes |
 |---|---|---|---|
 | Wine | 11.20 + Wine Staging 11.20, 64-bit only (`--enable-archs=x86_64`) | `tools/build-wine.sh` (Docker, Ubuntu 24.04, `build-support/wine/Dockerfile`) → `runtime/wine-11.20-vblank/` | 3 patches, [build-support/wine-patches/](../build-support/wine-patches/) |
-| yabridge | master `b580a9f7` (2026-08-02), `-Dbitbridge=false` | `tools/build-yabridge.sh` (upstream's `robbert/docker-yabridge:focal` CI image) → `runtime/yabridge-b580a9f7-patched/` | 1 patch, [build-support/yabridge-patches/](../build-support/yabridge-patches/) |
+| yabridge | master `b580a9f7` (2026-08-02), vendored in [vendor/yabridge/](../vendor/yabridge/), `-Dbitbridge=false` | `tools/build-yabridge.sh` (Docker, Ubuntu 24.04, `build-support/yabridge/Dockerfile`, compiled with our own Wine's `winegcc`) → `runtime/yabridge-b580a9f7-wine-11.20-vblank/` | 1 patch, listed in [vendor/yabridge/PATCHES.md](../vendor/yabridge/PATCHES.md) |
 | Prefix | created by `wineboot -u`, `WINEDLLOVERRIDES=mscoree,mshtml=d` (no Mono/Gecko dialogs) | `crates/wine` | none |
 | Package | `wine-11.20-vblank_yabridge-b580a9f7.tar.zst`, about 40 MB, with a SHA-256 manifest | `tools/package-runtime.sh`, fetched by `crates/wine/src/runtime.rs` | none |
 
@@ -43,7 +43,7 @@ Suggested upstream order: 0001 alone first (small, with a test, and it unfreezes
 
 ## The yabridge patch
 
-`0001-Call-a-host-registered-hook-when-a-socket-to-the-Wine-host-fails.patch` (about 45 lines, `src/common/communication/common.h`): when a socket to the Wine host fails, call a hook the host application can register (`yabridge_socket_failed_hook`) before the C++ exception propagates. Without it, a crashing Windows plugin makes the next call across yabridge either block forever or throw a C++ exception through our JACK callback, which aborts a Rust process. The app registers the hook, quarantines the plugin, kills the other Wine hosts and restarts from the autosave (`app/src/guard.rs`). Probably not acceptable upstream as is (it is a global hook for one kind of host), but a general "error callback" might be.
+Already applied in `vendor/yabridge` (about 45 lines, `src/common/communication/common.h`; the first git commit of that folder is upstream unmodified, so `git log -p vendor/yabridge` shows it): when a socket to the Wine host fails, call a hook the host application can register (`yabridge_socket_failed_hook`) before the C++ exception propagates. Without it, a crashing Windows plugin makes the next call across yabridge either block forever or throw a C++ exception through our JACK callback, which aborts a Rust process. The app registers the hook, quarantines the plugin, kills the other Wine hosts and restarts from the autosave (`app/src/guard.rs`). Probably not acceptable upstream as is (it is a global hook for one kind of host), but a general "error callback" might be.
 
 ## Known limits
 
@@ -61,5 +61,5 @@ We build on Wine Staging (the build script applies Staging's patchset, then ours
 ## Maintenance checklist
 
 - Moving to a new Wine version: change the default in `tools/build-wine.sh`, run `just wine-build`, check the three patches still apply (`patch --dry-run`), then run `just compat` and `just s4-matrix-vblank`.
-- Moving yabridge: change `COMMIT` in `tools/build-yabridge.sh`, rebuild, rerun the same checks. Rebuild yabridge against the same Wine we ship when possible (today it is built in upstream's Ubuntu 20.04 CI image and run under our Wine 11.20).
+- Moving yabridge: replace the contents of `vendor/yabridge` with the new upstream commit in one commit, re-apply the patch in a second, update `vendor/yabridge/UPSTREAM_COMMIT`, then `just yabridge-build`. yabridge is compiled against the Wine we ship (`winegcc` from `runtime/wine-*/`), so rebuild it whenever Wine changes. Rerun the same checks.
 - Publishing: `just package-runtime`, then upload the archive and `runtime-manifest.json` to the release the app downloads from (`DEFAULT_RUNTIME_URL` in `app/src/settings.rs`; a repo-specific URL that must change when the project moves).

@@ -103,10 +103,10 @@ setup:
     @echo "test assets ready in {{assets}}/"
 
 # Build yabridge at the pinned commit in Docker (S4); output in runtime/
-yabridge-build commit="b580a9f7":
-    tools/build-yabridge.sh {{commit}}
+yabridge-build wine="wine-11.20-vblank":
+    tools/build-yabridge.sh {{wine}}
 
-yabridge_dir := justfile_directory() / "runtime/yabridge-b580a9f7-patched"
+yabridge_dir := justfile_directory() / "runtime/yabridge-b580a9f7-wine-11.20-vblank"
 wine_loader := "/opt/wine-staging/bin/wine"
 wine_prefix := justfile_directory() / assets / "wine/prefix"
 bridges := assets / "bridges"
