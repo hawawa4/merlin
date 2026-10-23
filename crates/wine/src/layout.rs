@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 /// A release named `runtime` on the project's repository holds the current archive and manifest.
 /// This is a repo-specific URL: it has to change when the project moves.
 pub const DEFAULT_RUNTIME_URL: &str =
-    "https://github.com/hawawa4/linuxclap/releases/download/runtime/runtime-manifest.json";
+    "https://github.com/hawawa4/merlin/releases/download/runtime/runtime-manifest.json";
 
 /// The folder inside `~/.clap`, `~/.vst3` and `~/.vst` that holds the bridges made for other
 /// plugin hosts. The app's own scan skips it: it makes its own bridges (see

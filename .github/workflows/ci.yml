@@ -3,6 +3,7 @@ name: ci
 on:
   push:
   pull_request:
+  workflow_call:
 
 env:
   CARGO_TERM_COLOR: always
@@ -17,6 +18,8 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - name: System libraries
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libxcb1-dev
       - run: cargo fmt --all -- --check
       - run: cargo clippy -p 'merlin-*' --all-targets -- -D warnings
       - run: cargo test -p 'merlin-*'

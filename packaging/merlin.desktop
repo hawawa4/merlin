@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Merlin
+Comment=Live instrument host
+Exec=merlin
+Terminal=false
+Categories=AudioVideo;Audio;Midi;Music;

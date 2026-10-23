@@ -1,9 +1,10 @@
 [package]
 name = "merlin"
-version = "0.0.0"
+version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+description = "A live instrument host for playing in real time: a rack of CLAP, VST3, VST2, LV2, SoundFont and Windows plugins, switched from MIDI controllers"
 default-run = "merlin"
 
 [[bin]]
@@ -45,3 +46,24 @@ egui-wgpu = { version = "0.37", default-features = false, features = ["winit"] }
 winit = { version = "0.30", default-features = false, features = ["x11", "rwh_06"] }
 wgpu = { version = "*", default-features = false, features = ["vulkan", "wgsl"] }
 pollster = "0.4"
+
+# `cargo deb -p merlin` (after `cargo build --release -p merlin -p merlin-bridge`): the .deb of the release workflow.
+# merlin-scan has to sit next to merlin (the app looks for it there). JACK, X11 and Vulkan are loaded at runtime,
+# so they are recommended rather than linked dependencies.
+[package.metadata.deb]
+name = "merlin"
+maintainer = "Merlin contributors <noreply@github.com>"
+copyright = "Merlin contributors"
+license-file = ["../LICENSE", "0"]
+section = "sound"
+priority = "optional"
+depends = "$auto"
+recommends = "pipewire-jack | libjack-jackd2-0, libvulkan1, libxcb1"
+extended-description = "Merlin is a Linux-first live instrument host: a rack of instruments (CLAP, VST3, VST2, LV2, SoundFonts, and Windows plugins through a Wine + yabridge runtime the app downloads on request), each with simple built-in effects, switched from MIDI controllers."
+assets = [
+    ["target/release/merlin", "usr/bin/", "755"],
+    ["target/release/merlin-scan", "usr/bin/", "755"],
+    ["target/release/merlin-bridge", "usr/bin/", "755"],
+    ["../packaging/merlin.desktop", "usr/share/applications/", "644"],
+    ["../README.md", "usr/share/doc/merlin/README.md", "644"],
+]
