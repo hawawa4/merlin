@@ -42,7 +42,7 @@ def main():
     passes = int(sys.argv[1]) if len(sys.argv) > 1 else 100
     if not APP.exists():
         sys.exit(f"missing {APP}: cargo build --release -p merlin")
-    work = Path(tempfile.mkdtemp(prefix="irig-songsoak-"))
+    work = Path(tempfile.mkdtemp(prefix="merlin-songsoak-"))
     write_wav(work / "a.wav", 44100, 8, 440, 0.3)
     write_wav(work / "b.wav", 48000, 8, 660, 0.2, channels=1)
     steps = [

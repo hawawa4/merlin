@@ -369,7 +369,7 @@ mod tests {
     }
 
     fn temp(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("irig-backing-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("merlin-backing-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir.join(name)
     }

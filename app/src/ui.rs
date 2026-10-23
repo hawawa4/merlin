@@ -24,7 +24,7 @@ pub fn drop_hint(path: &std::path::Path) -> (String, bool) {
     match ext.as_deref() {
         Some("exe" | "msi") => ("Drop to install this Windows plugin".into(), true),
         Some("sf2" | "sf3") => ("Drop to load this SoundFont into a free slot".into(), true),
-        Some("irig") => ("Drop to open this rig".into(), true),
+        _ if paths::is_rig_file(path) => ("Drop to open this rig".into(), true),
         _ => ("This kind of file can't be used here".into(), false),
     }
 }
@@ -673,7 +673,7 @@ fn header(ui: &mut egui::Ui, s: &mut Session, st: &UiState, actions: &mut Vec<Ac
                     .flatten()
                     .flatten()
                     .map(|e| e.path())
-                    .filter(|p| p.extension().is_some_and(|e| e == "irig"))
+                    .filter(|p| paths::is_rig_file(p))
                     .collect();
                 files.sort();
                 if files.is_empty() {

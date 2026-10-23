@@ -14,7 +14,7 @@ impl Waker for Nobody {
 
 /// Builds the fixture plugin; `None` (and the test is skipped) without a C compiler.
 fn build() -> Option<PathBuf> {
-    let dir = std::env::temp_dir().join(format!("irig-vst2-fixture-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("merlin-vst2-fixture-{}", std::process::id()));
     std::fs::create_dir_all(&dir).ok()?;
     let out = dir.join("test_synth.so");
     let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test_synth_vst2.c");

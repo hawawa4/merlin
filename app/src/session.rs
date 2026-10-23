@@ -2077,7 +2077,7 @@ pub fn read_rig(path: &Path) -> Result<Rig> {
         Rig::from_json(&bytes).with_context(|| format!("reading {}", path.display()))?;
     if migrated {
         // Keep the old file next to the upgraded one, in case the new version is a mistake.
-        let backup = path.with_extension("irig.bak");
+        let backup = path.with_extension("mrig.bak");
         if !backup.exists() {
             let _ = std::fs::write(&backup, &bytes);
         }

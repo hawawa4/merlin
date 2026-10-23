@@ -354,7 +354,8 @@ mod tests {
     use super::*;
 
     fn bundle(name: &str, manifest: &str, data: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("irig-lv2-{name}-{}.lv2", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("merlin-lv2-{name}-{}.lv2", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("manifest.ttl"), manifest).unwrap();

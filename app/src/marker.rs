@@ -76,7 +76,7 @@ mod tests {
     use super::*;
 
     fn temp(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("irig-marker-{tag}-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("merlin-marker-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         d
     }

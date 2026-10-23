@@ -13,7 +13,7 @@ default:
     @just --list --unsorted
 
 # The app. Loads plugins from the standard CLAP folders plus test-assets (Linux and, through
-# our patched Wine, Windows ones). Try: just dev --fresh      just dev --rig my.irig
+# our patched Wine, Windows ones). Try: just dev --fresh      just dev --rig my.mrig
 # This round: your Launchkey MK3. Plug it in, then `just dev`: its pads, knobs, faders and buttons work at once and its
 # lights and screen follow the rig (Settings > Controls lists the layout). Load a few instruments, save a couple of
 # snapshots, press pads. `just launchkey-probe` shows what each control sends. See docs/qa-checklist.md 5m.

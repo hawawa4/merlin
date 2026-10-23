@@ -79,7 +79,7 @@ fn surge_xt_lv2_is_found_plays_and_saves_its_state() {
 fn fixture() -> Option<PathBuf> {
     let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     let dir = std::env::temp_dir()
-        .join(format!("irig-lv2-fixture-{}", std::process::id()))
+        .join(format!("merlin-lv2-fixture-{}", std::process::id()))
         .join("test_lv2.lv2");
     std::fs::create_dir_all(&dir).ok()?;
     for f in ["manifest.ttl", "plugin.ttl"] {

@@ -31,7 +31,7 @@ fn write_constant_wav(name: &str, level: f32, secs: f32) -> PathBuf {
     out.extend_from_slice(b"data");
     out.extend_from_slice(&(data.len() as u32).to_le_bytes());
     out.extend_from_slice(&data);
-    let dir = std::env::temp_dir().join(format!("irig-engine-backing-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("merlin-engine-backing-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join(name);
     std::fs::write(&path, out).unwrap();

@@ -285,7 +285,7 @@ def main():
     for n, (p, is_effect) in enumerate(jobs, 1):
         name = label(p)
         slug = re.sub(r"[^A-Za-z0-9]+", "_", name).strip("_")
-        rig = f"/tmp/merlin-compat/{slug}.irig"
+        rig = f"/tmp/merlin-compat/{slug}.mrig"
         script = effect_script(p, rig) if is_effect else instrument_script(p, rig)
         q = WORK / "cache/merlin/quarantine.json"
         attempts = []

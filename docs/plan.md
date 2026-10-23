@@ -279,7 +279,7 @@ Because the whole app is an X11 client, we can create **child windows inside our
   3. syncs,
   4. scans,
   5. shows the new plugins in the browser.
-- **Dropping files on the window** ✅: an installer (`.exe`/`.msi`) is installed, a `.sf2`/`.sf3` loads into a free slot, a `.irig` opens; a banner says what the drop will do.
+- **Dropping files on the window** ✅: an installer (`.exe`/`.msi`) is installed, a `.sf2`/`.sf3` loads into a free slot, a `.mrig` opens; a banner says what the drop will do.
 - **Wine Doctor panel:** versions, prefix health, per-plugin load test, yabridge options (groups, editor), logs.
 - **Limits stated up front:** 64-bit plugins only; some copy protection/iLok may fail; native Linux versions preferred when available.
 - **Upstream risk:** expect to contribute fixes to yabridge or keep a small patch set.
@@ -340,7 +340,7 @@ enum Action {
 | File | Location | Format |
 |---|---|---|
 | Settings | `~/.config/merlin/settings.toml` | TOML |
-| Rig | user-chosen `*.irig` | JSON, versioned schema with migrations. Plugin state base64; SoundFont slots store file path + preset + panel values. |
+| Rig | user-chosen `*.mrig` | JSON, versioned schema with migrations. Plugin state base64; SoundFont slots store file path + preset + panel values. |
 | Autosave and crash marker | `~/.local/state/merlin/` | JSON, plus a marker recording "plugin X was being created or called", for safe mode |
 | Plugin/sound cache, quarantine | `~/.cache/merlin/` | JSON |
 

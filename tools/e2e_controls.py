@@ -41,7 +41,7 @@ CONTROLS = (
 def run(script, controls, seconds, keep=None, args=(), controller=None, name="Fake Controller", config=None):
     """Runs the app with the script and the controller; returns the app's output (with `controller`
     set to another program, its output too: `(app, controller)`)."""
-    work = Path(tempfile.mkdtemp(prefix="irig-e2e-"))
+    work = Path(tempfile.mkdtemp(prefix="merlin-e2e-"))
     env = dict(os.environ, MERLIN_SCRIPT=script)
     for var, d in (("XDG_DATA_HOME", "data"), ("XDG_STATE_HOME", "state"), ("XDG_CACHE_HOME", "cache"), ("XDG_CONFIG_HOME", "config")):
         env[var] = str(work / d)
@@ -89,7 +89,7 @@ def main():
     launchkey_check()
 
 
-SNAP_FILE = Path(tempfile.gettempdir()) / "irig-e2e-snapshots.irig"
+SNAP_FILE = Path(tempfile.gettempdir()) / "merlin-e2e-snapshots.mrig"
 SNAP_SCRIPT = "; ".join(
     [
         "1:load 1 TimGM6mb", "1.2:load 2 TimGM6mb", "1.4:load 3 TimGM6mb",
@@ -297,7 +297,7 @@ def write_wav(path, rate, seconds, hz, amp):
 
 
 def backing_check():
-    work = Path(tempfile.mkdtemp(prefix="irig-stems-"))
+    work = Path(tempfile.mkdtemp(prefix="merlin-stems-"))
     a, b = work / "stem a.wav", work / "stem b.wav"
     write_wav(a, 44100, 20, 440, 0.3)  # 44.1 kHz: resampled to the engine's rate
     write_wav(b, 48000, 20, 880, 0.2)

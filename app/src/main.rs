@@ -790,7 +790,7 @@ impl Running {
                         }
                     }
                     Some("sf2" | "sf3") => s.load_soundfont_file(&path),
-                    Some("irig") => s.open_rig(&path),
+                    _ if crate::paths::is_rig_file(&path) => s.open_rig(&path),
                     _ => Err(anyhow!(
                         "don't know what to do with {}",
                         path.file_name().map_or_else(
@@ -1623,6 +1623,7 @@ fn parse_control_action(
 
 fn main() -> Result<()> {
     let args = parse_args();
+    paths::migrate_legacy_rigs();
     let settings_file = paths::settings_file();
     let settings = match Settings::load(&settings_file) {
         Ok(s) => s,
