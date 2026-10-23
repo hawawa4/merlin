@@ -8,6 +8,7 @@ publish.workspace = true
 [dependencies]
 merlin-engine.workspace = true
 merlin-hosting.workspace = true
+merlin-recorder.workspace = true
 anyhow.workspace = true
 jack.workspace = true
 rtrb.workspace = true

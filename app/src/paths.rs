@@ -77,6 +77,11 @@ pub fn autosave_file() -> PathBuf {
     state_dir().join("autosave.mrig")
 }
 
+/// Where MIDI captures go unless the settings say otherwise: `~/Music/Merlin`.
+pub fn default_capture_dir() -> PathBuf {
+    xdg("XDG_MUSIC_DIR", "Music").join("Merlin")
+}
+
 /// The extension of a rig file.
 pub const RIG_EXT: &str = "mrig";
 /// Rig files were `.irig` before the project was called Merlin; they still open.

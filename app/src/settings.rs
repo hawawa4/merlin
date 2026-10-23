@@ -71,6 +71,10 @@ pub struct Settings {
     pub click_output: Option<[String; 2]>,
     /// Folders of Windows VST2 plugins (`.dll`) outside the Windows prefix, to bridge.
     pub windows_vst2_dirs: Vec<PathBuf>,
+    /// Minutes of MIDI the capture keeps, always (0: off).
+    pub capture_minutes: u32,
+    /// Where captures are saved; `~/Music/Merlin` when unset.
+    pub capture_dir: Option<PathBuf>,
 }
 
 impl Default for Settings {
@@ -89,6 +93,8 @@ impl Default for Settings {
             favorites: Vec::new(),
             click_output: None,
             windows_vst2_dirs: Vec::new(),
+            capture_minutes: 30,
+            capture_dir: None,
         }
     }
 }

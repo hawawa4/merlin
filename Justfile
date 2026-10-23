@@ -14,9 +14,10 @@ default:
 
 # The app. Loads plugins from the standard CLAP folders plus test-assets (Linux and, through
 # our patched Wine, Windows ones). Try: just dev --fresh      just dev --rig my.mrig
-# This round: your Launchkey MK3. Plug it in, then `just dev`: its pads, knobs, faders and buttons work at once and its
-# lights and screen follow the rig (Settings > Controls lists the layout). Load a few instruments, save a couple of
-# snapshots, press pads. `just launchkey-probe` shows what each control sends. See docs/qa-checklist.md 5m.
+# This round: MIDI capture. The app always keeps the last 30 minutes you played (keyboards and the on-screen keys);
+# play something, press "Capture MIDI" in the header and open ~/Music/Merlin/Merlin capture *.mid in a sequencer.
+# Try it with `just fake-keyboard` in a second terminal, and map the action to a pad or a foot switch (MIDI map).
+# See docs/qa-checklist.md 5n.
 dev *args:
     cargo build -p merlin --release
     PATH="{{yabridge_dir}}:$PATH" WINELOADER={{patched_wine}} \

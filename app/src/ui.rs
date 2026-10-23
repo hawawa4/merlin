@@ -89,6 +89,12 @@ pub enum Action {
     NoteOn(u8),
     NoteOff(u8),
     Panic,
+    /// Save the last minutes of MIDI as a file.
+    CaptureMidi,
+    /// Minutes of MIDI the capture keeps (0: off).
+    SetCaptureMinutes(u32),
+    /// Where captures are saved (`None`: the default folder).
+    SetCaptureDir(Option<PathBuf>),
     SetFx(usize, FxSettings),
     SetMaster(f32),
     /// Script-only: switch a named preset of effects on (`reverb`, `delay`, `comp`, `eq`, `off`).
@@ -257,6 +263,8 @@ pub struct UiState {
     pub wine_text: String,
     pub yab_text: String,
     pub installer_text: String,
+    /// The folder being typed for MIDI captures.
+    pub capture_dir_text: String,
     /// The mapping being composed on the Controls tab: what kind of action, and its numbers.
     pub new_kind: crate::settings_ui::ActionKind,
     pub new_slot: usize,
@@ -302,6 +310,7 @@ impl UiState {
             wine_text: String::new(),
             yab_text: String::new(),
             installer_text: String::new(),
+            capture_dir_text: String::new(),
             param_insert: None,
             param_query: String::new(),
             new_kind: Default::default(),
@@ -664,6 +673,7 @@ fn header(ui: &mut egui::Ui, s: &mut Session, st: &UiState, actions: &mut Vec<Ac
         {
             actions.push(Action::SetPerform(true));
         }
+        capture_button(ui, s, actions);
         egui::ComboBox::from_id_salt("open-rig")
             .selected_text("Open…")
             .width(90.0)
@@ -752,8 +762,34 @@ fn header(ui: &mut egui::Ui, s: &mut Session, st: &UiState, actions: &mut Vec<Ac
                 .small()
                 .color(Color32::from_rgb(0xe0, 0xb4, 0x4a)),
         );
+    } else if let Some(note) = s.capture_notice() {
+        ui.label(
+            RichText::new(note)
+                .small()
+                .color(Color32::from_rgb(0x6c, 0xc9, 0x6a)),
+        );
     } else if let Some(line) = s.log.last() {
         ui.label(RichText::new(line).small().weak());
+    }
+}
+
+/// "Capture MIDI": saves the last minutes of what was played (the app is always listening).
+fn capture_button(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
+    let minutes = s.capture_minutes();
+    let (listened, kept) = s.capture_status();
+    let r = ui
+        .add_enabled(minutes > 0, egui::Button::new("Capture MIDI"))
+        .on_hover_text(if minutes == 0 {
+            "MIDI capture is off (Settings > MIDI)".to_owned()
+        } else {
+            format!(
+                "Save the last {minutes} minutes of what you played as a MIDI file. The app is always listening: {} so far, {kept} messages kept.",
+                crate::session::clock(listened)
+            )
+        });
+    crate::map_mode::target(ui, s, &r, ControlAction::CaptureMidi, None, actions);
+    if r.clicked() && !s.map_mode {
+        actions.push(Action::CaptureMidi);
     }
 }
 

@@ -1206,6 +1206,7 @@ dependencies = [
  "merlin-engine",
  "merlin-hosting",
  "merlin-model",
+ "merlin-recorder",
  "merlin-scanner",
  "merlin-wine",
  "pollster",
@@ -1229,6 +1230,7 @@ dependencies = [
  "merlin-engine",
  "merlin-hosting",
  "merlin-model",
+ "merlin-recorder",
  "rtrb",
 ]
 

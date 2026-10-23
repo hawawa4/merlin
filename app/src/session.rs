@@ -22,6 +22,7 @@ use merlin_scanner::{Cache, Entry, Found, Quarantine};
 use std::sync::mpsc;
 
 mod backing;
+mod capture;
 mod controls;
 mod macros;
 mod setlist;
@@ -137,6 +138,7 @@ impl Waker for SlotWaker {
 }
 
 pub use backing::{TrackEdit, TrackState};
+pub use capture::{MAX_CAPTURE_MINUTES, clock};
 
 pub struct Loaded {
     pub plugin: Box<dyn PluginHandle>,
@@ -272,6 +274,8 @@ pub struct Session {
     proxy: EventLoopProxy<UserEvent>,
     pub sample_rate: u32,
     last_autosave: Instant,
+    /// What the capture button last did and when (shown beside it for a few seconds).
+    capture_notice: Option<(Instant, String)>,
     /// A change of the rig's structure wants an autosave soon (not at once: a plugin that has
     /// only just loaded should be left alone for a moment before it is asked for its state).
     autosave_after: Option<Instant>,
@@ -361,6 +365,7 @@ impl Session {
             proxy,
             sample_rate,
             last_autosave: Instant::now(),
+            capture_notice: None,
             autosave_after: None,
         };
         s.rebuild_dirs();
@@ -384,6 +389,7 @@ impl Session {
         ));
         s.sync_transport();
         s.apply_click_output();
+        s.apply_capture_window();
         Ok(s)
     }
 

@@ -203,6 +203,7 @@ impl Session {
             Outcome::ClickToggle => self.toggle_click(),
             Outcome::TapTempo => self.tap_tempo(),
             Outcome::Panic => self.panic(),
+            Outcome::CaptureMidi => self.capture_midi(),
             Outcome::SetPan(i, v) => self.set_pan(i, v * 2.0 - 1.0),
             Outcome::SetClickLevel(v) => {
                 let on = self.rig.transport.click;

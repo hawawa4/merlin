@@ -45,7 +45,7 @@
 | **Later** | Setlists, songs and parts.<br>"Plan a track" timeline with automatic instrument changes.<br>Backing tracks with a separate click output.<br>MIDI clock / Link. |
 | **End** | VST2, LV2 (optionally SFZ via sfizz). |
 | **Optional** | Out-of-process plugin sandbox.<br>Windows/macOS ports.<br>Headless stage-PC mode. |
-| **Never** | Recording or timeline editing, piano roll, audio tracks.<br>Free-form routing, sends, sidechain, buses.<br>Automation lanes.<br>Separate plugin windows.<br>ARM. |
+| **Never** | Recording as a feature you arm and edit: timeline editing, piano roll, audio tracks. (The one exception is the always-on MIDI capture, §4.12: no transport, no editing, a button that saves a file.)<br>Free-form routing, sends, sidechain, buses.<br>Automation lanes.<br>Separate plugin windows.<br>ARM. |
 
 ## 3. Key decisions
 
@@ -104,6 +104,7 @@ merlin/
 │  ├─ embed/        X11 editor embedding: child windows, clipping/scroll, XEmbed, focus, run loop
 │  ├─ wine/         bundled Wine/yabridge runtime, prefix management, yabridgectl driver
 │  ├─ scanner/      `merlin-scan` binary + plugin/sound database
+│  ├─ recorder/     the rolling MIDI capture: lock-free tap, in-memory window, Standard MIDI File writer
 │  └─ control/      (Phase 3+) actions, MIDI learn, mappings, controller profiles, Novation drivers
 └─ app/             main binary: winit loop, egui UI, wiring
 ```
@@ -345,6 +346,17 @@ enum Action {
 | Plugin/sound cache, quarantine | `~/.cache/merlin/` | JSON |
 
 **`PluginRef`** holds the format, a stable ID (CLAP id / VST3 class UID / SoundFont path + hash), name, vendor and a path hint. A missing plugin becomes a "missing" placeholder and is never silently dropped.
+
+### 4.12 MIDI capture
+
+The app always listens and keeps the last N minutes (default 30) of what was played; **Capture MIDI** saves them as a `.mid` file. This is not recording in the DAW sense: nothing is armed, nothing is edited, and nothing touches the disk until the button is pressed. The use is the one every musician knows: the best take was the one you were not recording.
+
+- **What is kept**: every channel message that reaches the instruments from a keyboard-role input or the on-screen keyboard (notes, pedals, wheels, aftertouch, controllers, Program Change), as it arrived and before the router changes anything (zones, transposition and layers apply to what the *instruments* get, not to what you *played*). Not kept: controller-role devices, and any control that is mapped to an action (those are the app's, not music), and SysEx and clock.
+- **How**: the JACK callback has a `Tap` (`crates/recorder`) and pushes `(frame, input, 3 bytes)` into a lock-free queue (wait-free, no allocation, no lock). A thread wakes four times a second, moves them into a `VecDeque` and drops what is older than the window, so the newest moment replaces the oldest. Time is the audio frame count, so a dropout in the sound card does not stretch the notes. The buffer is capped at 1 million events (16 MB) whatever the window.
+- **The file**: Standard MIDI File format 1, 960 ticks per beat, a first track with the name, tempo and time signature (the transport's, so a performance played to the click lands on the bar lines of a sequencer; the notes keep their real times whatever the tempo), then one track per MIDI input that played, named after the device. The file starts at the first message, not 30 minutes before. A note-off whose note-on fell before the window is left out, and notes (and a sustain pedal) still down at the end are released at the moment of capture, so every file is clean to open.
+- **Saving**: `~/Music/Merlin/Merlin capture <date> <time>.mid` (a setting). A capture never overwrites another and the file appears whole or not at all. Pressing again later includes the same playing and what came after: the buffer is not emptied.
+- **Where**: a button in the header and in the Perform view, a mappable action (*Save the last minutes of MIDI*, so a foot switch or a pad does it), Settings > MIDI for the length (0 turns it off) and the folder.
+- **Not done**: the audio is not captured (use your DAW's own recorder or `pw-record`), the on-screen keyboard's notes are always velocity 100, and a device that was swapped during the window is named by what is connected at the time of the capture.
 
 ## 5. UI
 

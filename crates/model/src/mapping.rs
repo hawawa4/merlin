@@ -120,6 +120,8 @@ pub enum ControlAction {
     },
     /// All notes off.
     Panic,
+    /// Save the last minutes of what was played as a MIDI file.
+    CaptureMidi,
     /// A knob for the pan of a slot (centre of the knob = centre of the stereo field).
     SlotPan {
         slot: u8,
@@ -238,6 +240,7 @@ impl ControlAction {
                 base as usize + 1
             ),
             Self::Panic => "Panic (all notes off)".into(),
+            Self::CaptureMidi => "Save the last minutes of MIDI".into(),
             Self::SlotPan { slot } => format!("Pan of slot {}", slot as usize + 1),
             Self::ToggleFx { slot, fx } => {
                 format!("{} of slot {} on/off", fx.name(), slot as usize + 1)

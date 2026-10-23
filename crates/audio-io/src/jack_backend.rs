@@ -6,6 +6,9 @@
 //!
 //! MIDI: one JACK port per engine input (`midi_in_1`..), so slots can listen to one device,
 //! plus a lock-free virtual input (engine input 0) for the on-screen keyboard.
+//!
+//! Everything that reaches the instruments from those inputs is also handed to the rolling MIDI
+//! capture (`merlin-recorder`): the backend starts it and owns it, so it is always listening.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
@@ -18,9 +21,13 @@ use jack::{
 };
 use merlin_engine::{ClickOut, Engine, MAX_INPUTS, MidiOutEvent};
 use merlin_hosting::MidiEvent;
+use merlin_recorder::{Recorder, Tap};
 
 /// The `input` of a [`ControlEvent`] that reports a timeline marker (its id is in `data`).
 pub const MARKER_INPUT: u8 = 0xFE;
+
+/// How much playing the MIDI capture keeps until the app says otherwise.
+pub const DEFAULT_CAPTURE_WINDOW: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
 /// Engine input index of the virtual keyboard.
 pub const VIRTUAL_INPUT: u8 = 0;
@@ -324,6 +331,7 @@ impl JackClient {
         let interest: Arc<Interest> = Arc::default();
         let (control_tx, control_rx) = rtrb::RingBuffer::new(CONTROL_QUEUE);
         let stats = Arc::new(Stats::default());
+        let (tap, recorder) = Recorder::new(self.sample_rate, DEFAULT_CAPTURE_WINDOW);
         let callback = Callback {
             engine,
             midi_in,
@@ -341,12 +349,14 @@ impl JackClient {
             control_tx,
             events: Vec::with_capacity(MAX_MIDI_PER_CYCLE),
             stats: stats.clone(),
+            tap,
             ftz_set: false,
         };
         let client = client.activate_async(Notifications(stats.clone()), callback)?;
         Ok(JackBackend {
             client,
             stats,
+            recorder,
             virtual_midi,
             midi_names,
             roles,
@@ -380,6 +390,7 @@ struct Callback {
     control_tx: rtrb::Producer<ControlEvent>,
     events: Vec<MidiEvent>,
     stats: Arc<Stats>,
+    tap: Tap,
     ftz_set: bool,
 }
 
@@ -418,6 +429,7 @@ impl jack::ProcessHandler for Callback {
             self.ftz_set = true;
         }
         self.events.clear();
+        self.tap.begin_cycle();
         for i in 0..self.midi_in.len() {
             let controller = self.roles[i].load(Ordering::Relaxed) == InputRole::Controller.bits();
             for raw in self.midi_in[i].iter(ps) {
@@ -457,6 +469,7 @@ impl jack::ProcessHandler for Callback {
                 if consumed {
                     continue;
                 }
+                self.tap.record(raw.time, i as u8 + 1, data);
                 push_sorted(
                     &mut self.events,
                     &self.stats,
@@ -467,6 +480,7 @@ impl jack::ProcessHandler for Callback {
         while let Ok(mut ev) = self.virtual_rx.pop() {
             ev.input = VIRTUAL_INPUT;
             ev.time = 0;
+            self.tap.record(0, VIRTUAL_INPUT, ev.data);
             push_sorted(&mut self.events, &self.stats, ev);
         }
         let n = ps.n_frames() as usize;
@@ -507,6 +521,7 @@ impl jack::ProcessHandler for Callback {
             });
         }
 
+        self.tap.end_cycle(ps.n_frames());
         let ns = t0.elapsed().as_nanos() as u64;
         self.stats.last_ns.store(ns, Ordering::Relaxed);
         self.stats.max_ns.fetch_max(ns, Ordering::Relaxed);
@@ -519,6 +534,8 @@ impl jack::ProcessHandler for Callback {
 pub struct JackBackend {
     client: jack::AsyncClient<Notifications, Callback>,
     pub stats: Arc<Stats>,
+    /// The rolling MIDI capture: always listening to what is played.
+    pub recorder: Recorder,
     /// Events pushed here play as engine input 0 (the on-screen keyboard).
     pub virtual_midi: rtrb::Producer<MidiEvent>,
     /// JACK port names of our MIDI inputs, index = engine input - 1.

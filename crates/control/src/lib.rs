@@ -87,6 +87,7 @@ pub enum Outcome {
     ClickToggle,
     TapTempo,
     Panic,
+    CaptureMidi,
     /// Knob positions (0..=1): the session turns them into the target's own range.
     SetPan(usize, f32),
     SetClickLevel(f32),
@@ -362,6 +363,7 @@ fn fire(action: &ControlAction, inc: &Incoming, ctx: &Context) -> Option<Outcome
         ControlAction::NextSong => Some(Outcome::NextSong),
         ControlAction::PrevSong => Some(Outcome::PrevSong),
         ControlAction::Panic => Some(Outcome::Panic),
+        ControlAction::CaptureMidi => Some(Outcome::CaptureMidi),
         ControlAction::ToggleFx { slot, fx } if loaded(ctx, slot as usize) => {
             Some(Outcome::ToggleFx(slot as usize, fx))
         }

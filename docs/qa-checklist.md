@@ -151,6 +151,17 @@ Plug it in before starting `just dev` (or while it runs: the log says `controlle
 - [ ] `just launchkey-probe`: press and turn every control; the names it prints should match the controls (it also shows the CC numbers). Send me any line that says `CC <n>` without a name, or a name that is wrong.
 - [ ] No hardware: `just e2e-controls` plays a pretend Launchkey MK3 and checks the layout and the lights.
 
+## 5n. MIDI capture (the last 30 minutes, saved by a button)
+The app always listens to your keyboards and the on-screen keys. Nothing is written until you press **Capture MIDI** (header, or **CAPTURE** in the Perform view). Files go to `~/Music/Merlin`.
+- [ ] No hardware: `just e2e-controls` includes a capture check: a pretend keyboard plays notes, a pedal and a note that is still held, a mapped control presses the capture button, and the `.mid` file must have the right messages and timing.
+- [ ] Play something on a keyboard (or `just fake-keyboard`) for a minute, press **Capture MIDI**: the line under the header says `saved 1:00 of MIDI to ...` in green for a few seconds. Open the file in a sequencer (Ardour, Reaper, Bitwig, MuseScore): is there a track named after your keyboard, are the notes where you played them, does the first note sit at the start, is the tempo the app's tempo?
+- [ ] Set the tempo to 90 in the app and play along with the click for a few bars: in the sequencer the notes should fall near the bar lines at 90 bpm.
+- [ ] Hold a chord and press the button with the other hand (or the mapped foot switch): the chord is in the file and ends where you pressed. A sustain pedal held down is released at the end.
+- [ ] Press it right after starting the app: it says nothing was played. Press it twice in a row: two files, the second with ` (2)` if it was in the same second. Neither empties the buffer.
+- [ ] Settings > MIDI > MIDI capture: change *Keep the last* to 1 min, play, wait two minutes, play a few notes, capture: only the last minute is in the file. 0 turns it off (the buttons grey out). Change *Save to* (Enter to apply) and capture: it goes there. *Default* brings back `~/Music/Merlin`.
+- [ ] MIDI map mode: click **Capture MIDI**, press a pad or a foot switch: it is mapped. A controller-role device (the Launchkey's pads) and anything mapped never appears in the file.
+- [ ] A long session: leave it running for an hour of normal playing and check memory (Settings > Performance, or `ps`): the capture should stay a few MB at most.
+
 ## 6. Stability
 - [ ] Kill a Windows plugin's Wine process while the app runs: `pgrep -af yabridge-host`, then `kill -9 <pid>` of one. The app should restart itself from the autosave and name the plugin it quarantined (it comes back with *Retry*).
 - [ ] The 2-hour rehearsal: 6–8 instruments including a Windows one, switching and playing for 2 hours. For an unattended version: `just soak 7200 3 --windows "Six Sines"`, then read the `state:` lines (xruns, held keys, RSS, threads). Expect 0 xruns, 0 held keys at the end, memory flat.

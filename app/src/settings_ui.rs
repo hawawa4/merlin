@@ -1,5 +1,6 @@
 //! The settings panel: plugins, audio, MIDI, Windows plugins, performance check.
 
+use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
@@ -46,13 +47,14 @@ pub enum ActionKind {
     PrevSnapshot,
     RecallSnapshotByValue,
     Panic,
+    CaptureMidi,
     SlotPan,
     ClickLevel,
     Tempo,
 }
 
 impl ActionKind {
-    const ALL: [ActionKind; 26] = [
+    const ALL: [ActionKind; 27] = [
         Self::SelectSlot,
         Self::ToggleLayer,
         Self::ToggleMute,
@@ -76,6 +78,7 @@ impl ActionKind {
         Self::PrevSnapshot,
         Self::RecallSnapshotByValue,
         Self::Panic,
+        Self::CaptureMidi,
         Self::SlotPan,
         Self::ClickLevel,
         Self::Tempo,
@@ -106,6 +109,7 @@ impl ActionKind {
             Self::PrevSnapshot => "Previous snapshot (foot switch)",
             Self::RecallSnapshotByValue => "Recall the snapshot given by the number sent",
             Self::Panic => "Panic (all notes off)",
+            Self::CaptureMidi => "Save the last minutes of MIDI (capture)",
             Self::SlotPan => "Pan of a slot (knob)",
             Self::ClickLevel => "Click level (knob or fader)",
             Self::Tempo => "Tempo (knob or fader)",
@@ -152,6 +156,7 @@ impl ActionKind {
             Self::PrevSnapshot => A::PrevSnapshot,
             Self::RecallSnapshotByValue => A::RecallSnapshotByValue { base },
             Self::Panic => A::Panic,
+            Self::CaptureMidi => A::CaptureMidi,
             Self::SlotPan => A::SlotPan { slot },
             Self::ClickLevel => A::ClickLevel,
             Self::Tempo => A::Tempo,
@@ -194,7 +199,7 @@ pub fn show(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<
         .show(ui, |ui| match st.settings_tab {
             SettingsTab::Plugins => plugins(ui, s, st, actions),
             SettingsTab::Audio => audio(ui, s, actions),
-            SettingsTab::Midi => midi(ui, s, actions),
+            SettingsTab::Midi => midi(ui, s, st, actions),
             SettingsTab::Controls => controls(ui, s, st, actions),
             SettingsTab::Windows => windows(ui, s, st, actions),
             SettingsTab::Performance => performance(ui, s, st),
@@ -693,7 +698,7 @@ fn glue_options(
     });
 }
 
-fn midi(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
+fn midi(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
     use crate::settings::DeviceRole;
     ui.strong("MIDI devices");
     ui.label(
@@ -762,6 +767,71 @@ fn midi(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
             .small()
             .weak(),
     );
+    ui.add_space(12.0);
+    capture(ui, s, st, actions);
+}
+
+/// The MIDI capture: how much is kept, where it goes, and a button to save it now.
+fn capture(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
+    ui.strong("MIDI capture");
+    ui.label(
+        RichText::new(
+            "Merlin always keeps the last minutes of what you play from keyboards and the on-screen keys (not from controllers, and not what is mapped to an action). The \"Capture MIDI\" button, or a MIDI control mapped to it, saves them as a .mid file with a track per keyboard. Nothing is written to disk until then.",
+        )
+        .small()
+        .weak(),
+    );
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        let mut minutes = s.capture_minutes();
+        ui.label("Keep the last");
+        let changed = ui
+            .add(
+                egui::DragValue::new(&mut minutes)
+                    .range(0..=crate::session::MAX_CAPTURE_MINUTES)
+                    .suffix(" min"),
+            )
+            .changed();
+        if changed {
+            actions.push(Action::SetCaptureMinutes(minutes));
+        }
+        ui.label(
+            RichText::new(if minutes == 0 { "(off)" } else { "" })
+                .small()
+                .weak(),
+        );
+    });
+    let (listened, kept) = s.capture_status();
+    if s.capture_minutes() > 0 {
+        ui.label(format!(
+            "Listening for {} · {kept} messages kept",
+            crate::session::clock(listened)
+        ));
+    }
+    ui.horizontal(|ui| {
+        ui.label("Save to");
+        if st.capture_dir_text.is_empty() {
+            st.capture_dir_text = s.capture_dir().display().to_string();
+        }
+        let edit =
+            ui.add(egui::TextEdit::singleline(&mut st.capture_dir_text).desired_width(320.0));
+        if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            let text = st.capture_dir_text.trim().to_owned();
+            actions.push(Action::SetCaptureDir(
+                (!text.is_empty()).then(|| PathBuf::from(text)),
+            ));
+        }
+        if ui.button("Default").clicked() {
+            actions.push(Action::SetCaptureDir(None));
+            st.capture_dir_text.clear();
+        }
+    });
+    if ui
+        .add_enabled(s.capture_minutes() > 0, egui::Button::new("Save now"))
+        .clicked()
+    {
+        actions.push(Action::CaptureMidi);
+    }
 }
 
 fn windows(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {

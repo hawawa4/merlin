@@ -86,7 +86,98 @@ def main():
     backing_check()
     timeline_check()
     targets_check()
+    capture_check()
     launchkey_check()
+
+
+def read_smf(data):
+    """Reads the files merlin writes (no running status): (format, division, [(name, [(tick, bytes)])])."""
+    import struct
+
+    assert data[:4] == b"MThd"
+    fmt, count, division = struct.unpack(">HHH", data[8:14])
+    i, tracks = 14, []
+    for _ in range(count):
+        assert data[i:i + 4] == b"MTrk"
+        (n,) = struct.unpack(">I", data[i + 4:i + 8])
+        body, i = data[i + 8:i + 8 + n], i + 8 + n
+        j, at, name, events = 0, 0, "", []
+
+        def vlq():
+            nonlocal j
+            v = 0
+            while True:
+                b = body[j]
+                j += 1
+                v = v << 7 | (b & 0x7F)
+                if not b & 0x80:
+                    return v
+
+        while j < len(body):
+            at += vlq()
+            status = body[j]
+            j += 1
+            if status == 0xFF:
+                kind = body[j]
+                j += 1
+                size = vlq()
+                if kind == 0x03:
+                    name = body[j:j + size].decode()
+                j += size
+            else:
+                size = 1 if status & 0xF0 in (0xC0, 0xD0) else 2
+                events.append((at, tuple([status, *body[j:j + size]])))
+                j += size
+        tracks.append((name, events))
+    return fmt, division, tracks
+
+
+CAPTURE_SCRIPT = "4:map cc 25 capture; 14:quit"
+# A note-off whose note-on is before the window, notes with a pedal, a note still held when the
+# capture button (a mapped control, CC 25) is pressed, and a controller of no interest.
+CAPTURE_CONTROLS = (
+    # (Status bytes need the 0x: the pretend controller reads two plain digits as decimal.)
+    "0.5:0x80 62 0; 1:0x90 60 100; 1.5:0x80 60 0; 2:0x90 64 100; 2.5:0xB0 64 127; 3:0x80 64 0; "
+    "3.5:0x90 67 100; 4:0xB0 20 5; 5:0xB0 25 127"
+)
+
+
+def capture_check():
+    out_dir = Path(tempfile.mkdtemp(prefix="merlin-e2e-capture-"))
+    try:
+        out = run(CAPTURE_SCRIPT, CAPTURE_CONTROLS, 8, config=f'capture_dir = "{out_dir}"\n')
+        files = sorted(out_dir.glob("Merlin capture *.mid"))
+        problems = []
+        if len(files) != 1:
+            problems.append(f"{len(files)} capture files: {[f.name for f in files]}")
+        else:
+            fmt, division, tracks = read_smf(files[0].read_bytes())
+            names = [t[0] for t in tracks]
+            if fmt != 1 or division != 960 or len(tracks) != 2 or names[1] != "Fake Controller":
+                problems.append(f"format {fmt}, division {division}, tracks {names}")
+            else:
+                events = tracks[1][1]
+                notes = [e[1] for e in events]
+                want = [
+                    (0x90, 60, 100), (0x80, 60, 0), (0x90, 64, 100), (0xB0, 64, 127),
+                    (0x80, 64, 0), (0x90, 67, 100), (0xB0, 20, 5), (0x80, 67, 0), (0xB0, 64, 0),
+                ]
+                if notes != want:
+                    problems.append(f"messages {notes}\n  wanted {want}")
+                else:
+                    # At 120 bpm: half a second is 960 ticks (the pretend device is not exact).
+                    for k, ticks in ((1, 960), (2, 1920), (3, 2880), (4, 3840)):
+                        if abs(events[k][0] - events[0][0] - ticks) > 200:
+                            problems.append(f"message {k} at {events[k][0]}, wanted about {ticks}")
+        if "saved " not in out:
+            problems.append("the app did not say it saved")
+        if problems:
+            print("FAIL (capture)\n  " + "\n  ".join(problems))
+            print(out[-3000:])
+            sys.exit(1)
+        print(f"ok: the capture button (a mapped control) saved {files[0].name}: 2 tracks, notes, pedal and a held note closed")
+    finally:
+        shutil.rmtree(out_dir, ignore_errors=True)
 
 
 SNAP_FILE = Path(tempfile.gettempdir()) / "merlin-e2e-snapshots.mrig"

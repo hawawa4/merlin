@@ -896,6 +896,18 @@ impl Running {
                 s.panic();
                 Ok(())
             }
+            Action::CaptureMidi => {
+                s.capture_midi();
+                Ok(())
+            }
+            Action::SetCaptureMinutes(m) => {
+                s.set_capture_minutes(m);
+                Ok(())
+            }
+            Action::SetCaptureDir(d) => {
+                s.set_capture_dir(d);
+                Ok(())
+            }
             Action::NewRig => {
                 s.new_rig();
                 Ok(())
@@ -1526,6 +1538,7 @@ fn parse_script() -> Vec<(Duration, Action)> {
                 "on" => Action::NoteOn(words.next()?.parse().ok()?),
                 "off" => Action::NoteOff(words.next()?.parse().ok()?),
                 "panic" => Action::Panic,
+                "capture" => Action::CaptureMidi,
                 "new" => Action::NewRig,
                 "save" => Action::SaveAs(PathBuf::from(words.collect::<Vec<_>>().join(" "))),
                 "open" => Action::OpenPath(PathBuf::from(words.collect::<Vec<_>>().join(" "))),
@@ -1598,6 +1611,7 @@ fn parse_control_action(
         "next" => A::NextSlot,
         "prev" => A::PrevSlot,
         "panic" => A::Panic,
+        "capture" => A::CaptureMidi,
         "pan" => A::SlotPan {
             slot: num(words.next())?,
         },

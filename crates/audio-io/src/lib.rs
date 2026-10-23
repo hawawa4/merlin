@@ -5,9 +5,10 @@
 mod jack_backend;
 
 pub use jack_backend::{
-    ControlEvent, DEVICE_MESSAGE_MAX, DEVICE_OUTPUTS, DeviceMessage, HARDWARE_INPUTS,
-    InputInterest, InputRole, Interest, JackBackend, JackClient, MARKER_INPUT, MemLock, MidiSource,
-    Stats, VIRTUAL_INPUT, friendly_name, lock_memory, preload_pipewire_jack, sink_friendly_name,
+    ControlEvent, DEFAULT_CAPTURE_WINDOW, DEVICE_MESSAGE_MAX, DEVICE_OUTPUTS, DeviceMessage,
+    HARDWARE_INPUTS, InputInterest, InputRole, Interest, JackBackend, JackClient, MARKER_INPUT,
+    MemLock, MidiSource, Stats, VIRTUAL_INPUT, friendly_name, lock_memory, preload_pipewire_jack,
+    sink_friendly_name,
 };
 
 use merlin_engine::{Command, Engine, EngineHandle};

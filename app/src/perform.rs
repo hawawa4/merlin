@@ -63,6 +63,17 @@ fn bar(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Actio
             if panic.clicked() && !s.map_mode {
                 actions.push(Action::Panic);
             }
+            let capture = ui
+                .add_enabled(
+                    s.capture_minutes() > 0,
+                    egui::Button::new(RichText::new("CAPTURE").size(18.0))
+                        .min_size(egui::vec2(110.0, 48.0)),
+                )
+                .on_hover_text("Save the last minutes of what you played as a MIDI file");
+            crate::map_mode::target(ui, s, &capture, ControlAction::CaptureMidi, None, actions);
+            if capture.clicked() && !s.map_mode {
+                actions.push(Action::CaptureMidi);
+            }
             lock_button(ui, st, actions);
             if !st.locked {
                 crate::map_mode::toggle(ui, s, actions);

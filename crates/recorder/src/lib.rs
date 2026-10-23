@@ -97,7 +97,8 @@ impl Tap {
         self.enabled = self.shared.window_frames.load(Ordering::Relaxed) > 0;
     }
 
-    /// A message that arrived `offset` frames into the cycle. `bytes` is as long as the message.
+    /// A message that arrived `offset` frames into the cycle; `data` is padded with zeros when the
+    /// message is shorter than three bytes.
     pub fn record(&mut self, offset: u32, input: u8, data: [u8; 3]) {
         if !self.enabled {
             return;

@@ -30,6 +30,7 @@ merlin-scanner.workspace = true
 merlin-wine.workspace = true
 merlin-control.workspace = true
 merlin-backing.workspace = true
+merlin-recorder.workspace = true
 surface-api.workspace = true
 launchkey-mk3 = { workspace = true, optional = true }
 rtrb.workspace = true
