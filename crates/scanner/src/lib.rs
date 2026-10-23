@@ -429,7 +429,7 @@ mod tests {
         std::fs::write(d.join("Vendor/y.clap"), b"x").unwrap();
         // Only directly below a scan folder: the same name deeper down is just a folder.
         std::fs::write(d.join("Vendor").join(DAW_BRIDGES_DIR).join("z.clap"), b"x").unwrap();
-        let found: Vec<_> = find_clap_files(&[d.clone()])
+        let found: Vec<_> = find_clap_files(std::slice::from_ref(&d))
             .into_iter()
             .map(|(p, _)| p.strip_prefix(&d).unwrap().to_string_lossy().into_owned())
             .collect();
