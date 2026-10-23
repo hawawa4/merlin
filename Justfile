@@ -102,7 +102,12 @@ setup:
         tar -xzf {{assets}}/dl/surge-linux.tar.gz -C {{assets}}/dl/surge-linux; }
     @echo "test assets ready in {{assets}}/"
 
-# Build yabridge at the pinned commit in Docker (S4); output in runtime/
+# Does a bridge work the way another DAW would load it (symlinked chainloader, empty environment)?
+check-standalone-bridge *args:
+    cargo build --release -p merlin
+    tools/check-standalone-bridge.sh {{args}}
+
+# Build the vendored yabridge against our Wine in Docker; output in runtime/
 yabridge-build wine="wine-11.20-vblank":
     tools/build-yabridge.sh {{wine}}
 

@@ -17,13 +17,8 @@ OUT="$ROOT/runtime/yabridge-$COMMIT-$WINE_NAME"
 BUILD="$ROOT/runtime/src/yabridge-build-$WINE_NAME"
 
 [ -x "$WINE/bin/winegcc" ] || { echo "no Wine at $WINE (run: just wine-build)" >&2; exit 1; }
-if [ -e "$OUT/libyabridge-clap.so" ]; then
-    echo "already built: $OUT"
-    exit 0
-fi
-
 docker build -q -t "$IMAGE" "$ROOT/build-support/yabridge" >/dev/null
-rm -rf "$BUILD" && mkdir -p "$BUILD"
+mkdir -p "$BUILD"   # kept between runs: ninja only rebuilds what changed
 
 # Wine was configured with --prefix=/out, so it is mounted at /out.
 docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -e PATH="/out/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
@@ -31,7 +26,7 @@ docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -e PATH="/out/bin:/usr/local
     -v "$SRC:/src" -v "$BUILD:/build" -v "$WINE:/out:ro" -w /src "$IMAGE" bash -c '
         set -e
         wine --version
-        meson setup /build --buildtype=release --cross-file=cross-wine.conf \
+        [ -f /build/build.ninja ] || meson setup /build --buildtype=release --cross-file=cross-wine.conf \
             --unity=on --unity-size=10000 -Dbitbridge=false
         ninja -C /build
         strip /build/libyabridge{,-chainloader}-{clap,vst2,vst3}.so /build/yabridge-host.exe.so'

@@ -17,6 +17,7 @@
 #include "utils.h"
 
 #include <unistd.h>
+#include <fstream>
 #include <sstream>
 
 // Generated inside of the build directory
@@ -38,7 +39,51 @@ fs::path find_plugin_library(const fs::path& this_plugin_path,
 fs::path normalize_plugin_path(const fs::path& windows_library_path,
                                PluginType plugin_type);
 std::variant<OverridenWinePrefix, fs::path, DefaultWinePrefix> find_wine_prefix(
-    fs::path windows_plugin_path);
+    fs::path windows_plugin_path,
+    const fs::path& native_library_path);
+
+/**
+ * Merlin patch: a self-contained runtime. When the plugin bridge's real
+ * path (symlinks resolved) is in a folder that holds `yabridge-host.exe`, that
+ * folder is a runtime we can take everything from without `PATH`, `WINELOADER`
+ * or `WINEPREFIX` being set, which is the situation when a DAW is started from
+ * a desktop launcher.
+ */
+static std::optional<fs::path> find_runtime_dir(
+    const fs::path& native_library_path) {
+    std::error_code error;
+    const fs::path real_path = fs::canonical(native_library_path, error);
+    if (error) {
+        return std::nullopt;
+    }
+
+    const fs::path dir = real_path.parent_path();
+    if (!fs::exists(dir / yabridge_host_name)) {
+        return std::nullopt;
+    }
+
+    return dir;
+}
+
+/**
+ * The Wine that belongs to the runtime: `<runtime>/../wine/bin/wine`, so
+ * `yabridge/` and `wine/` side by side in one folder.
+ */
+static std::optional<fs::path> find_bundled_wine(
+    const fs::path& native_library_path) {
+    const std::optional<fs::path> runtime_dir =
+        find_runtime_dir(native_library_path);
+    if (!runtime_dir) {
+        return std::nullopt;
+    }
+
+    const fs::path wine = runtime_dir->parent_path() / "wine" / "bin" / "wine";
+    if (access(wine.c_str(), X_OK) != 0) {
+        return std::nullopt;
+    }
+
+    return wine;
+}
 
 PluginInfo::PluginInfo(PluginType plugin_type,
                        const ghc::filesystem::path& plugin_path,
@@ -55,7 +100,7 @@ PluginInfo::PluginInfo(PluginType plugin_type,
       plugin_arch_(find_dll_architecture(windows_library_path_)),
       windows_plugin_path_(
           normalize_plugin_path(windows_library_path_, plugin_type)),
-      wine_prefix_(find_wine_prefix(windows_plugin_path_)) {}
+      wine_prefix_(find_wine_prefix(windows_plugin_path_, native_library_path_)) {}
 
 ProcessEnvironment PluginInfo::create_host_env() const {
     ProcessEnvironment env(environ);
@@ -71,6 +116,16 @@ ProcessEnvironment PluginInfo::create_host_env() const {
                    [](const DefaultWinePrefix&) {},
                },
                wine_prefix_);
+
+    // Merlin patch: use the runtime's own Wine unless `WINELOADER`
+    // already names a working one
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
+    const char* wineloader = getenv("WINELOADER");
+    if (!wineloader || access(wineloader, X_OK) != 0) {
+        if (const auto wine = find_bundled_wine(native_library_path_)) {
+            env.insert("WINELOADER", wine->string());
+        }
+    }
 
     // As of writing upstream Wine does not yet have a Wayland driver, but one
     // is in the process of being merged. If this ever becomes enabled by
@@ -108,6 +163,9 @@ std::string PluginInfo::wine_version() const {
     if (const char* wineloader_path = getenv("WINELOADER");
         wineloader_path && access(wineloader_path, X_OK) == 0) {
         wine_path = wineloader_path;
+    } else if (const auto wine = find_bundled_wine(native_library_path_)) {
+        // Merlin patch, see `create_host_env()`
+        wine_path = wine->string();
     }
 
     Process process(wine_path);
@@ -307,7 +365,8 @@ fs::path normalize_plugin_path(const fs::path& windows_library_path,
 }
 
 std::variant<OverridenWinePrefix, fs::path, DefaultWinePrefix> find_wine_prefix(
-    fs::path windows_plugin_path) {
+    fs::path windows_plugin_path,
+    const fs::path& native_library_path) {
     // NOLINTNEXTLINE(concurrency-mt-unsafe)
     if (const auto prefix = getenv("WINEPREFIX")) {
         return OverridenWinePrefix{prefix};
@@ -316,6 +375,17 @@ std::variant<OverridenWinePrefix, fs::path, DefaultWinePrefix> find_wine_prefix(
     const std::optional<fs::path> dosdevices_dir = find_dominating_file(
         "dosdevices", windows_plugin_path, fs::is_directory);
     if (!dosdevices_dir) {
+        // Merlin patch: a plugin outside of any prefix uses the prefix
+        // named in `default-wineprefix` (its first line) in the runtime folder,
+        // rather than `~/.wine`
+        if (const auto runtime_dir = find_runtime_dir(native_library_path)) {
+            std::ifstream file(*runtime_dir / "default-wineprefix");
+            std::string line;
+            if (std::getline(file, line) && !line.empty()) {
+                return fs::path(line);
+            }
+        }
+
         return DefaultWinePrefix{};
     }
 

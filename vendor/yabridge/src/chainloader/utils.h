@@ -25,7 +25,8 @@
  * `dlclose()`'d when it's no longer needed. This search works in the following
  * order:
  *
- * - First we'll try to locate `yabridge-host.exe` using the same method used by
+ * - (Merlin) Right next to this chainloader, after following symlinks.
+ * - Then we'll try to locate `yabridge-host.exe` using the same method used by
  *   the yabridge plugin bridges themselves. We'll search in `$PATH`, followed
  *   by `${XDG_DATA_HOME:-$HOME/.local/share}/yabridge`. If that file exists and
  *   the target plugin library exists right next to it, then we'll use that.

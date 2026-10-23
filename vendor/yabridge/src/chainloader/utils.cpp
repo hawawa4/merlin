@@ -31,6 +31,19 @@ namespace fs = ghc::filesystem;
 void* find_plugin_library(const std::string& name) {
     // Just using a goto for this would probably be cleaner, but yeah...
     const auto impl = [&name]() -> void* {
+        // Merlin patch: right next to this chainloader, after
+        // following symlinks. A chainloader that is a symlink into a
+        // self-contained runtime folder needs no `PATH` or install location
+        std::error_code error;
+        const fs::path real_dir =
+            fs::canonical(get_this_file_location(), error).parent_path();
+        if (!error && fs::exists(real_dir / name)) {
+            if (void* handle = dlopen((real_dir / name).c_str(),
+                                      RTLD_LAZY | RTLD_LOCAL)) {
+                return handle;
+            }
+        }
+
         // If `name` exists right next to the Wine plugin host binary, then
         // we'll try loading that. Otherwise we'll fall back to regular
         // `dlopen()` for distro packaged versions of yabridge

@@ -45,6 +45,10 @@ Suggested upstream order: 0001 alone first (small, with a test, and it unfreezes
 
 Already applied in `vendor/yabridge` (about 45 lines, `src/common/communication/common.h`; the first git commit of that folder is upstream unmodified, so `git log -p vendor/yabridge` shows it): when a socket to the Wine host fails, call a hook the host application can register (`yabridge_socket_failed_hook`) before the C++ exception propagates. Without it, a crashing Windows plugin makes the next call across yabridge either block forever or throw a C++ exception through our JACK callback, which aborts a Rust process. The app registers the hook, quarantines the plugin, kills the other Wine hosts and restarts from the autosave (`app/src/guard.rs`). Probably not acceptable upstream as is (it is a global hook for one kind of host), but a general "error callback" might be.
 
+## Bridges that work without the app
+
+The yabridge fork finds its own runtime, so a bridge also works when a DAW loads it with no environment set up (`vendor/yabridge/PATCHES.md`, items 2 and 3). A runtime folder holds `yabridge/` and `wine/` side by side. A bridge that is a **symlink** to `yabridge/libyabridge-chainloader-*.so` finds the libraries, `yabridge-host.exe` and `wine/bin/wine` from there; a *copied* chainloader (what the app writes today) still relies on `PATH` and `WINELOADER`, as before. A plugin inside a Wine prefix uses that prefix; one outside every prefix uses the prefix named on the first line of `yabridge/default-wineprefix`, if that file exists, and otherwise `~/.wine` like stock yabridge. `tools/check-standalone-bridge.sh` checks both cases in a clean environment (no `PATH` entry, no `WINELOADER`, a throwaway `HOME`).
+
 ## Known limits
 
 - **64-bit plugins only.** The bitbridge is off, and Wine 11's default WoW64 mode is incompatible with it.
