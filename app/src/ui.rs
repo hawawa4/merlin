@@ -9,6 +9,7 @@ use egui::{Color32, RichText};
 use merlin_model::{ControlAction, Format, FxKind, FxSettings};
 
 use crate::browser;
+use crate::hw;
 use crate::keyboard::{self, COLORS, ZoneView};
 use crate::paths;
 use crate::perf;
@@ -108,6 +109,8 @@ pub enum Action {
     /// Script-only: load the named effect plugin as an insert.
     LoadInsertNamed(usize, usize, String),
     ToggleSettings,
+    /// Go to one of the app's views (the switch in the header).
+    SetView(View),
     /// Script-only: show a settings tab.
     ShowSettingsTab(SettingsTab),
     AddDir(String),
@@ -226,6 +229,16 @@ pub enum Action {
     Quit,
 }
 
+/// The app's views: one is on screen at a time, chosen with the switch in the header.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum View {
+    Rack,
+    Setlist,
+    /// The stage view.
+    Perform,
+    Settings,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DockTab {
     Plugin,
@@ -296,6 +309,18 @@ pub struct StatusInfo {
 }
 
 impl UiState {
+    pub fn view(&self) -> View {
+        if self.perform {
+            View::Perform
+        } else if self.settings_open {
+            View::Settings
+        } else if self.setlist_open {
+            View::Setlist
+        } else {
+            View::Rack
+        }
+    }
+
     pub fn new() -> Self {
         Self {
             tab: DockTab::Plugin,
@@ -307,7 +332,8 @@ impl UiState {
             locked: false,
             unlock_since: None,
             settings_tab: SettingsTab::Plugins,
-            query: String::new(),
+            // Test hook: start with this in the browser's search box.
+            query: std::env::var("MERLIN_QUERY").unwrap_or_default(),
             preset_query: String::new(),
             macro_query: String::new(),
             favs_only: false,
@@ -357,8 +383,15 @@ pub fn draw(
         crate::perform::show(ui, s, st, actions);
         return;
     }
-    egui::Panel::top("header").show(ui, |ui| header(ui, s, st, actions));
-    egui::Panel::top("snapshots").show(ui, |ui| snapshot_bar(ui, s, actions));
+    egui::Panel::top("header")
+        .frame(hw::chassis())
+        .show(ui, |ui| header(ui, s, st, actions));
+    // Scenes belong to the rack and the setlist, not to the settings.
+    if st.view() != View::Settings {
+        egui::Panel::top("scenes")
+            .frame(hw::chassis())
+            .show(ui, |ui| scenes_bar(ui, s, actions));
+    }
     if st.setlist_open && !st.settings_open {
         egui::CentralPanel::default().show(ui, |ui| {
             *dock_rect = egui::Rect::NOTHING;
@@ -594,15 +627,18 @@ fn drag_overlay(ui: &mut egui::Ui, st: &UiState) {
 }
 
 /// The saved performance states: click one to bring it back; right-click for more.
-fn snapshot_bar(ui: &mut egui::Ui, s: &mut Session, actions: &mut Vec<Action>) {
+/// Scenes (what the code calls snapshots): saved rack set-ups to recall with a click or a pedal.
+fn scenes_bar(ui: &mut egui::Ui, s: &mut Session, actions: &mut Vec<Action>) {
     ui.horizontal_wrapped(|ui| {
-        ui.label(RichText::new("Snapshots").strong()).on_hover_text(
-            "A snapshot remembers which slots play, their volumes, zones, effects on or off and SoundFont presets. Click one to bring it back; right-click to rename, update or remove it. They are saved in the rig file.",
-        );
+        hw::engraved(ui, "Scenes").on_hover_text(SCENES_HELP);
         let current = s.current_snapshot();
         for (n, snap) in s.snapshots().iter().enumerate() {
             let label = format!("{}  {}", n + 1, snap.name);
-            let r = ui.selectable_label(current == Some(n), label);
+            let r = hw::Cap::new(label)
+                .lit((current == Some(n)).then_some(hw::AMBER))
+                .min_width(70.0)
+                .show(ui)
+                .on_hover_text("Click to bring this scene back. Right-click to rename, update or remove it.");
             if r.clicked() && !s.map_mode {
                 actions.push(Action::RecallSnapshot(n));
             }
@@ -632,60 +668,138 @@ fn snapshot_bar(ui: &mut egui::Ui, s: &mut Session, actions: &mut Vec<Action>) {
                 }
             });
         }
-        if ui
-            .button("+ Save snapshot")
-            .on_hover_text("Remember the current state")
+        if hw::Cap::new("+ Store scene")
+            .show(ui)
+            .on_hover_text("Remember the rack as it is now: which instruments play, their volumes, zones, effects and SoundFont sounds")
             .clicked()
         {
             actions.push(Action::AddSnapshot);
         }
+        if s.snapshots().is_empty() {
+            ui.label(
+                RichText::new("A scene is a saved rack set-up, to recall in one click or with a foot switch. Set the rack up, then press Store scene.")
+                    .small()
+                    .weak(),
+            );
+        }
     });
 }
 
+const SCENES_HELP: &str = "A scene remembers which slots play, their volumes, zones, effects on or off and SoundFont sounds. Click one to bring it back (or map it to a pedal). Right-click to rename, update or remove it. Scenes are saved in the rig file.";
+
 fn header(ui: &mut egui::Ui, s: &mut Session, st: &UiState, actions: &mut Vec<Action>) {
     ui.horizontal(|ui| {
-        ui.strong("MERLIN");
-        ui.separator();
-        ui.label("Rig");
-        let mut name = s.rig.name.clone();
-        if ui
-            .add(egui::TextEdit::singleline(&mut name).desired_width(120.0))
-            .changed()
-        {
-            actions.push(Action::RenameRig(name));
+        ui.label(RichText::new("MERLIN").size(18.0).strong().color(hw::AMBER));
+        ui.add_space(6.0);
+        file_plate(ui, s, actions);
+        ui.add_space(10.0);
+        let views = [View::Rack, View::Setlist, View::Perform, View::Settings];
+        let names = ["RACK", "SETLIST", "PERFORM", "SETTINGS"];
+        let now = views.iter().position(|v| *v == st.view()).unwrap_or(0);
+        if let Some(n) = hw::selector(ui, &names, now, hw::BLUE) {
+            actions.push(Action::SetView(views[n]));
         }
-        if s.dirty {
-            ui.label(RichText::new("modified").color(Color32::from_rgb(0xe0, 0xb4, 0x4a)));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let p = hw::Cap::new("PANIC")
+                .base(Color32::from_rgb(0x9a, 0x2a, 0x2a))
+                .min_width(70.0)
+                .show(ui)
+                .on_hover_text("Silences everything: all notes off on every slot");
+            if p.clicked() && !s.map_mode {
+                actions.push(Action::Panic);
+            }
+            crate::map_mode::target(ui, s, &p, ControlAction::Panic, None, actions);
+            let mut master = s.rig.master_volume;
+            ui.spacing_mut().slider_width = 80.0;
+            let m = ui.add(
+                egui::Slider::new(&mut master, 0.0..=1.5)
+                    .fixed_decimals(2)
+                    .text("master"),
+            );
+            if m.changed() {
+                actions.push(Action::SetMaster(master));
+            }
+            crate::map_mode::target(ui, s, &m, ControlAction::MasterVolume, None, actions);
+            ui.add_space(6.0);
+            capture_button(ui, s, actions);
+            crate::map_mode::toggle(ui, s, actions);
+        });
+    });
+    ui.horizontal(|ui| {
+        if s.scanning() {
+            let file = s
+                .scan_current
+                .as_ref()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            ui.label(
+                RichText::new(format!("scanning plugins… {file}"))
+                    .small()
+                    .color(hw::AMBER),
+            );
+        } else if let Some(note) = s.capture_notice() {
+            ui.label(RichText::new(note).small().color(hw::GREEN));
+        } else if let Some(line) = s.log.last() {
+            ui.label(RichText::new(line).small().weak());
         }
-        if ui.button("New").clicked() {
-            actions.push(Action::NewRig);
-        }
-        if ui.button("Save").clicked() {
-            actions.push(Action::SaveRig);
-        }
-        if ui.button("Settings").clicked() {
-            actions.push(Action::ToggleSettings);
-        }
-        if ui
-            .button("Setlist")
-            .on_hover_text("Songs and their parts, in playing order")
-            .clicked()
-        {
-            actions.push(Action::ToggleSetlist);
-        }
-        crate::map_mode::toggle(ui, s, actions);
-        if ui
-            .button("Perform")
-            .on_hover_text("Stage view: big buttons for snapshots, instruments and volume (F11 also, Escape leaves)")
-            .clicked()
-        {
-            actions.push(Action::SetPerform(true));
-        }
-        capture_button(ui, s, actions);
-        egui::ComboBox::from_id_salt("open-rig")
-            .selected_text("Open…")
-            .width(90.0)
-            .show_ui(ui, |ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let limiting =
+                f32::from_bits(s.engine.shared.limiter_reduction.swap(0, Ordering::Relaxed));
+            if limiting > 0.5 {
+                ui.label(
+                    RichText::new(format!("LIMIT {limiting:.1} dB"))
+                        .small()
+                        .color(Color32::from_rgb(0xe0, 0x6c, 0x5a)),
+                );
+            }
+            let (xruns, dsp, buf) = s
+                .backend()
+                .map(|b| {
+                    (
+                        b.stats.xruns.load(Ordering::Relaxed),
+                        b.cpu_load(),
+                        b.buffer_size(),
+                    )
+                })
+                .unwrap_or_default();
+            // The UI's own cost is for development: it goes first when the row is narrow.
+            let mut text = format!(
+                "{buf} @ {} kHz · DSP {dsp:.1}% · xruns {xruns}",
+                s.sample_rate / 1000
+            );
+            let room = ui.available_width();
+            if room > 700.0 {
+                text.push_str(&format!(
+                    " · UI {:.1}% · {:.0} fps",
+                    st.status.cpu_self, st.status.frames_per_s
+                ));
+            } else if room < 420.0 {
+                text = format!("DSP {dsp:.0}% · xruns {xruns}");
+            }
+            ui.label(RichText::new(text).small().weak());
+        });
+    });
+}
+
+/// The rig file's controls together: its name, and New, Open, Save beside it.
+fn file_plate(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
+    hw::plate().show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 5.0;
+            hw::engraved(ui, "Rig");
+            let mut name = s.rig.name.clone();
+            if ui
+                .add(egui::TextEdit::singleline(&mut name).desired_width(120.0))
+                .changed()
+            {
+                actions.push(Action::RenameRig(name));
+            }
+            if hw::Cap::new("New").show(ui).clicked() {
+                actions.push(Action::NewRig);
+            }
+            let open = hw::Cap::new("Open…").show(ui);
+            egui::Popup::menu(&open).show(|ui| {
                 let mut files: Vec<PathBuf> = std::fs::read_dir(paths::rigs_dir())
                     .into_iter()
                     .flatten()
@@ -704,81 +818,20 @@ fn header(ui: &mut egui::Ui, s: &mut Session, st: &UiState, actions: &mut Vec<Ac
                     }
                 }
             });
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let p = ui.add(
-                egui::Button::new(RichText::new("PANIC").strong().color(Color32::WHITE))
-                    .fill(Color32::from_rgb(0xa0, 0x30, 0x30)),
-            );
-            if p.clicked() && !s.map_mode {
-                actions.push(Action::Panic);
+            // Lit while there is something to save.
+            let save = hw::Cap::new("Save")
+                .lit(s.dirty.then_some(hw::AMBER))
+                .show(ui)
+                .on_hover_text(if s.dirty {
+                    "The rig has changes that are not saved"
+                } else {
+                    "Save the rig"
+                });
+            if save.clicked() {
+                actions.push(Action::SaveRig);
             }
-            crate::map_mode::target(ui, s, &p, ControlAction::Panic, None, actions);
-            let mut master = s.rig.master_volume;
-            let m = ui.add(
-                egui::Slider::new(&mut master, 0.0..=1.5)
-                    .fixed_decimals(2)
-                    .text("master"),
-            );
-            if m.changed() {
-                actions.push(Action::SetMaster(master));
-            }
-            crate::map_mode::target(ui, s, &m, ControlAction::MasterVolume, None, actions);
-            let limiting =
-                f32::from_bits(s.engine.shared.limiter_reduction.swap(0, Ordering::Relaxed));
-            if limiting > 0.5 {
-                ui.label(
-                    RichText::new(format!("LIMIT {limiting:.1} dB"))
-                        .color(Color32::from_rgb(0xe0, 0x6c, 0x5a)),
-                );
-            }
-            let (xruns, dsp, buf) = s
-                .backend()
-                .map(|b| {
-                    (
-                        b.stats.xruns.load(Ordering::Relaxed),
-                        b.cpu_load(),
-                        b.buffer_size(),
-                    )
-                })
-                .unwrap_or_default();
-            // The UI's own cost is for development: it goes first when the header is narrow.
-            let mut text = format!(
-                "{buf} @ {} kHz · DSP {dsp:.1}% · xruns {xruns}",
-                s.sample_rate / 1000
-            );
-            let room = ui.available_width();
-            if room > 820.0 {
-                text.push_str(&format!(
-                    " · UI {:.1}% · {:.0} fps",
-                    st.status.cpu_self, st.status.frames_per_s
-                ));
-            } else if room < 520.0 {
-                text = format!("DSP {dsp:.0}% · xruns {xruns}");
-            }
-            ui.label(text);
         });
     });
-    if s.scanning() {
-        let file = s
-            .scan_current
-            .as_ref()
-            .and_then(|p| p.file_name())
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        ui.label(
-            RichText::new(format!("scanning plugins… {file}"))
-                .small()
-                .color(Color32::from_rgb(0xe0, 0xb4, 0x4a)),
-        );
-    } else if let Some(note) = s.capture_notice() {
-        ui.label(
-            RichText::new(note)
-                .small()
-                .color(Color32::from_rgb(0x6c, 0xc9, 0x6a)),
-        );
-    } else if let Some(line) = s.log.last() {
-        ui.label(RichText::new(line).small().weak());
-    }
 }
 
 /// "Capture MIDI": saves the last minutes of what was played (the app is always listening).
@@ -786,7 +839,8 @@ fn capture_button(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
     let minutes = s.capture_minutes();
     let (listened, kept) = s.capture_status();
     let r = ui
-        .add_enabled(minutes > 0, egui::Button::new("Capture MIDI"))
+        .add_enabled_ui(minutes > 0, |ui| hw::Cap::new("CAPTURE MIDI").show(ui))
+        .inner
         .on_hover_text(if minutes == 0 {
             "MIDI capture is off (Settings > MIDI)".to_owned()
         } else {
@@ -1483,4 +1537,25 @@ fn inserts_section(ui: &mut egui::Ui, s: &Session, i: usize, actions: &mut Vec<A
         });
     }
     ui.separator();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_view_follows_the_flags_with_the_stage_view_first() {
+        let mut st = UiState::new();
+        assert_eq!(st.view(), View::Rack);
+        st.setlist_open = true;
+        assert_eq!(st.view(), View::Setlist);
+        st.settings_open = true;
+        assert_eq!(
+            st.view(),
+            View::Settings,
+            "settings is drawn over the setlist"
+        );
+        st.perform = true;
+        assert_eq!(st.view(), View::Perform);
+    }
 }

@@ -11,6 +11,7 @@ mod autotag;
 mod browser;
 mod drivers;
 mod guard;
+mod hw;
 mod keyboard;
 mod macro_panel;
 mod map_mode;
@@ -402,6 +403,15 @@ impl Running {
             }
             Action::SamplerGain(i, g) => {
                 s.set_sampler_gain(i, g);
+                Ok(())
+            }
+            Action::SetView(view) => {
+                // A locked stage view stays until it is unlocked.
+                if !self.ui.locked || !self.ui.perform {
+                    self.ui.perform = view == ui::View::Perform;
+                    self.ui.settings_open = view == ui::View::Settings;
+                    self.ui.setlist_open = view == ui::View::Setlist;
+                }
                 Ok(())
             }
             Action::ToggleSettings => {

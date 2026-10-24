@@ -389,7 +389,7 @@ fn setlist(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
 fn snapshots(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
     if s.snapshots().is_empty() {
         ui.label(
-            RichText::new("No snapshots yet. Leave this view, set the rig up the way you want it and press \"+ Save snapshot\".")
+            RichText::new("No scenes yet. Leave this view, set the rig up the way you want it and press \"+ Store scene\".")
                 .size(16.0)
                 .weak(),
         );

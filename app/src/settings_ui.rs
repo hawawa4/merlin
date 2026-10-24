@@ -104,10 +104,10 @@ impl ActionKind {
             Self::PrevPart => "Previous part (foot switch)",
             Self::NextSong => "Next song",
             Self::PrevSong => "Previous song",
-            Self::RecallSnapshot => "Recall a snapshot",
-            Self::NextSnapshot => "Next snapshot (foot switch)",
-            Self::PrevSnapshot => "Previous snapshot (foot switch)",
-            Self::RecallSnapshotByValue => "Recall the snapshot given by the number sent",
+            Self::RecallSnapshot => "Recall a scene",
+            Self::NextSnapshot => "Next scene (foot switch)",
+            Self::PrevSnapshot => "Previous scene (foot switch)",
+            Self::RecallSnapshotByValue => "Recall the scene given by the number sent",
             Self::Panic => "Panic (all notes off)",
             Self::CaptureMidi => "Save the last minutes of MIDI (capture)",
             Self::SlotPan => "Pan of a slot (knob)",
@@ -187,11 +187,6 @@ pub fn show(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<
         ] {
             ui.selectable_value(&mut st.settings_tab, tab, name);
         }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("Close").clicked() {
-                actions.push(Action::ToggleSettings);
-            }
-        });
     });
     ui.separator();
     egui::ScrollArea::vertical()
@@ -482,13 +477,13 @@ fn controls(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<
             st.new_base = shown - 1;
         }
         if st.new_kind == ActionKind::RecallSnapshot {
-            ui.label("snapshot");
+            ui.label("scene");
             let mut shown = st.new_slot + 1;
             ui.add(egui::DragValue::new(&mut shown).range(1..=merlin_model::MAX_SNAPSHOTS));
             st.new_slot = shown - 1;
         }
         if st.new_kind == ActionKind::RecallSnapshotByValue {
-            ui.label("first snapshot");
+            ui.label("first scene");
             let mut shown = st.new_base + 1;
             ui.add(egui::DragValue::new(&mut shown).range(1..=merlin_model::MAX_SNAPSHOTS));
             st.new_base = shown - 1;

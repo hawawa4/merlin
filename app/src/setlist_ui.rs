@@ -10,14 +10,10 @@ pub fn show(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         ui.heading("Setlist");
-        ui.separator();
-        if ui.button("Close").clicked() {
-            actions.push(Action::ToggleSetlist);
-        }
     });
     ui.label(
         RichText::new(
-            "Songs in playing order. A song has parts; a part brings back a snapshot (and can change the tempo) when you enter it. Move through them with Next part / Previous part, mapped to a foot switch in Settings > Controls, or in the Perform view. Everything is saved in the rig.",
+            "Songs in playing order. A song has parts; a part brings back a scene (and can change the tempo) when you enter it. Move through them with Next part / Previous part, mapped to a foot switch in Settings > Controls, or in the Perform view. Everything is saved in the rig.",
         )
         .small()
         .weak(),
@@ -225,7 +221,7 @@ fn song_editor(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut V
             if ui
                 .button("+ Part from the current sound")
                 .on_hover_text(
-                    "Saves the rig as it is now as a snapshot and adds a part that recalls it",
+                    "Saves the rig as it is now as a scene and adds a part that recalls it",
                 )
                 .clicked()
             {
@@ -487,14 +483,14 @@ fn snapshot_picker(
 ) {
     let text = match current.and_then(|n| s.snapshots().get(n).map(|x| (n, x))) {
         Some((n, snap)) => format!("{}  {}", n + 1, snap.name),
-        None => "no snapshot".to_owned(),
+        None => "no scene".to_owned(),
     };
     egui::ComboBox::from_id_salt(("part-snapshot", song, part))
         .selected_text(text)
         .width(170.0)
         .show_ui(ui, |ui| {
             if ui
-                .selectable_label(current.is_none(), "no snapshot (leave the sound alone)")
+                .selectable_label(current.is_none(), "no scene (leave the sound alone)")
                 .clicked()
             {
                 actions.push(Action::EditPart(song, part, PartEdit::Snapshot(None)));

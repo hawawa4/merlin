@@ -24,7 +24,7 @@ pub fn show(
     }
     ui.label(
         RichText::new(
-            "A macro is one knob that moves several parameters at once, each over a range you choose (a range can run backwards). Move it here, map a controller knob to it in Settings > Controls, or let a snapshot set it.",
+            "A macro is one knob that moves several parameters at once, each over a range you choose (a range can run backwards). Move it here, map a controller knob to it in Settings > Controls, or let a scene set it.",
         )
         .small()
         .weak(),

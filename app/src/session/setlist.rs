@@ -102,7 +102,7 @@ impl Session {
                 p.name = format!("Part {}", k + 1);
             }
             self.say(format!(
-                "part {} of song {} uses snapshot {n}",
+                "part {} of song {} uses scene {n}",
                 k + 1,
                 song + 1
             ));

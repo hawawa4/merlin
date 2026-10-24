@@ -51,16 +51,16 @@ impl Session {
     /// Saves the current state as a new snapshot and returns its position.
     pub fn add_snapshot(&mut self) -> Option<usize> {
         if self.rig.snapshots.len() >= MAX_SNAPSHOTS {
-            self.say(format!("at most {MAX_SNAPSHOTS} snapshots"));
+            self.say(format!("at most {MAX_SNAPSHOTS} scenes"));
             return None;
         }
-        let name = format!("Snapshot {}", self.rig.snapshots.len() + 1);
+        let name = format!("Scene {}", self.rig.snapshots.len() + 1);
         let snap = self.capture_snapshot(name);
         self.rig.snapshots.push(snap);
         let n = self.rig.snapshots.len() - 1;
         self.last_snapshot = Some(n);
         self.dirty = true;
-        self.say(format!("saved snapshot {}", n + 1));
+        self.say(format!("saved scene {}", n + 1));
         Some(n)
     }
 
@@ -73,7 +73,7 @@ impl Session {
         self.rig.snapshots[n] = snap;
         self.last_snapshot = Some(n);
         self.dirty = true;
-        self.say(format!("snapshot {} updated", n + 1));
+        self.say(format!("scene {} updated", n + 1));
     }
 
     pub fn rename_snapshot(&mut self, n: usize, name: String) {
@@ -157,6 +157,6 @@ impl Session {
         self.mapper.reset_pickup();
         self.last_snapshot = Some(n);
         self.dirty = true;
-        self.say(format!("snapshot {}: {}", n + 1, snap.name));
+        self.say(format!("scene {}: {}", n + 1, snap.name));
     }
 }

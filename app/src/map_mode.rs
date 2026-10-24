@@ -2,7 +2,7 @@
 //! or press the control on your device. Controls that can be mapped are tinted; mapped ones show
 //! their source, and a right-click takes the mapping away.
 
-use egui::{Color32, Response, RichText, Sense, Ui};
+use egui::{Color32, Response, Sense, Ui};
 use merlin_model::ControlAction;
 
 use crate::session::Session;
@@ -84,20 +84,11 @@ pub fn target(
     }
 }
 
-/// The header button that switches map mode on and off.
+/// The header button that switches map mode on and off: lit while on.
 pub fn toggle(ui: &mut Ui, s: &Session, actions: &mut Vec<Action>) {
-    let b = egui::Button::new(RichText::new("MIDI map").color(if s.map_mode {
-        Color32::BLACK
-    } else {
-        ui.visuals().text_color()
-    }))
-    .fill(if s.map_mode {
-        LEARNING
-    } else {
-        ui.visuals().widgets.inactive.weak_bg_fill
-    });
-    if ui
-        .add(b)
+    if crate::hw::Cap::new("MIDI MAP")
+        .lit(s.map_mode.then_some(LEARNING))
+        .show(ui)
         .on_hover_text(
             "Map mode (Ctrl+M): click a control on screen, then move or press a control on your \
              MIDI device. Right-click a mapped control to remove it. Escape leaves.",

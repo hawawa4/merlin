@@ -47,9 +47,16 @@ pub fn panel(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec
                     && st.tag_filter.matches(s.tags_of(f).list)
             };
             let shown: Vec<usize> = (0..s.found.len()).filter(|&k| matches(k)).collect();
-            // Favourites first when not filtering to them.
-            let (favs, others): (Vec<usize>, Vec<usize>) =
-                shown.iter().partition(|&&k| s.is_favorite(&s.found[k]));
+            // Narrowed by a search, a filter or favourites: show everything that is left rather
+            // than make the user open branches to find it.
+            let force_open =
+                (!q.is_empty() || st.favs_only || st.tag_filter != Filter::Any).then_some(true);
+            let favs: Vec<usize> = shown
+                .iter()
+                .copied()
+                .filter(|&k| s.is_favorite(&s.found[k]))
+                .collect();
+            let tree = build_tree(s, &shown);
 
             egui::ScrollArea::vertical()
                 .auto_shrink(false)
@@ -57,15 +64,67 @@ pub fn panel(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec
                     if shown.is_empty() {
                         ui.label(RichText::new("nothing found").weak());
                     }
-                    for (title, list) in [("Favourites", &favs), ("Instruments", &others)] {
-                        if list.is_empty() {
-                            continue;
-                        }
-                        ui.add_space(4.0);
-                        ui.label(RichText::new(title).small().color(Color32::from_gray(150)));
-                        for &k in list {
-                            row(ui, s, k, actions);
-                        }
+                    if !favs.is_empty() {
+                        branch(
+                            ui,
+                            "Favourites",
+                            "favs",
+                            favs.len(),
+                            force_open,
+                            true,
+                            |ui| {
+                                for &k in &favs {
+                                    row(ui, s, k, "favs", true, actions);
+                                }
+                            },
+                        );
+                    }
+                    for family in &tree.families {
+                        let salt = family.name;
+                        branch(
+                            ui,
+                            family.name,
+                            salt,
+                            family.count(),
+                            force_open,
+                            false,
+                            |ui| {
+                                for &k in &family.general {
+                                    row(ui, s, k, salt, false, actions);
+                                }
+                                for (instrument, list) in &family.instruments {
+                                    let salt = format!("{}/{instrument}", family.name);
+                                    branch(
+                                        ui,
+                                        instrument,
+                                        &salt,
+                                        list.len(),
+                                        force_open,
+                                        false,
+                                        |ui| {
+                                            for &k in list {
+                                                row(ui, s, k, &salt, false, actions);
+                                            }
+                                        },
+                                    );
+                                }
+                            },
+                        );
+                    }
+                    if !tree.untagged.is_empty() {
+                        branch(
+                            ui,
+                            "Untagged",
+                            "untagged",
+                            tree.untagged.len(),
+                            force_open,
+                            false,
+                            |ui| {
+                                for &k in &tree.untagged {
+                                    row(ui, s, k, "untagged", true, actions);
+                                }
+                            },
+                        );
                     }
                 });
             ui.separator();
@@ -77,19 +136,112 @@ pub fn panel(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec
         });
 }
 
-fn row(ui: &mut egui::Ui, s: &Session, k: usize, actions: &mut Vec<Action>) {
+/// What the tree shows: the plugins under each family and instrument they are tagged with (a
+/// plugin with two tags is under both), and those no tag places.
+struct Tree {
+    families: Vec<Family>,
+    untagged: Vec<usize>,
+}
+
+struct Family {
+    name: &'static str,
+    /// Tagged with the family alone.
+    general: Vec<usize>,
+    instruments: Vec<(&'static str, Vec<usize>)>,
+}
+
+impl Family {
+    /// How many different plugins are in the family.
+    fn count(&self) -> usize {
+        let mut all: Vec<usize> = self.general.clone();
+        all.extend(self.instruments.iter().flat_map(|(_, l)| l.iter().copied()));
+        all.sort_unstable();
+        all.dedup();
+        all.len()
+    }
+}
+
+fn build_tree(s: &Session, shown: &[usize]) -> Tree {
+    let mut placed = vec![false; s.found.len()];
+    let mut families = Vec::new();
+    for (name, instruments) in tags::TAXONOMY {
+        let mut family = Family {
+            name,
+            general: Vec::new(),
+            instruments: Vec::new(),
+        };
+        for &k in shown {
+            let list = s.tags_of(&s.found[k]).list;
+            if list
+                .iter()
+                .any(|t| t.family == *name && t.instrument.is_none())
+            {
+                family.general.push(k);
+                placed[k] = true;
+            }
+        }
+        for &instrument in *instruments {
+            let here: Vec<usize> = shown
+                .iter()
+                .copied()
+                .filter(|&k| {
+                    s.tags_of(&s.found[k])
+                        .list
+                        .iter()
+                        .any(|t| t.family == *name && t.instrument.as_deref() == Some(instrument))
+                })
+                .collect();
+            if !here.is_empty() {
+                for &k in &here {
+                    placed[k] = true;
+                }
+                family.instruments.push((instrument, here));
+            }
+        }
+        if !family.general.is_empty() || !family.instruments.is_empty() {
+            families.push(family);
+        }
+    }
+    let untagged = shown.iter().copied().filter(|&k| !placed[k]).collect();
+    Tree { families, untagged }
+}
+
+/// One collapsible branch of the tree.
+fn branch(
+    ui: &mut egui::Ui,
+    title: &str,
+    id: &str,
+    count: usize,
+    force_open: Option<bool>,
+    default_open: bool,
+    body: impl FnOnce(&mut egui::Ui),
+) {
+    egui::CollapsingHeader::new(RichText::new(format!("{title}  ({count})")).strong())
+        .id_salt(("browser-branch", id))
+        .default_open(default_open)
+        .open(force_open)
+        .show(ui, body);
+}
+
+fn row(
+    ui: &mut egui::Ui,
+    s: &Session,
+    k: usize,
+    branch: &str,
+    show_tags: bool,
+    actions: &mut Vec<Action>,
+) {
     let f = &s.found[k];
     let unsupported = quirks::lookup(&f.info.id, f.windows).unsupported;
     let crashed = s.quarantine.get(&f.path, &f.info.id).is_some();
     ui.horizontal(|ui| {
         let fav = s.is_favorite(f);
-        if ui
-            .small_button(RichText::new(if fav { "fav" } else { "+" }).color(if fav {
-                Color32::from_rgb(0xe0, 0xb4, 0x4a)
+        if crate::hw::star(ui, fav)
+            .on_hover_text(if fav {
+                "Favourite (click to remove)"
             } else {
-                Color32::from_gray(120)
-            }))
-            .on_hover_text("favourite")
+                "Add to favourites"
+            })
             .clicked()
         {
             actions.push(Action::ToggleFavorite(k));
@@ -102,12 +254,12 @@ fn row(ui: &mut egui::Ui, s: &Session, k: usize, actions: &mut Vec<Action>) {
         }
         let mut label = None;
         ui.vertical(|ui| {
-            let drag = ui.dnd_drag_source(ui.make_persistent_id(("found", k)), k, |ui| {
+            let drag = ui.dnd_drag_source(ui.make_persistent_id(("found", k, branch)), k, |ui| {
                 ui.add(egui::Label::new(text).sense(egui::Sense::click()))
             });
             label = Some(drag.inner);
             let tags = s.tags_of(f);
-            if !tags.list.is_empty() {
+            if show_tags && !tags.list.is_empty() {
                 let line: Vec<String> = tags.list.iter().map(Tag::label).collect();
                 let text = RichText::new(line.join(", ")).small().weak();
                 if tags.automatic {

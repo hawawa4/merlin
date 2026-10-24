@@ -3,6 +3,13 @@
 Things only a person with ears and a mouse can check. Run `just dev` unless a step says otherwise.
 Tick as you go; anything odd, send me what you saw (and the exact text of any error in the log line under the title).
 
+## 0. The frame (header, views, scenes, browser)
+- [ ] The rig's **name, New, Open… and Save** sit together in one plate. **Save** glows amber while the rig has unsaved changes and goes dark after saving.
+- [ ] **RACK / SETLIST / PERFORM / SETTINGS** is one switch: the view you are in is lit. Each button goes to that view; there are no *Close* buttons any more. In Perform with the lock on, the switch is not reachable (as before).
+- [ ] **MIDI MAP** is a normal button that lights amber while map mode is on (Ctrl+M still toggles it). **CAPTURE MIDI** greys out only when capture is off in Settings.
+- [ ] The **Scenes** strip (it was Snapshots): with none stored it says what a scene is; **+ Store scene** adds one; click one to recall it (it lights amber), right-click to rename, update or remove. It is hidden in Settings.
+- [ ] The browser is a tree: *Favourites*, then a branch per family (Keys, Synth...), then per instrument inside it, then *Untagged*. Click a branch to open or close it. Typing in the search box, picking a family, or *Favourites only* opens everything that is left. Drag or double-click a plugin as before; right-click still tags it.
+
 ## 1. Rack and effects
 - [ ] Layer 3–4 slots (click one, shift-click others) and play. Each row shows a small `N.N%` next to its meter; Windows plugins add `wine N%`. Hover it for the explanation. Does anything go orange or red while you play normally?
 - [ ] Effects tab → *Load effect…* → "Surge XT Effects" as an insert. Untick **on** to bypass it: the sound should change back at once. Open it with **Edit**.
@@ -35,23 +42,23 @@ Tick as you go; anything odd, send me what you saw (and the exact text of any er
 - [ ] A mapped key or pedal must no longer play the instrument; unmapped ones still do.
 - [ ] Save the rig, close, reopen: the mappings are still there.
 
-## 5b. Snapshots (no hardware needed except the last three items)
-Snapshots are saved inside the rig file, so one file holds the whole setup.
-- [ ] Load 3 slots. Make a sound you like (slot 1 plays, volumes set, one effect on) and press **+ Save snapshot** in the strip under the title bar. Change things (select slot 3, lower a volume, mute a slot, switch an effect off, pick another SoundFont preset), save a second snapshot, then click between them. Each click restores: which slots play, volumes, mute, zones, effects on/off, insert bypass, SoundFont preset, master volume.
-- [ ] Right-click a snapshot: rename it, **Update with what is set now**, **Remove**.
-- [ ] Recalling a snapshot while holding a key: no stuck note, no pop you wouldn't expect.
-- [ ] Save the rig, **New**, reopen it: the snapshots are in the strip and still recall correctly.
-- [ ] Open a rig that has *fewer* instruments loaded than the snapshot expects (unload a slot after saving it): recalling works and nothing crashes.
-- [ ] Settings → Controls → *Recall a snapshot* → Learn → press a pad/button. Pressing it recalls that snapshot.
-- [ ] *Next snapshot* and *Previous snapshot* on a foot switch step through the strip and wrap.
-- [ ] *Recall the snapshot given by the number sent* on Program Change: patch 0 is the first snapshot. After a recall, a mapped knob does nothing until it reaches the value (if set to Pick up).
+## 5b. Scenes (no hardware needed except the last three items)
+Scenes are saved inside the rig file, so one file holds the whole setup.
+- [ ] Load 3 slots. Make a sound you like (slot 1 plays, volumes set, one effect on) and press **+ Store scene** in the strip under the title bar. Change things (select slot 3, lower a volume, mute a slot, switch an effect off, pick another SoundFont preset), save a second scene, then click between them. Each click restores: which slots play, volumes, mute, zones, effects on/off, insert bypass, SoundFont preset, master volume.
+- [ ] Right-click a scene: rename it, **Update with what is set now**, **Remove**.
+- [ ] Recalling a scene while holding a key: no stuck note, no pop you wouldn't expect.
+- [ ] Save the rig, **New**, reopen it: the scenes are in the strip and still recall correctly.
+- [ ] Open a rig that has *fewer* instruments loaded than the scene expects (unload a slot after saving it): recalling works and nothing crashes.
+- [ ] Settings → Controls → *Recall a scene* → Learn → press a pad/button. Pressing it recalls that scene.
+- [ ] *Next scene* and *Previous scene* on a foot switch step through the strip and wrap.
+- [ ] *Recall the scene given by the number sent* on Program Change: patch 0 is the first scene. After a recall, a mapped knob does nothing until it reaches the value (if set to Pick up).
 
 ## 5c. Perform view
-- [ ] Press **Perform** in the title bar (or F11). The editor disappears and you get snapshot buttons, one tile per loaded instrument, the master fader and PANIC. Click a snapshot: it recalls and lights up.
+- [ ] Press **Perform** in the title bar (or F11). The editor disappears and you get scene buttons, one tile per loaded instrument, the master fader and PANIC. Click a scene: it recalls and lights up.
 - [ ] Click a tile's name: only that instrument plays (its border lights). **+** layers it with the others. **MUTE** mutes it. The tile's slider changes its volume and the bar above it moves while you play.
 - [ ] **Full screen** toggles the window; F11 or **Leave** (or Escape) goes back to the rack, and the editor of the selected slot returns.
 - [ ] **Lock**: then **Leave**, Escape and F11 do nothing, and dropping a file on the window is ignored (the log says so). A quick click on **LOCKED** does nothing; holding it for about a second (a yellow bar fills) unlocks.
-- [ ] With a controller: snapshot and slot mappings keep working while locked; the tiles follow.
+- [ ] With a controller: scene and slot mappings keep working while locked; the tiles follow.
 - [ ] On a touch screen, if you have one: are the buttons big enough, does holding to unlock work?
 - [ ] Window start: launching the app from a terminal while typing elsewhere must not steal your typing focus (needs your KDE setup; see the log line "could not ask for a quiet start" if it fails).
 
@@ -61,7 +68,7 @@ Snapshots are saved inside the rig file, so one file holds the whole setup.
 - [ ] Set a target's *from* and *to* to 100% and 0%: the parameter runs backwards.
 - [ ] Rename a macro; it keeps the name after Save, New, reopen. The knob position and its targets are restored.
 - [ ] Adding the *first* target to a macro must not change the sound by itself.
-- [ ] Save a snapshot with a macro at 0.2, move the macro to 0.9, recall the snapshot: the macro and the sound go back.
+- [ ] Save a scene with a macro at 0.2, move the macro to 0.9, recall the scene: the macro and the sound go back.
 - [ ] Settings > Controls: *Macro of a slot (knob or fader)*, pick slot and macro, **Learn...**, turn a knob. The knob moves the macro (Pick up: only after it passes the current position).
 - [ ] Perform view: macros that have targets appear as sliders on their instrument's tile.
 - [ ] Try a Windows plugin (Surge XT Windows, Six Sines) as a macro target; the app must stay responsive.
@@ -76,8 +83,8 @@ Snapshots are saved inside the rig file, so one file holds the whole setup.
 
 ## 5f. Setlist, songs and parts
 - [ ] **Setlist** (title bar) > **+ Add song**. Name it, set a tempo. Set the rig up the way the first part should sound, press **+ Part from the current sound**; change the sound, add another part; add a tempo override on one.
-- [ ] **Go** on a part: the sound and the tempo (shown in Perform) change to that part. The snapshot strip shows the part's snapshot lit.
-- [ ] Reorder songs and parts with **^ v**; delete a part, and delete a snapshot a part uses (the part just shows "no snapshot").
+- [ ] **Go** on a part: the sound and the tempo (shown in Perform) change to that part. The scene strip shows the part's scene lit.
+- [ ] Reorder songs and parts with **^ v**; delete a part, and delete a scene a part uses (the part just shows "no scene").
 - [ ] Perform view: **Next part >** and **< Prev part** walk through the song and into the next song; part buttons jump; the song buttons jump to a song. The cue note shows large.
 - [ ] Settings > Controls: *Next part* / *Previous part* on foot switches (or pads): the same walk, from the pedals.
 - [ ] Save, **New**, reopen: songs, parts, tempos and notes are back and still recall the right sounds.
@@ -123,9 +130,9 @@ Snapshots are saved inside the rig file, so one file holds the whole setup.
 
 ## 5l. MIDI map mode: any control on any controller
 Works with any device that sends CC, notes or Program Change (this is the "every device is supported" route; the Novation-specific one comes later). No hardware: run `just fake-keyboard` or the pretend controller to get something to learn from.
-- [ ] Click **MIDI map** in the header (or Ctrl+M). Every mappable control gets a blue tint: the slot names, **M**, **vol**, the master slider, PANIC and the snapshot buttons. Clicking one turns it amber ("move a control...") instead of using it. Move a knob or press a button on your device: the tint turns green and shows the source (`CC 14`).
+- [ ] Click **MIDI map** in the header (or Ctrl+M). Every mappable control gets a blue tint: the slot names, **M**, **vol**, the master slider, PANIC and the scene buttons. Clicking one turns it amber ("move a control...") instead of using it. Move a knob or press a button on your device: the tint turns green and shows the source (`CC 14`).
 - [ ] Right-click a green control: *Remove the mapping*. Click a green control and move another knob: the new one replaces the old one. Escape (or the button) leaves map mode; then the controls work normally again.
-- [ ] Map the slot volume of slot 1 to a fader, then leave map mode and move the fader: the **vol** number follows. Do the same with a button on **M** (mute), the master slider and a snapshot button.
+- [ ] Map the slot volume of slot 1 to a fader, then leave map mode and move the fader: the **vol** number follows. Do the same with a button on **M** (mute), the master slider and a scene button.
 - [ ] Effects tab (map mode on): the four built-in effect switches and the inserts' **on** boxes can be mapped. A pad flips the effect each press. In Settings > Controls, set a switch mapping to **Latching switch** and use a foot switch that stays down: down = on, up = off, whatever it was before.
 - [ ] Macros tab: each macro slider can be mapped (same as before, now by clicking it).
 - [ ] **Parameters** tab (next to Macros): every parameter of the instrument (and of an insert, via the drop-down) with a **Map** button. Press it, move a knob: the plugin parameter follows the knob. Try a cutoff or a volume you can hear. Does the search box find what you look for? Do very long lists (Kontakt, Reaktor) scroll smoothly?
@@ -137,9 +144,9 @@ Works with any device that sends CC, notes or Program Change (this is the "every
 
 ## 5m. Launchkey MK3 (your keyboard)
 Plug it in before starting `just dev` (or while it runs: the log says `controller: Launchkey MK3 49 found`). The keys, wheels and pedal work as a keyboard as before; the DAW port is taken as a controller, put into DAW mode, and given a built-in layout. When the app quits the device goes back to normal. No setup needed.
-- [ ] **Lights, first**: load 3-4 instruments. The top pad row lights one pad per loaded slot in that slot's colour; the one that plays pulses. The pads under the faders' buttons (the round buttons below the faders) glow white for loaded slots. Save two snapshots (+ Save snapshot): the bottom pad row lights blue for each, green for the one recalled last. Tell me what you actually see: wrong colours, dark pads, anything that stays lit after the app closes.
-- [ ] **Screen**: top line shows the slot that plays (`1 Piano`), bottom line the snapshot or song part and tempo (`Snap 2 120bpm`). Turn a knob: the screen shows the macro's name and percentage (for the slot that plays). Move a fader: `Volume 1` and the value. Which line is which row, is any text cut off or wrong?
-- [ ] **Pads**: top row selects slot 1-8; bottom row recalls snapshot 1-8. Do the lights follow at once?
+- [ ] **Lights, first**: load 3-4 instruments. The top pad row lights one pad per loaded slot in that slot's colour; the one that plays pulses. The pads under the faders' buttons (the round buttons below the faders) glow white for loaded slots. Save two scenes (+ Store scene): the bottom pad row lights blue for each, green for the one recalled last. Tell me what you actually see: wrong colours, dark pads, anything that stays lit after the app closes.
+- [ ] **Screen**: top line shows the slot that plays (`1 Piano`), bottom line the scene or song part and tempo (`Snap 2 120bpm`). Turn a knob: the screen shows the macro's name and percentage (for the slot that plays). Move a fader: `Volume 1` and the value. Which line is which row, is any text cut off or wrong?
+- [ ] **Pads**: top row selects slot 1-8; bottom row recalls scene 1-8. Do the lights follow at once?
 - [ ] **Track < / >** = previous / next slot: `<` moves up the rack, `>` down (on the real device they send the opposite CCs from the guide's diagram; checked with `just launchkey-probe`). Scene up/down (previous/next part) follow the guide and are not verified on the device yet. **Scene up/down** = previous/next song part (needs a setlist: Setlist screen). **Play** = start/stop the transport, **Click** = click on/off, **Quantise** = tap tempo.
 - [ ] **Knobs 1-8** work without any setup on the slot that plays: 1 Pan, 2 Reverb, 3 Delay, 4 Bass, 5 Mid, 6 Treble (EQ, flat in the middle), 7 Delay time, 8 Brightness (SoundFonts only). Reverb, Delay and EQ switch themselves on when you turn the knob up and off when it is back at the bottom or flat (see the Effects tab follow). The screen shows the name and value (`Reverb 35%`, `Bass +3dB`, `C`/`L40`/`R25`). If you put something in macro 1-8 of the slot (Macros tab) that macro takes the knob instead. All knobs pick up: after changing slot a knob does nothing until it reaches the current value. Do these feel right, are the ranges useful (is the reverb too much at the top, the delay time wrong)? Which other things should be on knobs?
 - [ ] **Pad modes** (the Shift menu on the device): *Session* (the default) is what is described above. *Drum*: the 16 pads play notes on channel 10 of the MIDI port into the slot that plays (try a SoundFont drum kit), and now glow in that slot's colour instead of staying dark. *Device Select* (hold the Device Select button): the pads become two rows, top = select slot 1-8 (lit like the Session row), bottom = add/remove the slot as a layer (bright = it plays). Release it and the Session pads are back. *Scale chords / User chords / Custom*: the device does these itself and the app leaves the pad lights alone. Tell me if a mode leaves wrong lights behind when you switch.

@@ -10,7 +10,7 @@ the last 30 minutes of what you played, in memory, and one button saves them as 
 
 - **Rack:** 8 instrument slots with embedded plugin editors, a keyboard map, zones and layers.
   Each slot has an EQ, compressor, delay and reverb; the master has a limiter.
-- **Playing live:** snapshots, macros, a Perform view, MIDI mapping of any control on any
+- **Playing live:** scenes, macros, a Perform view, MIDI mapping of any control on any
   controller, and a Novation Launchkey MK3 driver (DAW mode, pad lights, screen).
 - **Songs:** setlists, songs and parts, backing tracks, a click, MIDI clock and timeline markers.
 - **Plugins:** a searchable browser, a plugin scanner with a cache, and a performance check
