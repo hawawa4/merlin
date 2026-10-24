@@ -314,12 +314,11 @@ impl Running {
             (dock_rect.width() * ppp).round() as u32,
             (dock_rect.height() * ppp).round() as u32,
         );
-        // The dock is unmapped while an egui popup is open, and while the effects tab is shown
-        // in its place.
+        // The dock is unmapped while an egui popup is open, and while a tab that is drawn by the
+        // app is shown in its place.
         let covered = self.ui.popup_open
             || self.ui.settings_open
             || self.ui.perform
-            || self.ui.tab == ui::DockTab::Effects
             || self.ui.tab == ui::DockTab::Macros
             || self.ui.tab == ui::DockTab::Params;
         let _ = self.session.editors.set_popup_open(covered);
@@ -412,6 +411,14 @@ impl Running {
                     self.ui.settings_open = view == ui::View::Settings;
                     self.ui.setlist_open = view == ui::View::Setlist;
                 }
+                Ok(())
+            }
+            Action::FxDrawer(open) => {
+                self.ui.fx_open = open;
+                Ok(())
+            }
+            Action::KeysDrawer(open) => {
+                self.ui.keys_open = open;
                 Ok(())
             }
             Action::ToggleSettings => {
@@ -872,7 +879,7 @@ impl Running {
                     match tab {
                         ui::DockTab::Plugin => s.show_editor(i),
                         ui::DockTab::Insert(k) => s.show_insert_editor(i, k),
-                        ui::DockTab::Effects | ui::DockTab::Macros | ui::DockTab::Params => {}
+                        ui::DockTab::Macros | ui::DockTab::Params => {}
                     }
                 }
                 Ok(())
@@ -898,7 +905,7 @@ impl Running {
             Action::UnloadInsert(i, k) => {
                 s.unload_insert(i, k);
                 if self.ui.tab == ui::DockTab::Insert(k) {
-                    self.ui.tab = ui::DockTab::Effects;
+                    self.ui.tab = ui::DockTab::Plugin;
                 }
                 Ok(())
             }
@@ -1326,8 +1333,12 @@ fn parse_script() -> Vec<(Duration, Action)> {
                         _ => settings_ui::SettingsTab::Plugins,
                     }),
                 },
+                "drawer" => match (words.next()?, words.next()? == "on") {
+                    ("fx", open) => Action::FxDrawer(open),
+                    ("keys", open) => Action::KeysDrawer(open),
+                    _ => return None,
+                },
                 "tab" => Action::Tab(match words.next()? {
-                    "fx" => ui::DockTab::Effects,
                     "macros" => ui::DockTab::Macros,
                     "params" => ui::DockTab::Params,
                     t if t.starts_with("insert") => ui::DockTab::Insert(

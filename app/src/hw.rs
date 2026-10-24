@@ -371,9 +371,6 @@ pub fn footswitch(ui: &mut Ui) -> Response {
     r
 }
 
-/// How wide a [`pedal`] is, so rows of them can be broken before they run off the screen.
-pub const PEDAL_WIDTH: f32 = 4.0 * 64.0 + 3.0 * 4.0 + 24.0 + 3.0;
-
 /// A guitar-pedal enclosure: the effect's name and light, its knobs, and the footswitch that turns
 /// it on. Returns the footswitch's response (clicked = toggled).
 pub fn pedal(
@@ -497,4 +494,57 @@ pub fn meter(ui: &mut Ui, fraction: f32, colour: Color32, label: &str) {
             );
         }
     });
+}
+
+/// The pull of a drawer: a slim bar across the width with a chevron and a name. `chevron_up` says
+/// which way the drawer would move if pulled.
+pub fn drawer_handle(ui: &mut Ui, label: &str, detail: &str, chevron_up: bool) -> Response {
+    let (rect, r) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
+    let p = ui.painter();
+    let body = if r.hovered() {
+        mix(PLATE, Color32::WHITE, 0.06)
+    } else {
+        PLATE
+    };
+    p.rect_filled(rect, 4.0, body);
+    p.line_segment(
+        [
+            rect.left_top() + vec2(4.0, 0.5),
+            rect.right_top() + vec2(-4.0, 0.5),
+        ],
+        Stroke::new(1.0, BEVEL_HI.gamma_multiply(0.45)),
+    );
+    p.line_segment(
+        [
+            rect.left_bottom() + vec2(4.0, -0.5),
+            rect.right_bottom() + vec2(-4.0, -0.5),
+        ],
+        Stroke::new(1.0, BEVEL_LO),
+    );
+    // The chevron.
+    let c = pos2(rect.left() + 18.0, rect.center().y);
+    let tip = if chevron_up { -3.0 } else { 3.0 };
+    p.add(Shape::line(
+        vec![
+            c + vec2(-5.0, -tip),
+            c + vec2(0.0, tip),
+            c + vec2(5.0, -tip),
+        ],
+        Stroke::new(2.0, TEXT),
+    ));
+    p.text(
+        pos2(rect.left() + 34.0, rect.center().y),
+        Align2::LEFT_CENTER,
+        label.to_uppercase(),
+        FontId::proportional(12.0),
+        TEXT,
+    );
+    p.text(
+        pos2(rect.right() - 12.0, rect.center().y),
+        Align2::RIGHT_CENTER,
+        detail,
+        FontId::proportional(11.0),
+        TEXT_DIM,
+    );
+    r
 }

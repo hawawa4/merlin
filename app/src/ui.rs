@@ -113,6 +113,11 @@ pub enum Action {
     /// Script-only: load the named effect plugin as an insert.
     LoadInsertNamed(usize, usize, String),
     ToggleSettings,
+    /// Open or close the effects drawer (it takes the place of the rack, except for the slot
+    /// being edited).
+    FxDrawer(bool),
+    /// Open or close the keyboard drawer.
+    KeysDrawer(bool),
     /// Go to one of the app's views (the switch in the header).
     SetView(View),
     /// Script-only: show a settings tab.
@@ -248,7 +253,6 @@ pub enum DockTab {
     Plugin,
     /// The editor of insert `n`.
     Insert(usize),
-    Effects,
     Macros,
     /// Every parameter of the instrument and its inserts, to map to MIDI controls.
     Params,
@@ -279,6 +283,10 @@ pub struct UiState {
     pub param_insert: Option<usize>,
     pub param_query: String,
     pub favs_only: bool,
+    /// The effects drawer is open.
+    pub fx_open: bool,
+    /// The keyboard drawer is open.
+    pub keys_open: bool,
     /// The browser shows only plugins with this tag (or none yet).
     pub tag_filter: crate::tags::Filter,
     pub dir_text: String,
@@ -341,6 +349,8 @@ impl UiState {
             preset_query: String::new(),
             macro_query: String::new(),
             favs_only: false,
+            fx_open: false,
+            keys_open: true,
             tag_filter: Default::default(),
             dir_text: String::new(),
             sound_dir_text: String::new(),
@@ -413,20 +423,60 @@ pub fn draw(
     browser::panel(ui, s, st, actions);
     egui::Panel::top("rack").show(ui, |ui| {
         ui.add_space(2.0);
+        // With the effects drawer open the rack gives way to it, but for the slot it is about.
+        let drawer = st.fx_open && s.viewing.is_some();
         for i in 0..UI_SLOTS {
-            unit(ui, s, st, i, actions);
+            if !drawer || s.viewing == Some(i) {
+                unit(ui, s, st, i, actions);
+            }
+        }
+        if let Some(i) = s.viewing {
+            let fx = &s.rig.slots[i].fx;
+            let on = [
+                fx.eq.enabled,
+                fx.comp.enabled,
+                fx.delay.enabled,
+                fx.reverb.enabled,
+            ]
+            .iter()
+            .filter(|&&e| e)
+            .count();
+            let handle = hw::drawer_handle(
+                ui,
+                "Effects",
+                &format!("slot {} · {on} of 4 on", i + 1),
+                drawer,
+            )
+            .on_hover_text(if drawer {
+                "Close the effects drawer and bring the rack back"
+            } else {
+                "Open the effects drawer: pedals for this slot, in the place of the rack"
+            });
+            if handle.clicked() {
+                actions.push(Action::FxDrawer(!st.fx_open));
+            }
+            if drawer {
+                fx_drawer(ui, s, i, actions);
+            }
         }
     });
-    egui::Panel::bottom("keys").show(ui, |ui| keys(ui, s, st, actions));
+    egui::Panel::bottom("keys").show(ui, |ui| {
+        let open = st.keys_open;
+        let handle = hw::drawer_handle(ui, "Keyboard", "", !open).on_hover_text(if open {
+            "Hide the keyboard to make room"
+        } else {
+            "Show the keyboard"
+        });
+        if handle.clicked() {
+            actions.push(Action::KeysDrawer(!open));
+        }
+        if open {
+            keys(ui, s, st, actions);
+        }
+    });
     egui::Panel::top("dockbar").show(ui, |ui| dock_bar(ui, s, st, actions));
     egui::CentralPanel::default().show(ui, |ui| {
         *dock_rect = ui.available_rect_before_wrap();
-        if st.tab == DockTab::Effects
-            && let Some(i) = s.viewing
-        {
-            fx_panel(ui, s, i, actions);
-            return;
-        }
         if st.tab == DockTab::Params
             && let Some(i) = s.viewing
         {
@@ -1106,7 +1156,6 @@ fn dock_bar(ui: &mut egui::Ui, s: &Session, st: &UiState, actions: &mut Vec<Acti
                 ));
             }
         }
-        tabs.push((DockTab::Effects, "Effects".to_owned()));
         tabs.push((DockTab::Macros, "Macros".to_owned()));
         tabs.push((DockTab::Params, "Parameters".to_owned()));
         for (tab, label) in tabs {
@@ -1115,20 +1164,6 @@ fn dock_bar(ui: &mut egui::Ui, s: &Session, st: &UiState, actions: &mut Vec<Acti
             }
         }
         ui.separator();
-        if st.tab == DockTab::Effects {
-            let fx = &s.rig.slots[i].fx;
-            let on = [
-                fx.eq.enabled,
-                fx.comp.enabled,
-                fx.delay.enabled,
-                fx.reverb.enabled,
-            ]
-            .iter()
-            .filter(|&&e| e)
-            .count();
-            ui.colored_label(COLORS[i], format!("EFFECTS · {} · {on}/4 on", i + 1));
-            return;
-        }
         if st.tab == DockTab::Params {
             ui.colored_label(COLORS[i], format!("PARAMETERS · {}", i + 1));
             return;
@@ -1231,19 +1266,40 @@ fn fx_knobs(
     });
 }
 
-/// The slot's built-in effects as four pedals, in signal order: EQ, compressor, delay, reverb.
-fn fx_panel(ui: &mut egui::Ui, s: &Session, i: usize, actions: &mut Vec<Action>) {
-    inserts_section(ui, s, i, actions);
+/// The effects drawer: which slot it is for, its plugin inserts, and the built-in effects as four
+/// pedals in signal order (EQ, compressor, delay, reverb).
+fn fx_drawer(ui: &mut egui::Ui, s: &Session, i: usize, actions: &mut Vec<Action>) {
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        hw::engraved(ui, "Slot");
+        for k in (0..UI_SLOTS).filter(|&k| s.plugins[k].is_some()) {
+            let lit = (k == i).then_some(COLORS[k]);
+            if hw::Cap::new((k + 1).to_string())
+                .lit(lit)
+                .min_width(30.0)
+                .show(ui)
+                .on_hover_text(
+                    s.rig.slots[k]
+                        .instrument
+                        .as_ref()
+                        .map_or(String::new(), |r| r.name.clone()),
+                )
+                .clicked()
+            {
+                actions.push(Action::Select(k, false));
+            }
+        }
+    });
+    inserts_strip(ui, s, i, actions);
     let before = s.rig.slots[i].fx;
     let mut fx = before;
     let reduction = f32::from_bits(s.engine.shared.comp_reduction[i].load(Ordering::Relaxed));
-    ui.add_space(6.0);
-    egui::ScrollArea::vertical().show(ui, |ui| {
-        ui.horizontal_wrapped(|ui| {
+    ui.add_space(4.0);
+    // One row of pedals that scrolls sideways when the window is narrow. (A vertical scroll
+    // area would not do inside a panel that sizes itself to its content.)
+    egui::ScrollArea::horizontal().show(ui, |ui| {
+        ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(14.0, 14.0);
-            // Wrapping does not break between framed things, so break the rows here.
-            let per_row =
-                (((ui.available_width() + 14.0) / (hw::PEDAL_WIDTH + 14.0)) as usize).max(1);
             let blue = Color32::from_rgb(0x5a, 0xa9, 0xe0);
             let mut on = fx.eq.enabled;
             let switch = hw::pedal(ui, "EQ", blue, &mut on, |ui| {
@@ -1251,9 +1307,6 @@ fn fx_panel(ui: &mut egui::Ui, s: &Session, i: usize, actions: &mut Vec<Action>)
             });
             fx.eq.enabled = on;
             fx_switch_target(ui, s, &switch, i, FxKind::Eq, actions);
-            if per_row == 1 {
-                ui.end_row();
-            }
 
             let amber = hw::AMBER;
             let mut on = fx.comp.enabled;
@@ -1263,9 +1316,6 @@ fn fx_panel(ui: &mut egui::Ui, s: &Session, i: usize, actions: &mut Vec<Action>)
             });
             fx.comp.enabled = on;
             fx_switch_target(ui, s, &switch, i, FxKind::Comp, actions);
-            if per_row <= 2 {
-                ui.end_row();
-            }
 
             let green = hw::GREEN;
             let mut on = fx.delay.enabled;
@@ -1282,9 +1332,6 @@ fn fx_panel(ui: &mut egui::Ui, s: &Session, i: usize, actions: &mut Vec<Action>)
             });
             fx.delay.enabled = on;
             fx_switch_target(ui, s, &switch, i, FxKind::Delay, actions);
-            if per_row <= 3 {
-                ui.end_row();
-            }
 
             let purple = Color32::from_rgb(0xb0, 0x7a, 0xe0);
             let mut on = fx.reverb.enabled;
@@ -1322,64 +1369,71 @@ fn fx_switch_target(
     );
 }
 
-/// The slot's insert chain: effect plugins between the instrument and the built-in effects.
-fn inserts_section(ui: &mut egui::Ui, s: &Session, i: usize, actions: &mut Vec<Action>) {
-    ui.add_space(6.0);
-    ui.label(
-        RichText::new("INSERTS · plugin effects, in order, before the built-in effects").strong(),
-    );
-    for k in 0..merlin_model::MAX_INSERTS {
-        ui.horizontal(|ui| {
-            ui.label(format!("{}.", k + 1));
-            match s.rig.slots[i].inserts.get(k).and_then(Option::as_ref) {
-                Some(ins) => {
-                    ui.label(&ins.plugin.name);
-                    let mut on = !ins.bypass;
-                    let c = ui.checkbox(&mut on, "on").on_hover_text(
-                        "Untick to bypass this effect (audio passes through untouched)",
-                    );
-                    if c.changed() && !s.map_mode {
-                        actions.push(Action::BypassInsert(i, k));
-                    }
-                    crate::map_mode::target(
-                        ui,
-                        s,
-                        &c,
-                        ControlAction::ToggleInsertBypass {
-                            slot: i as u8,
-                            insert: k as u8,
-                        },
-                        None,
-                        actions,
-                    );
-                    if ui.small_button("Edit").clicked() {
-                        actions.push(Action::Tab(DockTab::Insert(k)));
-                    }
-                    if ui.small_button("Remove").clicked() {
-                        actions.push(Action::UnloadInsert(i, k));
-                    }
-                }
-                None => {
-                    ui.menu_button("Load effect…", |ui| {
-                        if s.effects.is_empty() {
-                            ui.label("No effect plugins found");
+/// The slot's insert chain, in order: effect plugins between the instrument and the built-in
+/// effects.
+fn inserts_strip(ui: &mut egui::Ui, s: &Session, i: usize, actions: &mut Vec<Action>) {
+    ui.horizontal_wrapped(|ui| {
+        hw::engraved(ui, "Inserts").on_hover_text(
+            "Plugin effects, in order, between the instrument and the built-in effects",
+        );
+        for k in 0..merlin_model::MAX_INSERTS {
+            hw::plate().show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 5.0;
+                    hw::engraved(ui, &(k + 1).to_string());
+                    match s.rig.slots[i].inserts.get(k).and_then(Option::as_ref) {
+                        Some(ins) => {
+                            ui.label(&ins.plugin.name);
+                            let on = hw::Cap::new("ON")
+                                .lit((!ins.bypass).then_some(hw::GREEN))
+                                .show(ui)
+                                .on_hover_text(
+                                    "Lit: the effect is on. Click to bypass it (the audio passes through untouched)",
+                                );
+                            if on.clicked() && !s.map_mode {
+                                actions.push(Action::BypassInsert(i, k));
+                            }
+                            crate::map_mode::target(
+                                ui,
+                                s,
+                                &on,
+                                ControlAction::ToggleInsertBypass {
+                                    slot: i as u8,
+                                    insert: k as u8,
+                                },
+                                None,
+                                actions,
+                            );
+                            if hw::Cap::new("EDIT").show(ui).clicked() {
+                                actions.push(Action::Tab(DockTab::Insert(k)));
+                            }
+                            if hw::Cap::new("REMOVE").show(ui).clicked() {
+                                actions.push(Action::UnloadInsert(i, k));
+                            }
                         }
-                        egui::ScrollArea::vertical()
-                            .max_height(300.0)
-                            .show(ui, |ui| {
-                                for (e, f) in s.effects.iter().enumerate() {
-                                    if ui.button(found_label(f)).clicked() {
-                                        actions.push(Action::LoadInsert(i, k, e));
-                                        ui.close();
-                                    }
+                        None => {
+                            let load = hw::Cap::new("+ Load effect").show(ui);
+                            egui::Popup::menu(&load).show(|ui| {
+                                if s.effects.is_empty() {
+                                    ui.label("No effect plugins found");
                                 }
+                                egui::ScrollArea::vertical()
+                                    .max_height(300.0)
+                                    .show(ui, |ui| {
+                                        for (e, f) in s.effects.iter().enumerate() {
+                                            if ui.button(found_label(f)).clicked() {
+                                                actions.push(Action::LoadInsert(i, k, e));
+                                                ui.close();
+                                            }
+                                        }
+                                    });
                             });
-                    });
-                }
-            }
-        });
-    }
-    ui.separator();
+                        }
+                    }
+                });
+            });
+        }
+    });
 }
 
 #[cfg(test)]
