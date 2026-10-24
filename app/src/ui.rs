@@ -1536,6 +1536,26 @@ fn editor_view(
     }
     let (mut x, mut y) = (info.scroll.0 as f32 / ppp, info.scroll.1 as f32 / ppp);
     let before = (x, y);
+    // The mouse wheel scrolls from anywhere over the editor's room (over the plugin itself the
+    // plugin gets it): up and down move the picture, sideways too, or up and down when there is
+    // no vertical bar.
+    if (need_x || need_y)
+        && ui
+            .input(|i| i.pointer.hover_pos().or(i.pointer.latest_pos()))
+            .is_some_and(|p| avail.contains(p))
+    {
+        let wheel = ui.input(|i| i.smooth_scroll_delta);
+        if need_y {
+            y -= wheel.y;
+        } else {
+            x -= wheel.y;
+        }
+        if need_x {
+            x -= wheel.x;
+        }
+        x = x.clamp(0.0, (ew - view.width()).max(0.0));
+        y = y.clamp(0.0, (eh - view.height()).max(0.0));
+    }
     if need_x {
         let strip = egui::Rect::from_min_size(
             egui::pos2(view.left(), view.bottom()),
