@@ -34,6 +34,10 @@ struct Entry {
     created: bool,
     last_shown: Instant,
     size: EditorSize,
+    /// The size the editor had when it was created: the shape it is meant to keep.
+    native: EditorSize,
+    /// The plugin does nothing with a content scale (found out the first time it is asked).
+    ignores_zoom: bool,
     can_resize: bool,
     scroll: (u32, u32),
 }
@@ -47,6 +51,11 @@ impl Entry {
                 width: 0,
                 height: 0,
             },
+            native: EditorSize {
+                width: 0,
+                height: 0,
+            },
+            ignores_zoom: false,
             can_resize: false,
             scroll: (0, 0),
         }
@@ -142,6 +151,7 @@ impl EditorManager {
             let e = &mut self.entries[slot];
             e.created = true;
             e.size = size;
+            e.native = size;
             e.can_resize = editor.can_resize();
             e.scroll = (0, 0);
             // Size the canvas *after* attaching: the resulting ConfigureNotify is how a bridged
@@ -200,16 +210,63 @@ impl EditorManager {
             return Ok(());
         };
         let (w, h) = self.dock.size();
+        // Keep the editor's own shape: the biggest copy of it that fits, never bigger than it
+        // was made (most editors cannot draw more than they were designed for).
+        let native = self.entries[slot].native;
+        if native.width == 0 || native.height == 0 {
+            return Ok(());
+        }
+        let k = (f64::from(w) / f64::from(native.width))
+            .min(f64::from(h) / f64::from(native.height))
+            .min(1.0);
+        let want = EditorSize {
+            width: ((f64::from(native.width) * k).round() as u32).max(1),
+            height: ((f64::from(native.height) * k).round() as u32).max(1),
+        };
         let Some(editor) = plugins.plugin(slot).and_then(|p| p.editor()) else {
             return Ok(());
         };
+        let cur = self.entries[slot].size;
+        if cur.width.abs_diff(want.width) <= 2 && cur.height.abs_diff(want.height) <= 2 {
+            return Ok(());
+        }
+        // 1. Ask the plugin to draw itself smaller: that scales its picture. Many editors take a
+        //    window size as a viewport only, so resizing them just crops what they draw. The scale
+        //    asked for is of the plugin's normal size (as the display's scale is), so it does not
+        //    depend on what was asked before. The size the plugin says it then has is not
+        //    trusted (some report it wrongly), so the window is made the size wanted.
+        if !self.entries[slot].ignores_zoom {
+            let before = editor.size();
+            match editor.set_zoom(self.scale * k) {
+                Some(got) if got != before => {
+                    let size = editor.adjust_size(want);
+                    if editor.can_resize() {
+                        editor.set_size(size);
+                    }
+                    let e = &mut self.entries[slot];
+                    (e.size, e.scroll) = (size, (0, 0));
+                    self.dock.set_canvas_size(slot, size.width, size.height)?;
+                    return self.dock.scroll_to(slot, 0, 0);
+                }
+                _ => self.entries[slot].ignores_zoom = true,
+            }
+        }
+        // 2. Resizing the window helps only if the plugin keeps its shape when it is resized,
+        //    which a plugin that scales its picture does and one that crops it does not: ask
+        //    for a shape that is not its own and see whether it gives back its own shape.
         if !editor.can_resize() {
             return Ok(());
         }
-        let size = editor.adjust_size(EditorSize {
+        let shaped = editor.adjust_size(EditorSize {
             width: w,
-            height: h,
+            height: (h / 2).max(1),
         });
+        let own = f64::from(native.width) / f64::from(native.height);
+        let got = f64::from(shaped.width) / f64::from(shaped.height.max(1));
+        if (got / own - 1.0).abs() > 0.03 {
+            return Ok(());
+        }
+        let size = editor.adjust_size(want);
         if editor.set_size(size) {
             self.entries[slot].size = size;
             self.dock.set_canvas_size(slot, size.width, size.height)?;

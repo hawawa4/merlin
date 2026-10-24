@@ -353,6 +353,15 @@ impl PluginEditor for ClapPlugin {
         self.editor.size = Some(from_size(size));
     }
 
+    fn set_zoom(&mut self, scale: f64) -> Option<EditorSize> {
+        let gui = self.gui()?;
+        let handle = self.instance.plugin_handle();
+        gui.set_scale(&handle, scale).ok()?;
+        let size = gui.get_size(&handle)?;
+        self.editor.size = Some(size);
+        Some(to_size(size))
+    }
+
     fn detach(&mut self) {
         if self.editor.attached
             && let Some(gui) = self.gui()

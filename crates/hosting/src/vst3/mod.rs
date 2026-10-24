@@ -612,6 +612,26 @@ impl PluginEditor for Vst3Plugin {
         self.tell_view_size(size);
     }
 
+    fn set_zoom(&mut self, scale: f64) -> Option<EditorSize> {
+        let view = self.editor.view.as_ref()?;
+        // SAFETY: COM calls on the plugin's view, main thread.
+        let size = unsafe {
+            let support = view.cast::<IPlugViewContentScaleSupport>()?;
+            if support.setContentScaleFactor(scale as f32) != kResultOk {
+                return None;
+            }
+            let mut rect: ViewRect = std::mem::zeroed();
+            view.getSize(&mut rect);
+            rect_size(&rect)
+        };
+        self.frame.known_size.store(
+            pack_size(size.width, size.height),
+            std::sync::atomic::Ordering::Release,
+        );
+        self.editor.size = size;
+        Some(size)
+    }
+
     fn detach(&mut self) {
         if let Some(view) = self.editor.view.take() {
             // SAFETY: detach in the reverse order of attach.

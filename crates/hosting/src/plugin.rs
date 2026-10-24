@@ -141,6 +141,12 @@ pub trait PluginEditor {
     fn set_size(&mut self, size: EditorSize) -> bool;
     /// The plugin asked for a new size and we accepted it without calling `set_size`.
     fn note_size(&mut self, size: EditorSize);
+    /// Asks the plugin to draw itself at this content scale (1 = its normal size times the
+    /// display's scale) and returns the size it then has, if it can. Unlike a resize this makes
+    /// the plugin's picture bigger or smaller, not just its window.
+    fn set_zoom(&mut self, _scale: f64) -> Option<EditorSize> {
+        None
+    }
     /// Destroys the editor.
     fn detach(&mut self);
 }

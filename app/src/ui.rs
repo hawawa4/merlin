@@ -301,6 +301,8 @@ pub struct UiState {
     /// The editor and dock size (pixels) the last automatic fit was asked for, so a plugin that
     /// answers with another size is not asked again and again.
     pub last_fit: Option<(usize, u32, u32)>,
+    /// A fit that waits for the dock to stop changing size: what it is for and since when.
+    pub fit_wait: Option<((usize, u32, u32), std::time::Instant)>,
     /// The browser is open (else a narrow strip).
     pub browser_open: bool,
     /// The rack shows only the slot being edited.
@@ -377,6 +379,7 @@ impl UiState {
             fx_open: false,
             auto_fit: true,
             last_fit: None,
+            fit_wait: None,
             browser_open: true,
             rack_collapsed: false,
             fx_height: 370.0,
@@ -1380,19 +1383,17 @@ fn dock_bar(ui: &mut egui::Ui, s: &Session, st: &UiState, actions: &mut Vec<Acti
         }
         .unwrap_or("");
         ui.colored_label(COLORS[i], format!("EDITOR · {} {name}", i + 1));
-        let Some(info) = s.view_id.and_then(|id| s.editors.info(id)) else {
+        if s.view_id.and_then(|id| s.editors.info(id)).is_none() {
             return;
-        };
+        }
         // On: the editor is resized to fill the dock, if the plugin lets itself be resized.
         let fit = hw::Cap::new("FIT TO WINDOW")
-            .lit((st.auto_fit && info.can_resize).then_some(hw::AMBER))
+            .lit(st.auto_fit.then_some(hw::AMBER))
             .show(ui)
-            .on_hover_text(if info.can_resize {
-                "Resize the plugin's window to fill the space (lit: on)"
-            } else {
-                "This plugin's window cannot be resized: use the scroll bars"
-            });
-        if fit.clicked() && info.can_resize {
+            .on_hover_text(
+                "Scale the plugin's window down to fit the space, as far as the plugin lets itself be scaled or resized (lit: on). Otherwise there are scroll bars.",
+            );
+        if fit.clicked() {
             actions.push(Action::AutoFit(!st.auto_fit));
         }
     });
@@ -1405,8 +1406,9 @@ fn scroll_bars_needed(room: (f32, f32), editor: (f32, f32), bar: f32) -> (bool, 
     for _ in 0..2 {
         let w = room.0 - if need_y { bar } else { 0.0 };
         let h = room.1 - if need_x { bar } else { 0.0 };
-        need_x = editor.0 > w + 0.5;
-        need_y = editor.1 > h + 0.5;
+        // A few points over (rounding, a plugin's own minimum step) is not worth a bar.
+        need_x = editor.0 > w + 4.0;
+        need_y = editor.1 > h + 4.0;
     }
     (need_x, need_y)
 }
@@ -1434,15 +1436,28 @@ fn editor_view(
             avail.height() - if need_x { BAR } else { 0.0 },
         ),
     );
-    // Asked once for each size of the dock: the plugin may settle on another.
+    // Asked once for each size of the dock, once that size has held still for a moment (making
+    // some editors over is not instant, and a drag of the edge passes through many sizes). The
+    // plugin may settle on another size, which is not asked about again.
     let dock = s.editors.dock_size();
-    if st.auto_fit
-        && info.can_resize
-        && (info.size.width, info.size.height) != dock
-        && st.last_fit != Some((id, dock.0, dock.1))
-    {
-        st.last_fit = Some((id, dock.0, dock.1));
-        actions.push(Action::Fit);
+    let key = (id, dock.0, dock.1);
+    if st.auto_fit && (info.size.width, info.size.height) != dock && st.last_fit != Some(key) {
+        const SETTLE: std::time::Duration = std::time::Duration::from_millis(300);
+        match st.fit_wait {
+            Some((k, since)) if k == key => {
+                if since.elapsed() >= SETTLE {
+                    st.last_fit = Some(key);
+                    st.fit_wait = None;
+                    actions.push(Action::Fit);
+                } else {
+                    ui.ctx().request_repaint_after(SETTLE);
+                }
+            }
+            _ => {
+                st.fit_wait = Some((key, std::time::Instant::now()));
+                ui.ctx().request_repaint_after(SETTLE);
+            }
+        }
     }
     let (mut x, mut y) = (info.scroll.0 as f32 / ppp, info.scroll.1 as f32 / ppp);
     let before = (x, y);

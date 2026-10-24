@@ -18,7 +18,12 @@ struct Fake {
     parents: Vec<u32>,
     attached: bool,
     size: EditorSize,
+    native: EditorSize,
     can_resize: bool,
+    /// Resizing keeps the editor's shape (it scales its picture), as Surge's does.
+    keeps_shape: bool,
+    /// Draws itself at the content scale it is given.
+    zoomable: bool,
 }
 
 impl Fake {
@@ -36,8 +41,21 @@ impl Fake {
             parents: vec![],
             attached: false,
             size: EditorSize { width, height },
+            native: EditorSize { width, height },
             can_resize,
+            keeps_shape: false,
+            zoomable: false,
         }
+    }
+
+    fn keeping_shape(mut self) -> Self {
+        self.keeps_shape = true;
+        self
+    }
+
+    fn zoomable(mut self) -> Self {
+        self.zoomable = true;
+        self
     }
 }
 
@@ -64,11 +82,32 @@ impl PluginEditor for Fake {
         self.can_resize
     }
     fn adjust_size(&mut self, want: EditorSize) -> EditorSize {
+        let want = if self.keeps_shape {
+            // The biggest copy of its own shape inside what is asked.
+            let k = (f64::from(want.width) / f64::from(self.native.width))
+                .min(f64::from(want.height) / f64::from(self.native.height));
+            EditorSize {
+                width: (f64::from(self.native.width) * k) as u32,
+                height: (f64::from(self.native.height) * k) as u32,
+            }
+        } else {
+            want
+        };
         // Accepts multiples of 8 only.
         EditorSize {
             width: want.width / 8 * 8,
             height: want.height / 8 * 8,
         }
+    }
+    fn set_zoom(&mut self, scale: f64) -> Option<EditorSize> {
+        self.zoomable.then(|| {
+            self.log.push(format!("zoom {scale:.3}"));
+            // Reports a size that is not trusted (as Six Sines does): a different one.
+            EditorSize {
+                width: (f64::from(self.native.width) * scale * 1.25) as u32,
+                height: (f64::from(self.native.height) * scale * 1.25) as u32,
+            }
+        })
     }
     fn set_size(&mut self, size: EditorSize) -> bool {
         self.log
@@ -294,25 +333,86 @@ fn nothing_is_visible_without_a_selected_editor() {
 }
 
 #[test]
-fn fit_uses_the_size_the_plugin_adjusted_and_resets_scrolling() {
+fn fit_asks_a_zoomable_plugin_for_an_absolute_scale_and_sizes_the_window_itself() {
     let (mut m, mut rack, _conn) = need_x!(setup(8));
+    rack.0[0] = Some(Fake::new(300, 200, true).zoomable());
+    m.set_rect(0, 100, 150, 100).unwrap();
     m.show(0, &mut rack).unwrap();
     m.scroll(10, 20).unwrap();
-    assert_eq!(m.info(0).unwrap().scroll, (10, 20));
     m.fit(&mut rack).unwrap();
-    // The dock is 640x400; the fake accepts multiples of 8, so that is what it gets.
-    assert!(rack.log(0).contains(&"set_size 640x400".to_string()));
+    // Half the size fits: half the scale, and the window is made that size (the fake takes
+    // multiples of 8) whatever size the plugin claims to have.
+    assert!(
+        rack.log(0).contains(&"zoom 0.500".to_string()),
+        "{:?}",
+        rack.log(0)
+    );
+    assert!(rack.log(0).contains(&"set_size 144x96".to_string()));
     let info = m.info(0).unwrap();
     assert_eq!(
         info.size,
         EditorSize {
-            width: 640,
-            height: 400
+            width: 144,
+            height: 96
         }
     );
     assert_eq!(info.scroll, (0, 0));
+    // Asked again for another size, the scale is of the normal size, not of what it is now.
+    m.set_rect(0, 100, 75, 50).unwrap();
+    m.fit(&mut rack).unwrap();
+    assert!(
+        rack.log(0).contains(&"zoom 0.250".to_string()),
+        "{:?}",
+        rack.log(0)
+    );
+    // Room to spare: never bigger than it was made, so back to the normal scale.
+    m.set_rect(0, 100, 640, 400).unwrap();
+    m.fit(&mut rack).unwrap();
+    assert!(
+        rack.log(0).contains(&"zoom 1.000".to_string()),
+        "{:?}",
+        rack.log(0)
+    );
+}
 
-    // A plugin that cannot resize is left alone.
+#[test]
+fn fit_resizes_a_plugin_that_keeps_its_shape_when_it_has_no_zoom() {
+    let (mut m, mut rack, _conn) = need_x!(setup(8));
+    rack.0[0] = Some(Fake::new(300, 200, true).keeping_shape());
+    m.set_rect(0, 100, 150, 100).unwrap();
+    m.show(0, &mut rack).unwrap();
+    m.fit(&mut rack).unwrap();
+    assert!(
+        rack.log(0).contains(&"set_size 144x96".to_string()),
+        "{:?}",
+        rack.log(0)
+    );
+    assert_eq!(
+        m.info(0).unwrap().size,
+        EditorSize {
+            width: 144,
+            height: 96
+        }
+    );
+}
+
+#[test]
+fn fit_leaves_alone_a_plugin_that_would_only_crop_and_one_that_cannot_resize() {
+    let (mut m, mut rack, _conn) = need_x!(setup(8));
+    // Slot 0 takes any size (a fixed layout in a bigger or smaller window): resizing it would
+    // cut its picture, so it is left at its own size, for the scroll bars.
+    m.set_rect(0, 100, 150, 100).unwrap();
+    m.show(0, &mut rack).unwrap();
+    m.fit(&mut rack).unwrap();
+    assert!(!rack.log(0).iter().any(|l| l.starts_with("set_size")));
+    assert_eq!(
+        m.info(0).unwrap().size,
+        EditorSize {
+            width: 300,
+            height: 200
+        }
+    );
+    // One that cannot be resized is left alone too.
     rack.0[1] = Some(Fake::new(500, 300, false));
     m.show(1, &mut rack).unwrap();
     m.fit(&mut rack).unwrap();
