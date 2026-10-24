@@ -112,6 +112,8 @@ pub enum ControlAction {
     /// Start or stop the transport (count-in and click, MIDI clock).
     TransportToggle,
     ClickToggle,
+    /// The free-running metronome in the header: clicks at the tempo, transport or not.
+    MetronomeToggle,
     /// Tap the tempo with a foot switch or a pad.
     TapTempo,
     /// Recall a snapshot.
@@ -182,6 +184,7 @@ impl ControlAction {
                 | Self::ToggleFx { .. }
                 | Self::ToggleInsertBypass { .. }
                 | Self::ClickToggle
+                | Self::MetronomeToggle
                 | Self::TransportToggle
         )
     }
@@ -234,6 +237,7 @@ impl ControlAction {
             }
             Self::TransportToggle => "Start / stop the transport".into(),
             Self::ClickToggle => "Click on / off".into(),
+            Self::MetronomeToggle => "Metronome on / off".into(),
             Self::TapTempo => "Tap tempo".into(),
             Self::NextPart => "Next part".into(),
             Self::PrevPart => "Previous part".into(),

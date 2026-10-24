@@ -8,10 +8,33 @@
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 
 const TICKS_PER_BEAT: u32 = 24;
-/// The click: a short decaying sine, higher on the first beat of a bar.
-const CLICK_SECS: f32 = 0.04;
-const CLICK_FREQ: f32 = 1000.0;
-const CLICK_ACCENT_FREQ: f32 = 1500.0;
+/// The click: two recorded samples (mono, 16-bit, 24 kHz; the same ones Lyrica uses), the louder
+/// one on the first beat of a bar. Decoded and resampled once, when the transport is made.
+const CLICK_WAV: &[u8] = include_bytes!("../assets/metronome_click.wav");
+const ACCENT_WAV: &[u8] = include_bytes!("../assets/metronome_accent.wav");
+
+/// A canonical 44-byte-header WAV as f32 samples at `out_rate` (linear interpolation).
+fn decode_click(wav: &[u8], out_rate: f32) -> Vec<f32> {
+    let src_rate = u32::from_le_bytes(wav[24..28].try_into().unwrap()) as f64;
+    let pcm: Vec<f32> = wav[44..]
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&b| i16::from_le_bytes(b) as f32 / 32768.0)
+        .collect();
+    let ratio = src_rate / f64::from(out_rate);
+    let len = (pcm.len() as f64 / ratio) as usize;
+    (0..len)
+        .map(|i| {
+            let pos = i as f64 * ratio;
+            let idx = pos as usize;
+            let frac = (pos - idx as f64) as f32;
+            let a = pcm[idx];
+            let b = pcm.get(idx + 1).copied().unwrap_or(0.0);
+            a + (b - a) * frac
+        })
+        .collect()
+}
 
 const REQ_NONE: u8 = 0;
 const REQ_START: u8 = 1;
@@ -28,6 +51,8 @@ pub struct TransportShared {
     beats_per_bar: AtomicU8,
     count_in_beats: AtomicU8,
     click_on: AtomicBool,
+    /// The free-running metronome: clicks at the tempo even while the transport is stopped.
+    metronome_on: AtomicBool,
     click_volume: AtomicU32,
     /// Mix the click into the main outputs (else it goes to its own output ports).
     click_to_main: AtomicBool,
@@ -49,6 +74,7 @@ impl TransportShared {
             beats_per_bar: AtomicU8::new(4),
             count_in_beats: AtomicU8::new(0),
             click_on: AtomicBool::new(true),
+            metronome_on: AtomicBool::new(false),
             click_volume: AtomicU32::new(0.5f32.to_bits()),
             click_to_main: AtomicBool::new(true),
             request: AtomicU8::new(REQ_NONE),
@@ -79,6 +105,14 @@ impl TransportShared {
         self.click_on.store(on, Ordering::Relaxed);
         self.click_volume
             .store(volume.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+    }
+
+    pub fn set_metronome(&self, on: bool) {
+        self.metronome_on.store(on, Ordering::Relaxed);
+    }
+
+    pub fn metronome(&self) -> bool {
+        self.metronome_on.load(Ordering::Relaxed)
     }
 
     pub fn set_click_to_main(&self, on: bool) {
@@ -181,11 +215,17 @@ pub struct Transport {
     counting: bool,
     beat_in_bar: u32,
     bar: u32,
-    /// Frames of the current click played so far, its pitch and its volume.
+    /// The normal and the accent click, at the output rate.
+    clicks: [Vec<f32>; 2],
+    /// Frames of the current click played so far, which one, and its volume.
     click_pos: usize,
-    click_freq: f32,
+    click_accent: bool,
     click_active: bool,
     click_gain: f32,
+    /// The free-running metronome's clock while the transport is stopped: frames until its next
+    /// beat (`None` when it is not running) and the beat in the bar.
+    metro_until: Option<f64>,
+    metro_beat: u32,
     /// Timeline markers, in tick order, and the next one to fire.
     markers: Vec<EngineMarker>,
     next_marker: usize,
@@ -208,10 +248,16 @@ impl Transport {
             counting: false,
             beat_in_bar: 0,
             bar: 0,
+            clicks: [
+                decode_click(CLICK_WAV, sample_rate),
+                decode_click(ACCENT_WAV, sample_rate),
+            ],
             click_pos: 0,
-            click_freq: CLICK_FREQ,
+            click_accent: false,
             click_active: false,
             click_gain: 0.0,
+            metro_until: None,
+            metro_beat: 0,
             markers: Vec::with_capacity(MAX_MARKERS),
             next_marker: 0,
             run_tick: 0,
@@ -240,11 +286,8 @@ impl Transport {
     fn trigger_click(&mut self, accent: bool, volume: f32) {
         self.click_active = true;
         self.click_pos = 0;
-        self.click_freq = if accent {
-            CLICK_ACCENT_FREQ
-        } else {
-            CLICK_FREQ
-        };
+        self.click_accent = accent;
+        // Both recordings are normalised to the same peak: the accent is louder by this.
         self.click_gain = volume * if accent { 1.0 } else { 0.7 };
     }
 
@@ -265,7 +308,9 @@ impl Transport {
         click_l[..frames].fill(0.0);
         click_r[..frames].fill(0.0);
         let bpb = u32::from(shared.beats_per_bar.load(Ordering::Relaxed)).max(1);
-        let click_on = shared.click_on.load(Ordering::Relaxed);
+        let metronome = shared.metronome_on.load(Ordering::Relaxed);
+        // The metronome is heard whatever the transport's own click is set to.
+        let click_on = shared.click_on.load(Ordering::Relaxed) || metronome;
         let volume = f32::from_bits(shared.click_volume.load(Ordering::Relaxed));
 
         match shared.request.swap(REQ_NONE, Ordering::Acquire) {
@@ -298,6 +343,26 @@ impl Transport {
         // Where a click starts in this block (at most a few: a beat is longer than a block).
         let mut triggers = [(0u32, false); 4];
         let mut n_triggers = 0;
+        // Stopped: the metronome keeps its own beat. A run takes the click over with its clock.
+        if self.until_tick.is_some() || !metronome {
+            self.metro_until = None;
+        } else {
+            let tempo = f64::from(shared.tempo());
+            let per_beat = f64::from(self.sample_rate) * 60.0 / tempo;
+            let mut until = *self.metro_until.get_or_insert_with(|| {
+                self.metro_beat = 0;
+                0.0
+            });
+            while until < frames as f64 {
+                if n_triggers < triggers.len() {
+                    triggers[n_triggers] = (until.max(0.0) as u32, self.metro_beat == 0);
+                    n_triggers += 1;
+                }
+                self.metro_beat = (self.metro_beat + 1) % bpb;
+                until += per_beat;
+            }
+            self.metro_until = Some(until - frames as f64);
+        }
         if let Some(mut until) = self.until_tick {
             let tempo = f64::from(shared.tempo());
             let per_tick = f64::from(self.sample_rate) * 60.0 / tempo / f64::from(TICKS_PER_BEAT);
@@ -340,7 +405,6 @@ impl Transport {
             self.until_tick = Some(until - frames as f64);
         }
 
-        let len = (CLICK_SECS * self.sample_rate) as usize;
         let mut next_trigger = 0;
         for t in 0..frames {
             while next_trigger < n_triggers && triggers[next_trigger].0 as usize == t {
@@ -348,13 +412,13 @@ impl Transport {
                 next_trigger += 1;
             }
             if self.click_active {
-                if self.click_pos >= len {
+                let sample = &self.clicks[usize::from(self.click_accent)];
+                let Some(&raw) = sample.get(self.click_pos) else {
                     self.click_active = false;
                     continue;
-                }
-                let env = 1.0 - self.click_pos as f32 / len as f32;
-                let w = std::f32::consts::TAU * self.click_freq / self.sample_rate;
-                let s = (w * self.click_pos as f32).sin() * env * env * self.click_gain;
+                };
+                // The recordings are normalised to nearly full scale; the volume is the level.
+                let s = raw * self.click_gain;
                 click_l[t] = s;
                 click_r[t] = s;
                 self.click_pos += 1;
@@ -425,7 +489,8 @@ mod tests {
         let (mut l, mut r) = (vec![0.0; frames], vec![0.0; frames]);
         let mut clock = Vec::with_capacity(256);
         let (mut events, mut clicks) = (Vec::new(), Vec::new());
-        let mut was_silent = true;
+        // A recorded click has zero crossings inside it: a new one is sound after a real silence.
+        let mut silent_for = usize::MAX / 2;
         for b in 0..blocks {
             t.render(shared, &mut l, &mut r, &mut clock);
             events.extend(
@@ -434,12 +499,14 @@ mod tests {
                     .map(|e| (b * frames + e.time as usize, e.bytes[0])),
             );
             for (i, &s) in l.iter().enumerate() {
-                let silent = s == 0.0;
-                if was_silent && !silent {
-                    clicks.push(b * frames + i);
+                if s == 0.0 {
+                    silent_for += 1;
+                } else {
+                    if silent_for >= 1000 {
+                        clicks.push(b * frames + i);
+                    }
+                    silent_for = 0;
                 }
-                // A click starts from a sine's zero: look for first non-zero after silence.
-                was_silent = silent;
             }
         }
         (events, clicks)
@@ -483,9 +550,9 @@ mod tests {
         let start = events.iter().find(|e| e.1 == MIDI_START).unwrap().0;
         assert_eq!(start, 4 * 24_000, "start after four beats");
         assert!(clicks.len() >= 4, "the count-in clicked: {clicks:?}");
-        // (A click's sine starts at zero, so the first sound is a frame in.)
-        assert!(clicks[0] <= 1);
-        assert!((24_000..=24_001).contains(&clicks[1]), "{clicks:?}");
+        // (A recorded click starts a few frames in, from its own pre-roll.)
+        assert!(clicks[0] <= 200);
+        assert!((24_000..=24_200).contains(&clicks[1]), "{clicks:?}");
     }
 
     #[test]
@@ -584,5 +651,72 @@ mod tests {
         shared.start(0);
         t.render(&shared, &mut l, &mut r, &mut clock);
         assert!(t.fired().is_empty(), "cleared markers stay quiet");
+    }
+
+    #[test]
+    fn the_metronome_clicks_at_the_tempo_while_stopped_and_accents_the_bar() {
+        let shared = TransportShared::new();
+        shared.set_tempo(120.0);
+        shared.set_click(false, 0.5); // the transport's own click is off: the metronome is separate
+        shared.set_metronome(true);
+        let mut t = Transport::new(SR);
+        // 120 bpm = a click every 24000 frames; 2.5 s covers beats at 0, 24000, 48000, 72000, 96000.
+        let (l, mut r, mut clock) = (vec![0.0; 128], vec![0.0; 128], Vec::new());
+        let mut l = l;
+        let mut starts = Vec::new();
+        let mut peaks = Vec::new();
+        let mut silent_for = usize::MAX / 2;
+        let mut peak = 0.0f32;
+        for b in 0..(120_000 / 128) {
+            t.render(&shared, &mut l, &mut r, &mut clock);
+            for (i, &s) in l.iter().enumerate() {
+                if s == 0.0 {
+                    silent_for += 1;
+                    continue;
+                }
+                if silent_for >= 1000 {
+                    if !starts.is_empty() {
+                        peaks.push(peak);
+                    }
+                    peak = 0.0;
+                    starts.push(b * 128 + i);
+                }
+                silent_for = 0;
+                peak = peak.max(s.abs());
+            }
+        }
+        peaks.push(peak);
+        assert!(
+            clock.is_empty() || !clock.iter().any(|e| e.bytes[0] == MIDI_CLOCK),
+            "no MIDI clock from a metronome"
+        );
+        assert_eq!(starts.len(), 5, "{starts:?}");
+        for (n, s) in starts.iter().enumerate() {
+            assert!((n * 24_000..=n * 24_000 + 200).contains(s), "{starts:?}");
+        }
+        assert!(!shared.running());
+        // Beat one of the 4/4 bar is the accent: louder than the beats after it.
+        assert!(peaks[0] > peaks[1], "{peaks:?}");
+        assert!(peaks[4] > peaks[3], "{peaks:?}");
+
+        // Switched off, it falls silent.
+        shared.set_metronome(false);
+        let (_, clicks) = run(&mut t, &shared, 400, 128);
+        assert!(clicks.is_empty() || clicks[0] < 128 * 200, "{clicks:?}");
+        let (_, clicks) = run(&mut t, &shared, 400, 128);
+        assert!(clicks.is_empty(), "{clicks:?}");
+    }
+
+    #[test]
+    fn a_run_takes_the_click_over_from_the_metronome_without_doubling_it() {
+        let shared = TransportShared::new();
+        shared.set_tempo(120.0);
+        shared.set_metronome(true);
+        let mut t = Transport::new(SR);
+        run(&mut t, &shared, 100, 128);
+        shared.start(0);
+        // 2 s of run: beats at 0, 0.5, 1.0, 1.5 s; one click each, not two.
+        let (_, clicks) = run(&mut t, &shared, 750, 128);
+        assert_eq!(clicks.len(), 4, "{clicks:?}");
     }
 }

@@ -37,6 +37,7 @@ pub enum ActionKind {
     SelectedVolume,
     TransportToggle,
     ClickToggle,
+    MetronomeToggle,
     TapTempo,
     NextPart,
     PrevPart,
@@ -54,7 +55,7 @@ pub enum ActionKind {
 }
 
 impl ActionKind {
-    const ALL: [ActionKind; 27] = [
+    const ALL: [ActionKind; 28] = [
         Self::SelectSlot,
         Self::ToggleLayer,
         Self::ToggleMute,
@@ -68,6 +69,7 @@ impl ActionKind {
         Self::SelectedVolume,
         Self::TransportToggle,
         Self::ClickToggle,
+        Self::MetronomeToggle,
         Self::TapTempo,
         Self::NextPart,
         Self::PrevPart,
@@ -98,7 +100,8 @@ impl ActionKind {
             Self::SelectedMacro => "Macro of the slot that plays (knob or fader)",
             Self::SelectedVolume => "Volume of the slot that plays (fader or knob)",
             Self::TransportToggle => "Start / stop (count-in, click, MIDI clock)",
-            Self::ClickToggle => "Click on / off",
+            Self::ClickToggle => "Click on / off (during songs)",
+            Self::MetronomeToggle => "Metronome on / off",
             Self::TapTempo => "Tap tempo",
             Self::NextPart => "Next part (foot switch)",
             Self::PrevPart => "Previous part (foot switch)",
@@ -146,6 +149,7 @@ impl ActionKind {
             Self::SelectedVolume => A::SelectedVolume,
             Self::TransportToggle => A::TransportToggle,
             Self::ClickToggle => A::ClickToggle,
+            Self::MetronomeToggle => A::MetronomeToggle,
             Self::TapTempo => A::TapTempo,
             Self::NextPart => A::NextPart,
             Self::PrevPart => A::PrevPart,
@@ -193,7 +197,7 @@ pub fn show(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<
         .auto_shrink(false)
         .show(ui, |ui| match st.settings_tab {
             SettingsTab::Plugins => plugins(ui, s, st, actions),
-            SettingsTab::Audio => audio(ui, s, actions),
+            SettingsTab::Audio => audio(ui, s, st, actions),
             SettingsTab::Midi => midi(ui, s, st, actions),
             SettingsTab::Controls => controls(ui, s, st, actions),
             SettingsTab::Windows => windows(ui, s, st, actions),
@@ -291,7 +295,7 @@ fn plugins(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<A
     }
 }
 
-fn audio(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
+fn audio(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
     let Some(b) = s.backend() else {
         ui.label("Audio is not running.");
         return;
@@ -327,6 +331,34 @@ fn audio(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
     ui.label(format!("Outputs: {}", b.out_names.join(", ")));
     ui.add_space(8.0);
     click_output(ui, s, actions);
+    ui.add_space(8.0);
+    backing_folder(ui, s, st, actions);
+}
+
+/// The folder the Setlist view lists backing tracks from.
+fn backing_folder(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
+    ui.strong("Backing tracks folder");
+    ui.label(
+        RichText::new("The Setlist view shows this folder (and the folders inside it) beside the songs, so a backing track is a double-click away. Only audio files are listed.")
+            .small()
+            .weak(),
+    );
+    ui.horizontal(|ui| {
+        match s.backing_dir() {
+            Some(d) => ui.label(RichText::new(d.display().to_string()).monospace()),
+            None => ui.label(RichText::new("not chosen yet").weak()),
+        };
+        crate::ui::pick_button(
+            ui,
+            &mut st.picking,
+            "Choose…",
+            Want::BackingDir,
+            s.backing_dir(),
+        );
+        if s.backing_dir().is_some() && ui.button("Clear").clicked() {
+            actions.push(Action::SetBackingDir(None));
+        }
+    });
 }
 
 /// Where the click is heard.

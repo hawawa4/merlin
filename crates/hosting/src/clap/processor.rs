@@ -2,13 +2,15 @@
 
 use clack_extensions::audio_ports::{AudioPortInfoBuffer, PluginAudioPorts};
 use clack_host::events::event_types::{
-    MidiEvent as ClapMidi, NoteOffEvent, NoteOnEvent, ParamValueEvent,
+    MidiEvent as ClapMidi, NoteOffEvent, NoteOnEvent, ParamValueEvent, TransportEvent,
+    TransportFlags,
 };
-use clack_host::events::{EventFlags, Match};
+use clack_host::events::{EventFlags, EventHeader, Match};
 use clack_host::prelude::*;
+use clack_host::utils::BeatTime;
 
 use super::host::ClapHost;
-use crate::{Io, MidiEvent, MidiKind, PluginProcessor, ProcessStatus};
+use crate::{Io, MidiEvent, MidiKind, PluginProcessor, ProcessStatus, host_time};
 
 /// Largest block a CLAP processor accepts (buffers are sized for it).
 pub const MAX_FRAMES: usize = 4096;
@@ -162,13 +164,34 @@ impl PluginProcessor for ClapProcessor {
                     ),
                 }),
         );
+        // The host's tempo and time signature, for plugins that sync to them (delays, arpeggiators,
+        // LFOs). A live rig has no timeline, so only these and "playing" are given.
+        let zero = BeatTime::from_int(0);
+        let transport = TransportEvent {
+            header: EventHeader::new_core(0, EventFlags::empty()),
+            flags: TransportFlags::HAS_TEMPO
+                | TransportFlags::HAS_TIME_SIGNATURE
+                | TransportFlags::IS_PLAYING,
+            song_pos_beats: zero,
+            song_pos_seconds: zero,
+            tempo: f64::from(host_time::tempo()),
+            tempo_inc: 0.0,
+            loop_start_beats: zero,
+            loop_end_beats: zero,
+            loop_start_seconds: zero,
+            loop_end_seconds: zero,
+            bar_start: zero,
+            bar_number: 0,
+            time_signature_numerator: host_time::beats_per_bar().min(u32::from(u16::MAX)) as u16,
+            time_signature_denominator: 4,
+        };
         let result = self.processor.process(
             &ins,
             &mut outs,
             &self.events.as_input(),
             &mut OutputEvents::void(),
             Some(self.steady),
-            None,
+            Some(&transport),
         );
         self.steady += n as u64;
 

@@ -170,6 +170,7 @@ impl Session {
                 })
             }),
             click_on: t.click,
+            metronome_on: self.engine.shared.transport.metronome(),
             transport_running: self.transport_running(),
             loaded: (0..UI_SLOTS)
                 .filter(|&i| self.plugins[i].is_some())
@@ -216,6 +217,7 @@ impl Session {
             Outcome::PrevSong => self.prev_song(),
             Outcome::TransportToggle => self.transport_toggle(),
             Outcome::ClickToggle => self.toggle_click(),
+            Outcome::MetronomeToggle => self.toggle_metronome(),
             Outcome::TapTempo => self.tap_tempo(),
             Outcome::Panic => self.panic(),
             Outcome::CaptureMidi => self.capture_midi(),

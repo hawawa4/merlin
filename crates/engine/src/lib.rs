@@ -28,6 +28,9 @@ pub struct Shared {
     /// Output peak per slot since the UI last read it (`swap(0)`), as `f32` bits.
     pub peaks: [AtomicU32; MAX_SLOTS],
     pub master_peak: AtomicU32,
+    /// What went to the main outputs (click included), left and right, as the largest sample
+    /// since the UI last read it (`swap(0)`), as `f32` bits. The header's meter.
+    pub meter: [AtomicU32; 2],
     /// Compressor gain reduction per slot, dB as `f32` bits (the latest block).
     pub comp_reduction: [AtomicU32; MAX_SLOTS],
     /// Master limiter gain reduction, dB as `f32` bits (the largest since the UI last read it).
@@ -55,6 +58,7 @@ impl Shared {
             held: std::array::from_fn(|_| AtomicU16::new(0)),
             peaks: std::array::from_fn(|_| AtomicU32::new(0)),
             master_peak: AtomicU32::new(0),
+            meter: std::array::from_fn(|_| AtomicU32::new(0)),
             comp_reduction: std::array::from_fn(|_| AtomicU32::new(0)),
             limiter_reduction: AtomicU32::new(0),
             sleeping: AtomicU16::new(0),

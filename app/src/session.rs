@@ -2196,6 +2196,13 @@ impl Session {
     }
 
     /// Peaks since the last call, per slot.
+    /// The main outputs' peak (left, right) since the last call: what the header's meter shows.
+    pub fn take_meter(&self) -> (f32, f32) {
+        let read =
+            |i: usize| f32::from_bits(self.engine.shared.meter[i].swap(0, Ordering::Relaxed));
+        (read(0), read(1))
+    }
+
     pub fn take_peaks(&self) -> [f32; UI_SLOTS] {
         std::array::from_fn(|i| {
             f32::from_bits(self.engine.shared.peaks[i].swap(0, Ordering::Relaxed))

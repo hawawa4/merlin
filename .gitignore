@@ -1,5 +1,7 @@
 /target
 *.wav
+# The metronome clicks are part of the source (see crates/engine/assets/README.md).
+!crates/engine/assets/*.wav
 /test-assets/
 /runtime/
 /dist/

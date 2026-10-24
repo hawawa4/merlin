@@ -48,6 +48,16 @@ impl Session {
             .unwrap_or_else(paths::default_capture_dir)
     }
 
+    /// The folder of backing tracks the Setlist view browses, if one was chosen.
+    pub fn backing_dir(&self) -> Option<&Path> {
+        self.settings.backing_dir.as_deref()
+    }
+
+    pub fn set_backing_dir(&mut self, dir: Option<PathBuf>) {
+        self.settings.backing_dir = dir.filter(|d| !d.as_os_str().is_empty());
+        self.save_settings();
+    }
+
     pub fn set_capture_dir(&mut self, dir: Option<PathBuf>) {
         self.settings.capture_dir = dir.filter(|d| !d.as_os_str().is_empty());
         self.save_settings();

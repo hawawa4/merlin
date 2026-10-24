@@ -82,6 +82,19 @@ impl Session {
         self.set_click(!t.click, t.click_volume);
     }
 
+    /// The free-running metronome (header): clicks at the tempo whether or not a song runs.
+    pub fn metronome(&self) -> bool {
+        self.engine.shared.transport.metronome()
+    }
+
+    pub fn set_metronome(&mut self, on: bool) {
+        self.engine.shared.transport.set_metronome(on);
+    }
+
+    pub fn toggle_metronome(&mut self) {
+        self.set_metronome(!self.metronome());
+    }
+
     /// Starts (after the count-in) or stops.
     pub fn transport_toggle(&mut self) {
         let shared = &self.engine.shared.transport;

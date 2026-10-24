@@ -443,8 +443,8 @@ impl PluginProcessor for Vst3Processor {
         ctx.state = 2 | (1 << 10) | (1 << 13); // kPlaying | kTempoValid | kTimeSigValid
         ctx.sampleRate = self.sample_rate;
         ctx.projectTimeSamples = self.position;
-        ctx.tempo = 120.0;
-        ctx.timeSigNumerator = 4;
+        ctx.tempo = f64::from(crate::host_time::tempo());
+        ctx.timeSigNumerator = crate::host_time::beats_per_bar().min(i32::MAX as u32) as i32;
         ctx.timeSigDenominator = 4;
 
         let mut data = ProcessData {

@@ -203,6 +203,8 @@ pub enum Icon {
     Map,
     /// A cassette: record what was played.
     Tape,
+    /// A pyramid metronome with its swinging weight.
+    Metronome,
 }
 
 impl Icon {
@@ -323,6 +325,20 @@ impl Icon {
                     );
                 }
             }
+            Self::Metronome => {
+                // The case, the arm and its sliding weight, and the base.
+                p.add(Shape::closed_line(
+                    vec![at(-7.0, 9.0), at(-3.5, -9.0), at(3.5, -9.0), at(7.0, 9.0)],
+                    line,
+                ));
+                p.line_segment([at(-1.0, 6.0), at(5.0, -11.0)], Stroke::new(1.3, colour));
+                p.rect_filled(
+                    Rect::from_center_size(at(2.4, -4.0), vec2(5.0, 3.5)),
+                    1.0,
+                    colour,
+                );
+                p.line_segment([at(-5.0, 9.0), at(5.0, 9.0)], Stroke::new(2.0, colour));
+            }
             Self::Tape => {
                 let body = Rect::from_center_size(c, vec2(26.0, 17.0));
                 p.rect_stroke(
@@ -372,6 +388,131 @@ fn keyboard(p: &Painter, c: Pos2, size: Vec2, colour: Color32) {
     }
 }
 
+/// What the header's level meter remembers between frames: how high each channel stands (dB,
+/// falling at a steady rate after a peak), where its peak was held, and a clip lamp.
+#[derive(Clone, Copy, Default)]
+pub struct Meter {
+    level: [f32; 2],
+    hold: [f32; 2],
+    hold_at: [f64; 2],
+    clip_at: f64,
+}
+
+/// The bottom of the scale, in dB.
+const METER_FLOOR: f32 = -60.0;
+
+impl Meter {
+    pub fn new() -> Self {
+        Self {
+            level: [METER_FLOOR; 2],
+            hold: [METER_FLOOR; 2],
+            hold_at: [0.0; 2],
+            clip_at: f64::NEG_INFINITY,
+        }
+    }
+
+    /// Takes the peaks (linear, 0..1) the audio thread saw since the last frame. `now` is in
+    /// seconds, `dt` the time since the last frame.
+    pub fn feed(&mut self, peaks: (f32, f32), now: f64, dt: f32) {
+        for (c, peak) in [peaks.0, peaks.1].into_iter().enumerate() {
+            let db = (20.0 * peak.max(1e-6).log10()).max(METER_FLOOR);
+            // Up at once, down at a steady 30 dB a second.
+            self.level[c] = db.max(self.level[c] - 30.0 * dt);
+            if db >= self.hold[c] {
+                self.hold[c] = db;
+                self.hold_at[c] = now;
+            } else if now - self.hold_at[c] > 1.2 {
+                self.hold[c] = db.max(self.hold[c] - 24.0 * dt);
+            }
+            if peak >= 0.999 {
+                self.clip_at = now;
+            }
+        }
+    }
+
+    /// Whether anything is still moving (the header keeps repainting while it is).
+    pub fn moving(&self, now: f64) -> bool {
+        self.level
+            .iter()
+            .chain(&self.hold)
+            .any(|&d| d > METER_FLOOR + 0.5)
+            || now - self.clip_at < 2.0
+    }
+}
+
+/// A stereo level meter: two rows of lamps, green into amber into red, with a lamp held at each
+/// channel's peak and a clip lamp at the end that stays lit for two seconds.
+pub fn level_meter(ui: &mut Ui, meter: &Meter, lamps: usize, now: f64) -> Response {
+    let lamps = lamps.max(4);
+    const LAMP: Vec2 = vec2(4.0, 6.0);
+    const GAP: f32 = 1.0;
+    let width = lamps as f32 * (LAMP.x + GAP) + 24.0;
+    let (rect, r) = ui.allocate_exact_size(vec2(width, 26.0), Sense::hover());
+    if !ui.is_rect_visible(rect) {
+        return r;
+    }
+    let p = ui.painter();
+    p.rect_filled(rect, 5.0, WELL);
+    p.rect_stroke(
+        rect,
+        5.0,
+        Stroke::new(1.0, BEVEL_LO),
+        egui::StrokeKind::Inside,
+    );
+    // The light along the top edge of the recess.
+    p.line_segment(
+        [
+            rect.left_top() + vec2(5.0, 0.5),
+            rect.right_top() + vec2(-5.0, 0.5),
+        ],
+        Stroke::new(1.0, BEVEL_HI.gamma_multiply(0.25)),
+    );
+    let clip = now - meter.clip_at < 2.0;
+    for (c, label) in ["L", "R"].into_iter().enumerate() {
+        let top = rect.top() + 5.0 + c as f32 * (LAMP.y + 3.0);
+        p.text(
+            pos2(rect.left() + 8.0, top + LAMP.y / 2.0),
+            Align2::CENTER_CENTER,
+            label,
+            FontId::proportional(8.5),
+            TEXT_DIM,
+        );
+        for n in 0..lamps {
+            // The lamp's own level: the scale is -60 dB at the left, 0 at the right.
+            let db = METER_FLOOR + (n as f32 + 1.0) * (-METER_FLOOR / lamps as f32);
+            let colour = if db > -3.0 {
+                RED
+            } else if db > -12.0 {
+                AMBER
+            } else {
+                GREEN
+            };
+            let step = -METER_FLOOR / lamps as f32;
+            // Lit once the level reaches the middle of the lamp's range; the held peak is the
+            // one lamp whose range holds it.
+            let held = meter.hold[c] > db - step && meter.hold[c] <= db;
+            let lit = meter.level[c] >= db - step * 0.5 || held;
+            let x = rect.left() + 16.0 + n as f32 * (LAMP.x + GAP);
+            let lamp = Rect::from_min_size(pos2(x, top), LAMP);
+            if lit {
+                p.rect_filled(lamp.expand(1.2), 1.5, colour.gamma_multiply(0.18));
+                p.rect_filled(lamp, 1.0, colour);
+            } else {
+                p.rect_filled(lamp, 1.0, mix(WELL, colour, 0.16));
+            }
+        }
+    }
+    // The clip lamp.
+    let lamp = pos2(rect.right() - 7.0, rect.center().y);
+    if clip {
+        p.circle_filled(lamp, 5.0, RED.gamma_multiply(0.25));
+        p.circle_filled(lamp, 3.0, RED);
+    } else {
+        p.circle_filled(lamp, 3.0, mix(WELL, RED, 0.2));
+    }
+    r
+}
+
 /// A star to mark favourites: an empty grey outline, or filled yellow when `on`.
 pub fn star(ui: &mut Ui, on: bool) -> Response {
     let (rect, r) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
@@ -406,7 +547,7 @@ pub fn selector(ui: &mut Ui, items: &[&str], selected: usize, colour: Color32) -
             ui.spacing_mut().item_spacing = vec2(3.0, 0.0);
             for (n, label) in items.iter().enumerate() {
                 let lit = (n == selected).then_some(colour);
-                if Cap::new(*label).lit(lit).min_width(70.0).show(ui).clicked() {
+                if Cap::new(*label).lit(lit).min_width(60.0).show(ui).clicked() {
                     clicked = Some(n);
                 }
             }

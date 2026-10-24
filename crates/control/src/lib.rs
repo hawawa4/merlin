@@ -64,6 +64,7 @@ pub struct Context {
     /// Bit k set: slot i's insert k is bypassed.
     pub bypassed: [u8; MAX_SLOTS],
     pub click_on: bool,
+    pub metronome_on: bool,
     pub transport_running: bool,
 }
 
@@ -85,6 +86,7 @@ pub enum Outcome {
     PrevSong,
     TransportToggle,
     ClickToggle,
+    MetronomeToggle,
     TapTempo,
     Panic,
     CaptureMidi,
@@ -264,6 +266,7 @@ fn switch_state(action: &ControlAction, ctx: &Context) -> Option<bool> {
             ctx.bypassed.get(slot as usize)? & (1 << insert) == 0
         }
         ControlAction::ClickToggle => ctx.click_on,
+        ControlAction::MetronomeToggle => ctx.metronome_on,
         ControlAction::TransportToggle => ctx.transport_running,
         _ => return None,
     })
@@ -357,6 +360,7 @@ fn fire(action: &ControlAction, inc: &Incoming, ctx: &Context) -> Option<Outcome
         }
         ControlAction::TransportToggle => Some(Outcome::TransportToggle),
         ControlAction::ClickToggle => Some(Outcome::ClickToggle),
+        ControlAction::MetronomeToggle => Some(Outcome::MetronomeToggle),
         ControlAction::TapTempo => Some(Outcome::TapTempo),
         ControlAction::NextPart => Some(Outcome::NextPart),
         ControlAction::PrevPart => Some(Outcome::PrevPart),

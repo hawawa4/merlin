@@ -1,21 +1,21 @@
 # QA checklist
 
 Things only a person with ears and a mouse can check. Run `just dev` unless a step says otherwise.
-Sections 0 to 2 (frame, rack and effects, SoundFonts) and 5 (controls) are checked and gone. Tick as you go; anything odd, send me what you saw (and the exact text of any error in the log line under the title).
+Sections 0 to 2 (frame, rack and effects, SoundFonts, SoundFont folders) and 5 (controls) are checked and gone. Tick as you go; anything odd, send me what you saw (and the exact text of any error in the log line under the title).
 
 ## 0. Re-check: fixes from your last report
 - [ ] **Text size and contrast.** Open **Settings** (every tab) and **Setlist** (add a song, a part, a track): all text is readable at a normal distance, the small grey help lines included. Anything still too small or too dim? Say which tab.
 - [ ] **The header never changes.** Click RACK, SETLIST, PERFORM, SETTINGS: the rig plate, the view switch, the three icon buttons, master and PANIC stay exactly where they are. In Perform, New / Open… / Save and the keyboard button are there but greyed out; **LOCK** and **FULL SCREEN** are now in the *Stage* strip right under the notice line. With the lock on, the view switch and MIDI MAP are greyed (not gone).
 - [ ] **Folder dialogs.** Settings > Plugins: **Add folder…** opens your desktop's folder chooser (KDE's or GTK's); choosing a folder adds it (and a rescan finds its plugins); cancelling adds nothing. Same for the sound folders, Settings > MIDI > MIDI capture > **Choose…** (and **Default**), Settings > Windows plugins > **Browse…** for the Wine program, the yabridge folder and the installer, and **Add folder…** for Windows VST2 folders. No box asks you to type a path to add (the Wine and yabridge boxes can still be typed in).
+- [ ] **Tempo and metronome in the header** (left of the level meter): a metronome icon and the beats per minute. Drag the number, scroll the wheel over it, or click it and type: the tempo changes everywhere (Perform's tempo, the click, MIDI clock). It is the same number in every view. Click the metronome icon: it lights and clicks at that tempo, with a higher click on beat 1 of the bar (beats per bar: Settings > Audio, or the song's); click again to stop. START in Perform takes the click over without doubling it; the metronome keeps going when the song stops. The two click sounds are the ones from Lyrica; do they feel right? *Metronome on / off* can be mapped to a pedal (Settings > Controls).
+- [ ] **Plugins follow the tempo.** Load a synth or effect that syncs to the host (an arpeggiator or a tempo-synced delay or LFO: Surge XT as CLAP and as VST3, a Windows plugin). Change the header tempo: the plugin's rate follows. (VST2 already did; CLAP and VST3 used to be told 120 whatever it was, and LV2 is still not told: tell me if you have an LV2 that needs it.)
+- [ ] **Level meter** in the header: two rows of lamps (left, right), green to amber to red, moving while you play and falling back smoothly; a lamp stays at the peak for a moment; the round lamp at the end lights red for two seconds if the output reaches full scale (turn master up with a loud patch). Hover for the explanation. Does it cost noticeable CPU when idle (it should stop redrawing when silent)?
+- [ ] **The header fits.** At your usual window size everything is on one line; make the window narrower and the fader and meter shrink, then the levels and tempo drop to a second line. Nothing overlaps at any width.
+- [ ] **Setlist** is only about choosing: no scene strip there and no way to make a scene (they are made in the Rack view); a part has a scene picker (with a hint when there are none yet) and **+ Add part**. The **^ v x** buttons of each song sit in one column at the right of its row, never over the name; a long name is cut short with …. Songs, parts, tracks and markers wrap instead of running off the edge when the window is narrow.
+- [ ] **Backing tracks in the Setlist.** **+ Add tracks…** opens a file chooser (several files at once, audio only) and adds them to the song being edited. Settings > Audio > **Backing tracks folder** > Choose…: that folder appears in the Setlist view's right-hand **Backing tracks library**: click a folder to go in, **Up**, **Refresh**, **Change…**, the filter box narrows the audio files by name, double-click a file to add it as a track to the selected song (hover shows its path and size). Only folders and audio files are listed, hidden ones are not. Without a folder chosen the panel offers a button to choose one. **Clear** in Settings empties the choice.
 - [ ] **Scenes** (see 5b below): rename by double-click, overwrite, and Save also saves the lit scene.
 - [ ] **Browser** (see 5o below): a small picture beside each family, instrument and plugin; right-click works every time; double-click fills the first empty slot.
 - [ ] **Mouse wheel on a plugin's scroll bar** (Podolski, or any editor bigger than the dock): turn the wheel over the empty room or the bar beside the plugin. It should now glide, one notch moving the picture the same way every time, as smooth as dragging the thumb. If it still skips, tell me which plugin and whether the wheel was over the bar or the empty room.
-
-## 2. SoundFont folders
-- [ ] **A folder of SoundFonts is one instrument.** Make a folder with two or more `.sf2`/`.sf3` files in it (for instance *Salamander* with a few fonts, inside a sound folder from Settings > Plugins, or inside `~/.local/share/soundfonts`) and rescan. The browser shows one entry, *Salamander (SoundFonts)*, named like the folder, instead of one per file. A folder with a single font keeps showing that font by its own name. The standard system folders (`/usr/share/sounds/sf2`, `~/.local/share/soundfonts` itself) keep their fonts as separate instruments; only the folders *inside* them (or a folder you add yourself in Settings) are grouped. Settings > Sound folders counts files.
-- [ ] Load that entry into a slot: *Shape the sound* and the preset list appear, and the list is grouped under each file's name (search also finds file names). *now:* says *file · preset*. Pick presets from different files: each plays its own file's sound (a General MIDI font and a special one: the special one's sounds must not fall silent or play the wrong piano). Program Change from a keyboard moves within the file that is playing.
-- [ ] Save the rig with a preset from the second file, **New**, reopen: same preset, same file. Then add another font to the folder (one that sorts first), rescan, reopen the rig: it is still the same file's preset. (Scenes remember a preset by number, so a scene stored before adding a file may point at another file's preset: tell me if that bites.)
-- [ ] A damaged `.sf2` in the folder does not stop the others from loading. A folder with many large fonts shows "decoding…" in the slot and the app keeps responding.
 
 ## 3. Windows plugins
 - [ ] Windows plugins are in the browser without pressing anything. Load Podolski and TyrellN6 (VST3 and CLAP). Play, use the editor, save and reopen.
@@ -71,7 +71,7 @@ Scenes are saved inside the rig file, so one file holds the whole setup.
 - [ ] Save, reopen: options (range, curve, kind) and takeover are kept.
 
 ## 5f. Setlist, songs and parts
-- [ ] **Setlist** (title bar) > **+ Add song**. Name it, set a tempo. Set the rig up the way the first part should sound, press **+ Part from the current sound**; change the sound, add another part; add a tempo override on one.
+- [ ] **Setlist** (title bar) > **+ Add song**. Name it, set a tempo. Make two scenes in the Rack view first (*+ Store scene*). In the Setlist add parts with **+ Add part** and pick a scene for each; add a tempo override on one.
 - [ ] **Go** on a part: the sound and the tempo (shown in Perform) change to that part. The scene strip shows the part's scene lit.
 - [ ] Reorder songs and parts with **^ v**; delete a part, and delete a scene a part uses (the part just shows "no scene").
 - [ ] Perform view: **Next part >** and **< Prev part** walk through the song and into the next song; part buttons jump; the song buttons jump to a song. The cue note shows large.
@@ -82,13 +82,13 @@ Scenes are saved inside the rig file, so one file holds the whole setup.
 - [ ] Perform view: press **START**. With count-in 1 bar you hear four clicks (the first higher), the display says "count-in n", then "1 . 1, 1 . 2, ..." as the bars run. **STOP** stops it.
 - [ ] **-**/**+** and **TAP** change the tempo (tap four times); the click follows at once. **CLICK** and its slider mute it and set its level. Count-in off starts straight away.
 - [ ] Settings > Audio > Click output: with a multi-output interface pick two of its outputs: the click leaves the main mix and comes out there only (headphones). Back to "Main outputs" mixes it in again.
-- [ ] Enter a part that has its own tempo (Setlist): the click follows it. Change beats per bar for a song (Setlist) or in Settings > Audio and listen for the accent on beat 1.
+- [ ] Enter a part that has its own tempo (Setlist): the click follows it. Change beats per bar for a song (Setlist) or in Settings > Audio and listen for the accent on beat 1. The header's metronome does the same without a song running (see 0).
 - [ ] MIDI clock: connect the `merlin:midi_out` port to a drum machine or a software that shows incoming tempo (`pw-link merlin:midi_out <port>`); it follows the tempo and starts and stops with START and STOP.
 - [ ] Settings > Controls: *Start / stop*, *Click on / off*, *Tap tempo* on a foot switch or pad.
 - [ ] Close and reopen the rig: tempo, count-in and click settings are back.
 
 ## 5h. Backing tracks
-- [ ] Setlist > a song > **+ Add track**: type the path of a stem (or drop a file on the window while the Setlist screen is open). It says *loading...* then *ready 3:07*. A file that is not audio says *cannot play* (hover for why).
+- [ ] Setlist > a song > **+ Add tracks…**, the library on the right, or a file dropped on the window while the Setlist screen is open. It says *loading...* then *ready 3:07*. A file that is not audio says *cannot play* (hover for why).
 - [ ] **Go** on a part of the song, Perform view, **START**: after the count-in the tracks play together, in time with the click. The clock shows 0:00 / length. **STOP** stops them (no click or pop), and **START** again restarts from the top.
 - [ ] Try your real stems: a long stereo WAV, a 44.1 kHz file (resampled), an MP3 and a mono file. Does anything drift against the click over a whole song? Any gaps or crackles? (The audio-engine counter *underruns* in the log lines would grow if the disk could not keep up.)
 - [ ] 8+ stems at once from a slow disk or a USB stick.

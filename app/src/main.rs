@@ -15,6 +15,7 @@ mod guard;
 mod hw;
 mod icons;
 mod keyboard;
+mod library;
 mod macro_panel;
 mod map_mode;
 mod marker;
@@ -660,6 +661,10 @@ impl Running {
                 s.set_tempo(v);
                 Ok(())
             }
+            Action::SetMetronome(on) => {
+                s.set_metronome(on);
+                Ok(())
+            }
             Action::SetBeatsPerBar(n) => {
                 s.set_beats_per_bar(n);
                 Ok(())
@@ -1001,6 +1006,10 @@ impl Running {
             }
             Action::SetCaptureMinutes(m) => {
                 s.set_capture_minutes(m);
+                Ok(())
+            }
+            Action::SetBackingDir(d) => {
+                s.set_backing_dir(d);
                 Ok(())
             }
             Action::SetCaptureDir(d) => {
@@ -1590,6 +1599,7 @@ fn parse_script() -> Vec<(Duration, Action)> {
                     _ => return None,
                 },
                 "tempo" => Action::SetTempo(words.next()?.parse().ok()?),
+                "metro" => Action::SetMetronome(words.next()? == "on"),
                 "click" => Action::SetClickState(words.next()? == "on"),
                 "tap" => Action::TapTempo,
                 "countin" => Action::SetCountIn(words.next()?.parse().ok()?),
@@ -1741,6 +1751,7 @@ fn parse_control_action(
         "snapnext" => A::NextSnapshot,
         "transport" => A::TransportToggle,
         "click" => A::ClickToggle,
+        "metronome" => A::MetronomeToggle,
         "tap" => A::TapTempo,
         "nextpart" => A::NextPart,
         "prevpart" => A::PrevPart,

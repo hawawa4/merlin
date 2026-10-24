@@ -478,7 +478,13 @@ impl Engine {
                     out_l[start + t] += self.click_l[t];
                     out_r[start + t] += self.click_r[t];
                 }
-            } else if let Some(c) = click.as_deref_mut()
+            }
+            // The header's meter: the main outputs as they leave.
+            let peak = |s: &[f32]| s.iter().fold(0f32, |m, x| m.max(x.abs()));
+            self.shared.meter[0].fetch_max(peak(&out_l[start..end]).to_bits(), Ordering::Relaxed);
+            self.shared.meter[1].fetch_max(peak(&out_r[start..end]).to_bits(), Ordering::Relaxed);
+            if !self.shared.transport.click_to_main()
+                && let Some(c) = click.as_deref_mut()
                 && c.l.len() >= end
                 && c.r.len() >= end
             {

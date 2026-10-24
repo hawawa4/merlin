@@ -82,6 +82,8 @@ pub struct Settings {
     pub capture_minutes: u32,
     /// Where captures are saved; `~/Music/Merlin` when unset.
     pub capture_dir: Option<PathBuf>,
+    /// The folder of backing tracks the Setlist view browses; none until the user picks one.
+    pub backing_dir: Option<PathBuf>,
 }
 
 impl Default for Settings {
@@ -103,6 +105,7 @@ impl Default for Settings {
             windows_vst2_dirs: Vec::new(),
             capture_minutes: 30,
             capture_dir: None,
+            backing_dir: None,
         }
     }
 }

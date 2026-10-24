@@ -16,11 +16,34 @@ pub enum Want {
     WineProgram,
     YabridgeDir,
     Installer,
+    /// The folder of backing tracks the Setlist view browses.
+    BackingDir,
+    /// Audio files (several at once) to add as backing tracks to this song.
+    BackingTrack(usize),
 }
 
 impl Want {
     fn folder(self) -> bool {
-        !matches!(self, Self::WineProgram | Self::Installer)
+        !matches!(
+            self,
+            Self::WineProgram | Self::Installer | Self::BackingTrack(_)
+        )
+    }
+
+    /// Several files can be picked at once.
+    fn multiple(self) -> bool {
+        matches!(self, Self::BackingTrack(_))
+    }
+
+    /// Only these files are offered (a label and glob patterns).
+    fn filter(self) -> Option<(&'static str, &'static str)> {
+        match self {
+            Self::BackingTrack(_) => Some((
+                "Audio files",
+                "*.wav *.WAV *.flac *.FLAC *.mp3 *.MP3 *.ogg *.OGG *.m4a *.M4A",
+            )),
+            _ => None,
+        }
     }
 
     fn title(self) -> &'static str {
@@ -32,6 +55,8 @@ impl Want {
             Self::WineProgram => "Choose the wine program",
             Self::YabridgeDir => "Choose the yabridge folder",
             Self::Installer => "Choose a Windows plugin installer",
+            Self::BackingDir => "Choose the folder with your backing tracks",
+            Self::BackingTrack(_) => "Choose backing tracks",
         }
     }
 }
@@ -39,13 +64,13 @@ impl Want {
 /// A dialog that is open: what for, and where its answer will arrive.
 pub struct Open {
     pub want: Want,
-    answer: Receiver<Result<Option<PathBuf>, String>>,
+    answer: Receiver<Result<Vec<PathBuf>, String>>,
 }
 
 /// What a poll of an open dialog found.
 pub enum Poll {
     Waiting,
-    Chosen(Want, PathBuf),
+    Chosen(Want, Vec<PathBuf>),
     Cancelled,
     Failed(String),
 }
@@ -67,8 +92,8 @@ impl Open {
 
     pub fn poll(&self) -> Poll {
         match self.answer.try_recv() {
-            Ok(Ok(Some(p))) => Poll::Chosen(self.want, p),
-            Ok(Ok(None)) => Poll::Cancelled,
+            Ok(Ok(p)) if !p.is_empty() => Poll::Chosen(self.want, p),
+            Ok(Ok(_)) => Poll::Cancelled,
             Ok(Err(e)) => Poll::Failed(e),
             Err(TryRecvError::Empty) => Poll::Waiting,
             Err(TryRecvError::Disconnected) => Poll::Failed("the dialog thread ended".into()),
@@ -90,30 +115,42 @@ fn tools() -> [&'static str; 2] {
 fn command(tool: &str, want: Want, start: &Path) -> (String, Vec<String>) {
     let title = want.title().to_owned();
     let start = format!("{}/", start.display());
-    let args = match (tool, want.folder()) {
-        ("kdialog", true) => vec![
-            "--title".into(),
-            title,
-            "--getexistingdirectory".into(),
-            start,
-        ],
-        ("kdialog", false) => vec!["--title".into(), title, "--getopenfilename".into(), start],
-        (_, true) => vec![
-            "--file-selection".into(),
-            "--directory".into(),
-            format!("--title={title}"),
-            format!("--filename={start}"),
-        ],
-        (_, false) => vec![
-            "--file-selection".into(),
-            format!("--title={title}"),
-            format!("--filename={start}"),
-        ],
-    };
+    let mut args: Vec<String> = Vec::new();
+    if tool == "kdialog" {
+        args.extend(["--title".into(), title]);
+        if want.multiple() {
+            args.extend(["--multiple".into(), "--separate-output".into()]);
+        }
+        args.push(
+            if want.folder() {
+                "--getexistingdirectory"
+            } else {
+                "--getopenfilename"
+            }
+            .into(),
+        );
+        args.push(start);
+        if let Some((label, globs)) = want.filter() {
+            args.push(format!("{label} ({globs})"));
+        }
+    } else {
+        args.push("--file-selection".into());
+        if want.folder() {
+            args.push("--directory".into());
+        }
+        if want.multiple() {
+            args.extend(["--multiple".into(), "--separator=\n".into()]);
+        }
+        args.push(format!("--title={title}"));
+        args.push(format!("--filename={start}"));
+        if let Some((label, globs)) = want.filter() {
+            args.push(format!("--file-filter={label} | {globs}"));
+        }
+    }
     (tool.to_owned(), args)
 }
 
-fn run(want: Want, start: &Path) -> Result<Option<PathBuf>, String> {
+fn run(want: Want, start: &Path) -> Result<Vec<PathBuf>, String> {
     for tool in tools() {
         let (program, args) = command(tool, want, start);
         let output = match Command::new(&program).args(&args).output() {
@@ -122,10 +159,16 @@ fn run(want: Want, start: &Path) -> Result<Option<PathBuf>, String> {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
             Err(e) => return Err(format!("cannot run {program}: {e}")),
         };
-        let text = String::from_utf8_lossy(&output.stdout);
-        let line = text.lines().next().unwrap_or("").trim();
         // Cancelling gives an empty answer and a non-zero exit.
-        return Ok((output.status.success() && !line.is_empty()).then(|| PathBuf::from(line)));
+        if !output.status.success() {
+            return Ok(Vec::new());
+        }
+        return Ok(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(PathBuf::from)
+            .collect());
     }
     Err("no file dialog found: install kdialog or zenity".into())
 }
@@ -149,5 +192,22 @@ mod tests {
         assert!(k.contains(&"--getopenfilename".to_owned()));
         let (_, z) = command("zenity", Want::WineProgram, Path::new("/"));
         assert!(!z.contains(&"--directory".to_owned()));
+    }
+
+    #[test]
+    fn backing_tracks_ask_for_several_audio_files() {
+        let (_, k) = command("kdialog", Want::BackingTrack(0), Path::new("/m"));
+        assert!(
+            k.contains(&"--multiple".to_owned()) && k.contains(&"--getopenfilename".to_owned())
+        );
+        assert!(k.last().unwrap().starts_with("Audio files (*.wav"));
+        let (_, z) = command("zenity", Want::BackingTrack(2), Path::new("/m"));
+        assert!(z.contains(&"--multiple".to_owned()) && !z.contains(&"--directory".to_owned()));
+        assert!(
+            z.iter()
+                .any(|a| a.starts_with("--file-filter=Audio files | *.wav"))
+        );
+        let (_, d) = command("zenity", Want::BackingDir, Path::new("/m"));
+        assert!(d.contains(&"--directory".to_owned()) && !d.contains(&"--multiple".to_owned()));
     }
 }

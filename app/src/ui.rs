@@ -110,6 +110,8 @@ pub enum Action {
     SetCaptureMinutes(u32),
     /// Where captures are saved (`None`: the default folder).
     SetCaptureDir(Option<PathBuf>),
+    /// The folder the Setlist view browses for backing tracks.
+    SetBackingDir(Option<PathBuf>),
     SetFx(usize, FxSettings),
     SetMaster(f32),
     /// Script-only: switch a named preset of effects on (`reverb`, `delay`, `comp`, `eq`, `off`).
@@ -218,6 +220,7 @@ pub enum Action {
     SetClickVolume(f32),
     TapTempo,
     SetTempo(f32),
+    SetMetronome(bool),
     SetCountIn(u8),
     SetBeatsPerBar(u8),
     SetClickOutput(Option<[String; 2]>),
@@ -285,8 +288,6 @@ pub struct UiState {
     pub settings_open: bool,
     /// The Setlist screen is showing, and the song being edited in it.
     pub setlist_open: bool,
-    /// The path being typed for a new backing track.
-    pub track_text: String,
     pub edit_song: usize,
     /// The Perform view is showing.
     pub perform: bool,
@@ -343,6 +344,10 @@ pub struct UiState {
     pub popup_open: bool,
     /// The scene whose name is being edited in the strip, and the text so far.
     pub scene_edit: Option<(usize, String)>,
+    /// The header's level meter.
+    pub meter: hw::Meter,
+    /// The backing-track library shown in the Setlist view.
+    pub library: crate::library::Browsing,
     /// The file dialog that is open, if one is.
     pub picking: Option<crate::dialog::Open>,
     pub status: StatusInfo,
@@ -374,7 +379,6 @@ impl UiState {
             tab: DockTab::Plugin,
             settings_open: false,
             setlist_open: false,
-            track_text: String::new(),
             edit_song: 0,
             perform: false,
             locked: false,
@@ -411,6 +415,8 @@ impl UiState {
             force_menu: None,
             popup_open: false,
             scene_edit: None,
+            meter: hw::Meter::new(),
+            library: Default::default(),
             picking: None,
             status: StatusInfo::default(),
         }
@@ -426,6 +432,13 @@ pub fn draw(
 ) {
     drag_overlay(ui, st);
     poll_dialog(ui, s, st, actions);
+    // The level meter: fed every frame, and the frames keep coming while it is still moving.
+    let (now, dt) = ui.input(|i| (i.time, i.unstable_dt.min(0.1)));
+    st.meter.feed(s.take_meter(), now, dt);
+    if st.meter.moving(now) {
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(33));
+    }
     if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::M)) {
         actions.push(Action::SetMapMode(!s.map_mode));
     }
@@ -446,8 +459,8 @@ pub fn draw(
         crate::perform::show(ui, s, st, actions);
         return;
     }
-    // Scenes belong to the rack and the setlist, not to the settings.
-    if st.view() != View::Settings {
+    // Scenes are made in the rack; the setlist only picks among them.
+    if st.view() == View::Rack {
         egui::Panel::top("scenes")
             .frame(hw::chassis())
             .show(ui, |ui| scenes_bar(ui, s, st, actions));
@@ -597,7 +610,8 @@ fn poll_dialog(ui: &egui::Ui, s: &mut Session, st: &mut UiState, actions: &mut V
                 .request_repaint_after(std::time::Duration::from_millis(100));
             return;
         }
-        Poll::Chosen(want, path) => {
+        Poll::Chosen(want, paths) => {
+            let path = paths[0].clone();
             let text = path.display().to_string();
             match want {
                 Want::PluginDir => actions.push(Action::AddDir(text)),
@@ -607,6 +621,12 @@ fn poll_dialog(ui: &egui::Ui, s: &mut Session, st: &mut UiState, actions: &mut V
                 Want::WineProgram => st.wine_text = text,
                 Want::YabridgeDir => st.yab_text = text,
                 Want::Installer => st.installer_text = text,
+                Want::BackingDir => actions.push(Action::SetBackingDir(Some(path))),
+                Want::BackingTrack(song) => {
+                    for p in paths {
+                        actions.push(Action::AddTrack(song, p));
+                    }
+                }
             }
         }
         Poll::Cancelled => {}
@@ -894,6 +914,70 @@ fn scenes_bar(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, actions: &mu
 const SCENES_HELP: &str = "A scene remembers which slots play, their volumes, zones, effects on or off and SoundFont sounds. Click one to bring it back (or map it to a pedal). Double-click to rename it; right-click to overwrite or remove it. Saving the rig also updates the lit scene with what is set now. Scenes are saved in the rig file.";
 
 fn header(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, actions: &mut Vec<Action>) {
+    // Everything has to fit on one line, so the fader, the meter and the rig's name shrink as the
+    // window narrows (the header is the same in every view).
+    let room = ui.available_width();
+    let (fit, two_rows) = if room >= 1400.0 {
+        (
+            HeaderFit {
+                label: true,
+                slider: 80.0,
+                lamps: 24,
+                name: 120.0,
+            },
+            false,
+        )
+    } else if room >= 1320.0 {
+        (
+            HeaderFit {
+                label: false,
+                slider: 64.0,
+                lamps: 18,
+                name: 104.0,
+            },
+            false,
+        )
+    } else if room >= 1250.0 {
+        (
+            HeaderFit {
+                label: false,
+                slider: 44.0,
+                lamps: 12,
+                name: 84.0,
+            },
+            false,
+        )
+    } else {
+        // Too narrow for one line: the levels and the tempo go on a second one.
+        (
+            HeaderFit {
+                label: true,
+                slider: 80.0,
+                lamps: 24,
+                name: 104.0,
+            },
+            true,
+        )
+    };
+    ui.vertical(|ui| {
+        header_row(ui, s, st, fit, two_rows, actions);
+        if two_rows {
+            ui.add_space(4.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                header_levels(ui, s, st, fit, actions);
+            });
+        }
+    });
+}
+
+fn header_row(
+    ui: &mut egui::Ui,
+    s: &mut Session,
+    st: &mut UiState,
+    fit: HeaderFit,
+    two_rows: bool,
+    actions: &mut Vec<Action>,
+) {
     let perform = st.perform;
     // A locked stage view can only be left by holding Unlock.
     let locked = perform && st.locked;
@@ -902,7 +986,7 @@ fn header(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, actions: &mut Ve
         ui.add_space(6.0);
         // The header looks the same in every view, so nothing moves when you switch. On stage the
         // file buttons are there but dead: no New / Open / Save while performing.
-        ui.add_enabled_ui(!perform, |ui| file_plate(ui, s, actions));
+        ui.add_enabled_ui(!perform, |ui| file_plate(ui, s, fit.name, actions));
         ui.add_space(10.0);
         let views = [View::Rack, View::Setlist, View::Perform, View::Settings];
         let names = ["RACK", "SETLIST", "PERFORM", "SETTINGS"];
@@ -922,18 +1006,10 @@ fn header(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, actions: &mut Ve
                 actions.push(Action::Panic);
             }
             crate::map_mode::target(ui, s, &p, ControlAction::Panic, None, actions);
-            let mut master = s.rig.master_volume;
-            ui.spacing_mut().slider_width = 80.0;
-            let m = ui.add(
-                egui::Slider::new(&mut master, 0.0..=1.5)
-                    .fixed_decimals(2)
-                    .text("master"),
-            );
-            if m.changed() {
-                actions.push(Action::SetMaster(master));
+            if !two_rows {
+                header_levels(ui, s, st, fit, actions);
+                ui.add_space(6.0);
             }
-            crate::map_mode::target(ui, s, &m, ControlAction::MasterVolume, None, actions);
-            ui.add_space(6.0);
             capture_button(ui, s, actions);
             ui.add_enabled_ui(!locked, |ui| crate::map_mode::toggle(ui, s, actions));
             let open = st.keys_open;
@@ -953,6 +1029,90 @@ fn header(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, actions: &mut Ve
                 }
             });
         });
+    });
+}
+
+/// Master volume, the level meter and the tempo, right to left (so the fader is the rightmost).
+fn header_levels(
+    ui: &mut egui::Ui,
+    s: &mut Session,
+    st: &mut UiState,
+    fit: HeaderFit,
+    actions: &mut Vec<Action>,
+) {
+    let mut master = s.rig.master_volume;
+    ui.spacing_mut().slider_width = fit.slider;
+    let slider = egui::Slider::new(&mut master, 0.0..=1.5).fixed_decimals(2);
+    let m = ui.add(if fit.label {
+        slider.text("master")
+    } else {
+        slider
+    });
+    let m = m.on_hover_text("Master volume");
+    if m.changed() {
+        actions.push(Action::SetMaster(master));
+    }
+    crate::map_mode::target(ui, s, &m, ControlAction::MasterVolume, None, actions);
+    ui.add_space(4.0);
+    hw::level_meter(ui, &st.meter, fit.lamps, ui.input(|i| i.time)).on_hover_text(
+        "What is going to your speakers, left and right. The last lamp lights if it clips.",
+    );
+    ui.add_space(6.0);
+    tempo_plate(ui, s, actions);
+}
+
+/// How big the header's flexible parts are at this window width.
+#[derive(Clone, Copy)]
+struct HeaderFit {
+    /// The word "master" beside the fader.
+    label: bool,
+    slider: f32,
+    lamps: usize,
+    name: f32,
+}
+
+/// The tempo, in the header so it is always in view: the metronome (lit while it clicks) and
+/// the beats per minute beside it, to drag or type. Plugins that sync to the host see this tempo.
+fn tempo_plate(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        let on = s.metronome();
+        let icon = hw::Cap::new("")
+            .icon(hw::Icon::Metronome)
+            .lit(on.then_some(hw::AMBER))
+            .min_width(34.0)
+            .show(ui)
+            .on_hover_text(if on {
+                "Metronome on: click to stop it"
+            } else {
+                "Metronome: click to hear the tempo as a click"
+            });
+        if icon.clicked() && !s.map_mode {
+            actions.push(Action::SetMetronome(!on));
+        }
+        crate::map_mode::target(ui, s, &icon, ControlAction::MetronomeToggle, None, actions);
+        let mut bpm = s.tempo();
+        let number = ui
+            .add(
+                egui::DragValue::new(&mut bpm)
+                    .range(merlin_model::MIN_TEMPO..=merlin_model::MAX_TEMPO)
+                    .speed(0.25)
+                    .max_decimals(1),
+            )
+            .on_hover_text(
+                "Tempo in beats per minute: drag, scroll or type. The click, the count-in, \
+                 MIDI clock and every plugin that syncs to the host follow it.",
+            );
+        if number.changed() {
+            actions.push(Action::SetTempo(bpm));
+        }
+        if number.hovered() {
+            let wheel = ui.input(|i| i.smooth_scroll_delta.y);
+            if wheel != 0.0 {
+                actions.push(Action::SetTempo(s.tempo() + wheel.signum()));
+            }
+        }
+        crate::map_mode::target(ui, s, &number, ControlAction::Tempo, None, actions);
     });
 }
 
@@ -1098,14 +1258,14 @@ fn notice_bar(ui: &mut egui::Ui, s: &Session, st: &mut UiState) {
 }
 
 /// The rig file's controls together: its name, and New, Open, Save beside it.
-fn file_plate(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
+fn file_plate(ui: &mut egui::Ui, s: &Session, name_width: f32, actions: &mut Vec<Action>) {
     hw::plate().show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 5.0;
             hw::engraved(ui, "Rig");
             let mut name = s.rig.name.clone();
             if ui
-                .add(egui::TextEdit::singleline(&mut name).desired_width(120.0))
+                .add(egui::TextEdit::singleline(&mut name).desired_width(name_width))
                 .changed()
             {
                 actions.push(Action::RenameRig(name));

@@ -26,6 +26,9 @@ pub enum Glyph {
     Rack,
     Sparkle,
     Untagged,
+    /// A folder, and an audio file (a waveform): for the backing-track library.
+    Folder,
+    AudioFile,
 }
 
 /// The picture for a family, or for one of its instruments when that has its own.
@@ -255,6 +258,27 @@ fn paint(p: &Painter, glyph: Glyph, c: Pos2, colour: Color32) {
                 Color32::TRANSPARENT,
                 line,
             ));
+        }
+        Glyph::Folder => {
+            // The body with the tab at the top left.
+            path(
+                &[
+                    (-8.0, -6.0),
+                    (-3.0, -6.0),
+                    (-1.0, -3.5),
+                    (8.0, -3.5),
+                    (8.0, 7.0),
+                    (-8.0, 7.0),
+                ],
+                line,
+            );
+            p.line_segment([at(-8.0, -6.0), at(-8.0, 7.0)], line);
+        }
+        Glyph::AudioFile => {
+            for (n, h) in [3.0_f32, 7.0, 11.0, 6.0, 9.0, 4.0].into_iter().enumerate() {
+                let x = -7.0 + n as f32 * 2.8;
+                p.line_segment([at(x, -h / 2.0), at(x, h / 2.0)], Stroke::new(1.6, colour));
+            }
         }
         Glyph::Untagged => {
             p.circle_stroke(c, 7.0, thin);
