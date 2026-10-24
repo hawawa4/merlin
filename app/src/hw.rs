@@ -18,6 +18,7 @@ pub const TEXT_DIM: Color32 = Color32::from_rgb(0x8d, 0x90, 0x97);
 
 pub const AMBER: Color32 = Color32::from_rgb(0xe8, 0xb4, 0x40);
 pub const GREEN: Color32 = Color32::from_rgb(0x58, 0xd0, 0x70);
+pub const RED: Color32 = Color32::from_rgb(0xff, 0x2a, 0x1e);
 pub const BLUE: Color32 = Color32::from_rgb(0x4a, 0xa3, 0xe0);
 
 /// A raised key cap with a label. `lit` backlights it in that colour (a switch that is on, the
@@ -25,6 +26,7 @@ pub const BLUE: Color32 = Color32::from_rgb(0x4a, 0xa3, 0xe0);
 #[derive(Clone)]
 pub struct Cap {
     label: String,
+    icon: Option<Icon>,
     lit: Option<Color32>,
     base: Option<Color32>,
     min_width: f32,
@@ -34,10 +36,18 @@ impl Cap {
     pub fn new(label: impl Into<String>) -> Self {
         Self {
             label: label.into(),
+            icon: None,
             lit: None,
             base: None,
             min_width: 0.0,
         }
+    }
+
+    /// Draws a small picture on the cap instead of a label.
+    pub fn icon(mut self, icon: Icon) -> Self {
+        self.icon = Some(icon);
+        self.min_width = self.min_width.max(40.0);
+        self
     }
 
     pub fn lit(mut self, colour: Option<Color32>) -> Self {
@@ -128,14 +138,57 @@ impl Cap {
             (_, Some(c)) => mix(c, Color32::WHITE, 0.55),
             _ => TEXT,
         };
-        p.text(
-            rect.center(),
-            Align2::CENTER_CENTER,
-            &self.label,
-            font,
-            text,
-        );
+        match self.icon {
+            Some(icon) => icon.paint(p, rect.center(), text),
+            None => {
+                p.text(
+                    rect.center(),
+                    Align2::CENTER_CENTER,
+                    &self.label,
+                    font,
+                    text,
+                );
+            }
+        }
         r
+    }
+}
+
+/// Pictures for caps.
+#[derive(Clone, Copy)]
+pub enum Icon {
+    Keyboard,
+}
+
+impl Icon {
+    fn paint(self, p: &Painter, c: Pos2, colour: Color32) {
+        match self {
+            Self::Keyboard => {
+                let body = Rect::from_center_size(c, vec2(22.0, 13.0));
+                p.rect_stroke(
+                    body,
+                    2.0,
+                    Stroke::new(1.3, colour),
+                    egui::StrokeKind::Inside,
+                );
+                // Five white keys, the black ones between them.
+                for n in 1..5 {
+                    let x = body.left() + body.width() * n as f32 / 5.0;
+                    p.line_segment(
+                        [pos2(x, body.top() + 5.0), pos2(x, body.bottom())],
+                        Stroke::new(1.0, colour),
+                    );
+                }
+                for n in [1, 2, 4] {
+                    let x = body.left() + body.width() * n as f32 / 5.0;
+                    p.rect_filled(
+                        Rect::from_min_size(pos2(x - 1.6, body.top() + 1.0), vec2(3.2, 6.0)),
+                        0.5,
+                        colour,
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -234,7 +287,8 @@ pub fn led(ui: &mut Ui, on: bool, colour: Color32) -> Response {
         p.circle_filled(c, radius, colour);
         p.circle_filled(c - vec2(1.2, 1.2), 1.4, mix(colour, Color32::WHITE, 0.7));
     } else {
-        p.circle_filled(c, radius, colour.gamma_multiply(0.22));
+        // Off is dark glass with only a hint of its colour.
+        p.circle_filled(c, radius, mix(Color32::BLACK, colour, 0.10));
     }
     r
 }
@@ -390,18 +444,17 @@ pub fn pedal(
         .show(ui, |ui| {
             ui.vertical(|ui| {
                 ui.set_width(4.0 * 64.0 + 3.0 * 4.0);
-                ui.horizontal(|ui| {
-                    led(ui, *on, colour);
-                    ui.label(egui::RichText::new(title).size(14.0).strong().color(mix(
-                        colour,
-                        Color32::WHITE,
-                        0.75,
-                    )));
-                });
+                ui.label(egui::RichText::new(title).size(14.0).strong().color(mix(
+                    colour,
+                    Color32::WHITE,
+                    0.75,
+                )));
                 ui.add_space(4.0);
                 body(ui);
                 ui.add_space(8.0);
                 ui.vertical_centered(|ui| {
+                    // Red when the pedal is on, black when it is off, like the real thing.
+                    led(ui, *on, RED);
                     let mut r = footswitch(ui);
                     if r.clicked() {
                         *on = !*on;
@@ -547,4 +600,29 @@ pub fn drawer_handle(ui: &mut Ui, label: &str, detail: &str, chevron_up: bool) -
         TEXT_DIM,
     );
     r
+}
+
+/// A strip to drag to change the height of what is above it. Returns how far it was dragged this
+/// frame (positive: down).
+pub fn grip(ui: &mut Ui) -> f32 {
+    let (rect, r) = ui.allocate_exact_size(vec2(ui.available_width(), 10.0), Sense::drag());
+    let r = r
+        .on_hover_cursor(egui::CursorIcon::ResizeVertical)
+        .on_hover_text("Drag to change the height");
+    let lit = r.hovered() || r.dragged();
+    let c = rect.center();
+    let p = ui.painter();
+    p.rect_filled(
+        Rect::from_center_size(c, vec2(rect.width(), 4.0)),
+        2.0,
+        if lit {
+            mix(WELL, Color32::WHITE, 0.10)
+        } else {
+            WELL
+        },
+    );
+    for dx in [-14.0, 0.0, 14.0] {
+        p.circle_filled(c + vec2(dx, 0.0), 1.6, if lit { TEXT } else { TEXT_DIM });
+    }
+    r.drag_delta().y
 }

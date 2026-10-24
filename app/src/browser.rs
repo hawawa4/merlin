@@ -51,11 +51,6 @@ pub fn panel(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec
             // than make the user open branches to find it.
             let force_open =
                 (!q.is_empty() || st.favs_only || st.tag_filter != Filter::Any).then_some(true);
-            let favs: Vec<usize> = shown
-                .iter()
-                .copied()
-                .filter(|&k| s.is_favorite(&s.found[k]))
-                .collect();
             let tree = build_tree(s, &shown);
 
             egui::ScrollArea::vertical()
@@ -64,20 +59,13 @@ pub fn panel(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec
                     if shown.is_empty() {
                         ui.label(RichText::new("nothing found").weak());
                     }
-                    if !favs.is_empty() {
-                        branch(
-                            ui,
-                            "Favourites",
-                            "favs",
-                            favs.len(),
-                            force_open,
-                            true,
-                            |ui| {
-                                for &k in &favs {
-                                    row(ui, s, k, "favs", true, actions);
-                                }
-                            },
-                        );
+                    // The Favourites view is a plain list; in All, a favourite stays where it is
+                    // and only its star changes.
+                    if st.favs_only {
+                        for &k in &shown {
+                            row(ui, s, k, "favs", true, actions);
+                        }
+                        return;
                     }
                     for family in &tree.families {
                         let salt = family.name;

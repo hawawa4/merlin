@@ -279,6 +279,8 @@ pub struct Session {
     pub midi_sources: Vec<MidiSource>,
     pub editors: EditorManager,
     pub log: Vec<String>,
+    /// How many lines were ever said (the log keeps only the last 200).
+    pub log_count: u64,
     proxy: EventLoopProxy<UserEvent>,
     pub sample_rate: u32,
     last_autosave: Instant,
@@ -373,6 +375,7 @@ impl Session {
             midi_sources,
             editors: EditorManager::new(xid, scale, settings.editor_cache)?,
             log: Vec::new(),
+            log_count: 0,
             proxy,
             sample_rate,
             last_autosave: Instant::now(),
@@ -1051,6 +1054,7 @@ impl Session {
         let line = line.into();
         println!("{line}");
         self.log.push(line);
+        self.log_count += 1;
         if self.log.len() > 200 {
             self.log.remove(0);
         }

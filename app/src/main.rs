@@ -438,6 +438,14 @@ impl Running {
                 self.ui.fx_open = open;
                 Ok(())
             }
+            Action::RackCollapsed(collapsed) => {
+                self.ui.rack_collapsed = collapsed;
+                if !collapsed {
+                    // Showing every slot means the effects drawer, which hides them, goes.
+                    self.ui.fx_open = false;
+                }
+                Ok(())
+            }
             Action::KeysDrawer(open) => {
                 self.ui.keys_open = open;
                 Ok(())
@@ -1370,6 +1378,7 @@ fn parse_script() -> Vec<(Duration, Action)> {
                 "drawer" => match (words.next()?, words.next()? == "on") {
                     ("fx", open) => Action::FxDrawer(open),
                     ("keys", open) => Action::KeysDrawer(open),
+                    ("rack", open) => Action::RackCollapsed(!open),
                     _ => return None,
                 },
                 "tab" => Action::Tab(match words.next()? {

@@ -123,6 +123,8 @@ pub enum Action {
     TouchStart(usize, Option<usize>),
     /// Open or close the keyboard drawer.
     KeysDrawer(bool),
+    /// Collapse the rack to the slot being edited (true) or show every slot (false).
+    RackCollapsed(bool),
     /// Go to one of the app's views (the switch in the header).
     SetView(View),
     /// Script-only: show a settings tab.
@@ -290,6 +292,13 @@ pub struct UiState {
     pub favs_only: bool,
     /// The effects drawer is open.
     pub fx_open: bool,
+    /// The rack shows only the slot being edited.
+    pub rack_collapsed: bool,
+    /// How tall the pedals' area of the effects drawer is, in points.
+    pub fx_height: f32,
+    /// How many lines the app had said when the notice area last looked, and when it did.
+    pub notice_count: u64,
+    pub notice_at: Option<std::time::Instant>,
     /// The keyboard drawer is open.
     pub keys_open: bool,
     /// The browser shows only plugins with this tag (or none yet).
@@ -355,6 +364,10 @@ impl UiState {
             macro_query: String::new(),
             favs_only: false,
             fx_open: false,
+            rack_collapsed: false,
+            fx_height: 370.0,
+            notice_count: 0,
+            notice_at: None,
             keys_open: true,
             tag_filter: Default::default(),
             dir_text: String::new(),
@@ -397,14 +410,17 @@ pub fn draw(
     if ui.input(|i| i.key_pressed(egui::Key::F11)) && !(st.perform && st.locked) {
         actions.push(Action::SetPerform(!st.perform));
     }
+    egui::Panel::top("header")
+        .frame(hw::chassis())
+        .show(ui, |ui| header(ui, s, st, actions));
+    egui::Panel::top("notice")
+        .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(10, 4)))
+        .show(ui, |ui| notice_bar(ui, s, st));
     if st.perform {
         *dock_rect = egui::Rect::NOTHING;
         crate::perform::show(ui, s, st, actions);
         return;
     }
-    egui::Panel::top("header")
-        .frame(hw::chassis())
-        .show(ui, |ui| header(ui, s, st, actions));
     // Scenes belong to the rack and the setlist, not to the settings.
     if st.view() != View::Settings {
         egui::Panel::top("scenes")
@@ -428,10 +444,26 @@ pub fn draw(
     browser::panel(ui, s, st, actions);
     egui::Panel::top("rack").show(ui, |ui| {
         ui.add_space(2.0);
-        // With the effects drawer open the rack gives way to it, but for the slot it is about.
+        // With the effects drawer open, or the rack collapsed, only the slot being edited shows.
         let drawer = st.fx_open && s.viewing.is_some();
+        let collapsed = st.rack_collapsed || drawer;
+        let in_use = (0..UI_SLOTS).filter(|&i| s.plugins[i].is_some()).count();
+        let handle = hw::drawer_handle(
+            ui,
+            "Rack",
+            &format!("{in_use} of {UI_SLOTS} slots in use"),
+            !collapsed,
+        )
+        .on_hover_text(if collapsed {
+            "Show every slot"
+        } else {
+            "Fold the rack down to the slot you are editing, to make room"
+        });
+        if handle.clicked() {
+            actions.push(Action::RackCollapsed(!collapsed));
+        }
         for i in 0..UI_SLOTS {
-            if !drawer || s.viewing == Some(i) {
+            if !collapsed || s.viewing == Some(i) {
                 unit(ui, s, st, i, actions);
             }
         }
@@ -449,36 +481,26 @@ pub fn draw(
             let handle = hw::drawer_handle(
                 ui,
                 "Effects",
-                &format!("slot {} · {on} of 4 on", i + 1),
+                &format!("slot {} \u{b7} {on} of 4 on", i + 1),
                 drawer,
             )
             .on_hover_text(if drawer {
-                "Close the effects drawer and bring the rack back"
+                "Close the effects drawer"
             } else {
-                "Open the effects drawer: pedals for this slot, in the place of the rack"
+                "Open the effects drawer: pedals for this slot, with the rest of the rack folded away"
             });
             if handle.clicked() {
                 actions.push(Action::FxDrawer(!st.fx_open));
             }
             if drawer {
-                fx_drawer(ui, s, i, actions);
+                fx_drawer(ui, s, i, &mut st.fx_height, actions);
             }
         }
     });
-    egui::Panel::bottom("keys").show(ui, |ui| {
-        let open = st.keys_open;
-        let handle = hw::drawer_handle(ui, "Keyboard", "", !open).on_hover_text(if open {
-            "Hide the keyboard to make room"
-        } else {
-            "Show the keyboard"
-        });
-        if handle.clicked() {
-            actions.push(Action::KeysDrawer(!open));
-        }
-        if open {
-            keys(ui, s, st, actions);
-        }
-    });
+    // The keyboard is switched on and off from the header and takes no room while it is off.
+    if st.keys_open {
+        egui::Panel::bottom("keys").show(ui, |ui| keys(ui, s, st, actions));
+    }
     egui::Panel::top("dockbar").show(ui, |ui| dock_bar(ui, s, st, actions));
     egui::CentralPanel::default().show(ui, |ui| {
         *dock_rect = ui.available_rect_before_wrap();
@@ -717,18 +739,35 @@ fn scenes_bar(ui: &mut egui::Ui, s: &mut Session, actions: &mut Vec<Action>) {
 
 const SCENES_HELP: &str = "A scene remembers which slots play, their volumes, zones, effects on or off and SoundFont sounds. Click one to bring it back (or map it to a pedal). Right-click to rename, update or remove it. Scenes are saved in the rig file.";
 
-fn header(ui: &mut egui::Ui, s: &mut Session, st: &UiState, actions: &mut Vec<Action>) {
+fn header(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, actions: &mut Vec<Action>) {
+    let perform = st.perform;
+    // A locked stage view can only be left by holding Unlock.
+    let locked = perform && st.locked;
     ui.horizontal(|ui| {
         ui.label(RichText::new("MERLIN").size(18.0).strong().color(hw::AMBER));
         ui.add_space(6.0);
-        file_plate(ui, s, actions);
+        if perform {
+            // No New / Open / Save on stage: only the name of what is loaded.
+            hw::plate().show(ui, |ui| {
+                ui.label(
+                    RichText::new(&s.rig.name)
+                        .size(15.0)
+                        .strong()
+                        .color(hw::TEXT),
+                );
+            });
+        } else {
+            file_plate(ui, s, actions);
+        }
         ui.add_space(10.0);
         let views = [View::Rack, View::Setlist, View::Perform, View::Settings];
         let names = ["RACK", "SETLIST", "PERFORM", "SETTINGS"];
         let now = views.iter().position(|v| *v == st.view()).unwrap_or(0);
-        if let Some(n) = hw::selector(ui, &names, now, hw::BLUE) {
-            actions.push(Action::SetView(views[n]));
-        }
+        ui.add_enabled_ui(!locked, |ui| {
+            if let Some(n) = hw::selector(ui, &names, now, hw::BLUE) {
+                actions.push(Action::SetView(views[n]));
+            }
+        });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let p = hw::Cap::new("PANIC")
                 .base(Color32::from_rgb(0x9a, 0x2a, 0x2a))
@@ -752,64 +791,173 @@ fn header(ui: &mut egui::Ui, s: &mut Session, st: &UiState, actions: &mut Vec<Ac
             crate::map_mode::target(ui, s, &m, ControlAction::MasterVolume, None, actions);
             ui.add_space(6.0);
             capture_button(ui, s, actions);
-            crate::map_mode::toggle(ui, s, actions);
+            if !locked {
+                crate::map_mode::toggle(ui, s, actions);
+            }
+            if perform {
+                crate::perform::lock_cap(ui, st, actions);
+                if hw::Cap::new("FULL SCREEN").show(ui).clicked() {
+                    actions.push(Action::ToggleFullscreen);
+                }
+            } else {
+                let open = st.keys_open;
+                if hw::Cap::new("")
+                    .icon(hw::Icon::Keyboard)
+                    .lit(open.then_some(hw::AMBER))
+                    .show(ui)
+                    .on_hover_text(if open {
+                        "Hide the on-screen keyboard"
+                    } else {
+                        "Show the on-screen keyboard"
+                    })
+                    .clicked()
+                {
+                    actions.push(Action::KeysDrawer(!open));
+                }
+            }
         });
     });
-    ui.horizontal(|ui| {
-        if s.scanning() {
-            let file = s
-                .scan_current
-                .as_ref()
-                .and_then(|p| p.file_name())
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            ui.label(
-                RichText::new(format!("scanning plugins… {file}"))
-                    .small()
-                    .color(hw::AMBER),
-            );
-        } else if let Some(note) = s.capture_notice() {
-            ui.label(RichText::new(note).small().color(hw::GREEN));
-        } else if let Some(line) = s.log.last() {
-            ui.label(RichText::new(line).small().weak());
+}
+
+/// How a line in the notice area looks.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Notice {
+    /// Nothing to say.
+    Idle,
+    Info,
+    Success,
+    /// The app is waiting for the user to do something.
+    Prompt,
+    Error,
+}
+
+/// What the app says to the user right now: what it is waiting for, else what is going on, else
+/// the last thing it did while that is still fresh.
+fn notice_text(s: &Session, st: &mut UiState, ctx: &egui::Context) -> (String, Notice) {
+    if s.touch_learning().is_some() {
+        return (
+            "Turn a knob in the plugin's own window\u{2026}".into(),
+            Notice::Prompt,
+        );
+    }
+    if s.learning().is_some() {
+        return (
+            match s.learn_label() {
+                Some(name) => {
+                    format!("Now move a control on your device to map \u{201c}{name}\u{201d}")
+                }
+                None => "Move a control on your device to map it".into(),
+            },
+            Notice::Prompt,
+        );
+    }
+    if s.scanning() {
+        let file = s
+            .scan_current
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        return (format!("Scanning plugins\u{2026} {file}"), Notice::Info);
+    }
+    if let Some(note) = s.capture_notice() {
+        return (note.to_string(), Notice::Success);
+    }
+    if s.log_count != st.notice_count {
+        st.notice_count = s.log_count;
+        st.notice_at = Some(std::time::Instant::now());
+    }
+    let fresh = st
+        .notice_at
+        .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(12));
+    match s.log.last() {
+        Some(line) if fresh => {
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+            let l = line.to_lowercase();
+            let kind = if l.starts_with("error") || l.contains("could not") || l.contains("failed")
+            {
+                Notice::Error
+            } else {
+                Notice::Info
+            };
+            (line.clone(), kind)
         }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let limiting =
-                f32::from_bits(s.engine.shared.limiter_reduction.swap(0, Ordering::Relaxed));
-            if limiting > 0.5 {
-                ui.label(
-                    RichText::new(format!("LIMIT {limiting:.1} dB"))
-                        .small()
-                        .color(Color32::from_rgb(0xe0, 0x6c, 0x5a)),
-                );
-            }
-            let (xruns, dsp, buf) = s
-                .backend()
-                .map(|b| {
-                    (
-                        b.stats.xruns.load(Ordering::Relaxed),
-                        b.cpu_load(),
-                        b.buffer_size(),
-                    )
-                })
-                .unwrap_or_default();
-            // The UI's own cost is for development: it goes first when the row is narrow.
-            let mut text = format!(
-                "{buf} @ {} kHz · DSP {dsp:.1}% · xruns {xruns}",
-                s.sample_rate / 1000
-            );
-            let room = ui.available_width();
-            if room > 700.0 {
-                text.push_str(&format!(
-                    " · UI {:.1}% · {:.0} fps",
-                    st.status.cpu_self, st.status.frames_per_s
-                ));
-            } else if room < 420.0 {
-                text = format!("DSP {dsp:.0}% · xruns {xruns}");
-            }
-            ui.label(RichText::new(text).small().weak());
+        _ => ("Ready".into(), Notice::Idle),
+    }
+}
+
+/// The strip under the header where the app talks back: prompts, progress, results and errors,
+/// in a frame of their own, with the engine's numbers at the far end.
+fn notice_bar(ui: &mut egui::Ui, s: &Session, st: &mut UiState) {
+    let (text, kind) = notice_text(s, st, ui.ctx());
+    let (tint, colour) = match kind {
+        Notice::Idle => (hw::WELL, hw::TEXT_DIM),
+        Notice::Info => (hw::WELL, hw::TEXT),
+        Notice::Success => (hw::mix(hw::WELL, hw::GREEN, 0.14), hw::GREEN),
+        Notice::Prompt => (hw::mix(hw::WELL, hw::AMBER, 0.20), hw::AMBER),
+        Notice::Error => (
+            hw::mix(hw::WELL, hw::RED, 0.22),
+            hw::mix(hw::RED, Color32::WHITE, 0.35),
+        ),
+    };
+    let edge = if kind == Notice::Idle {
+        hw::PLATE
+    } else {
+        colour
+    };
+    egui::Frame::new()
+        .fill(tint)
+        .stroke(egui::Stroke::new(1.0, edge))
+        .corner_radius(6)
+        .inner_margin(egui::Margin::symmetric(10, 4))
+        .show(ui, |ui| {
+            ui.set_min_height(22.0);
+            ui.horizontal(|ui| {
+                let message = RichText::new(text).size(14.5).color(colour);
+                ui.label(if kind == Notice::Prompt {
+                    message.strong()
+                } else {
+                    message
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let (xruns, dsp, buf) = s
+                        .backend()
+                        .map(|b| {
+                            (
+                                b.stats.xruns.load(Ordering::Relaxed),
+                                b.cpu_load(),
+                                b.buffer_size(),
+                            )
+                        })
+                        .unwrap_or_default();
+                    // The UI's own cost is for development: it goes first when the row is narrow.
+                    let mut line = format!(
+                        "{buf} @ {} kHz \u{b7} DSP {dsp:.1}% \u{b7} xruns {xruns}",
+                        s.sample_rate / 1000
+                    );
+                    let room = ui.available_width();
+                    if room > 700.0 {
+                        line.push_str(&format!(
+                            " \u{b7} UI {:.1}% \u{b7} {:.0} fps",
+                            st.status.cpu_self, st.status.frames_per_s
+                        ));
+                    } else if room < 380.0 {
+                        line = format!("DSP {dsp:.0}% \u{b7} xruns {xruns}");
+                    }
+                    ui.label(RichText::new(line).size(11.0).color(hw::TEXT_DIM));
+                    let limiting = f32::from_bits(
+                        s.engine.shared.limiter_reduction.swap(0, Ordering::Relaxed),
+                    );
+                    if limiting > 0.5 {
+                        ui.label(
+                            RichText::new(format!("LIMIT {limiting:.1} dB"))
+                                .size(11.0)
+                                .color(Color32::from_rgb(0xe0, 0x6c, 0x5a)),
+                        );
+                    }
+                });
+            });
         });
-    });
 }
 
 /// The rig file's controls together: its name, and New, Open, Save beside it.
@@ -1149,20 +1297,18 @@ fn keys(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Acti
 /// "MIDI LEARN" for the plugin in the dock: click, turn a knob in the plugin's window, then move
 /// a control on the device. The app finds the knob by watching which parameter moved.
 fn touch_learn_cap(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
+    // What to do next is said in the notice area; the button only shows that it is on.
     let touching = s.touch_learning().is_some();
     let waiting = matches!(s.learning(), Some(ControlAction::SlotParam { .. }));
-    let (label, lit) = if touching {
-        ("TURN A KNOB IN THE PLUGIN\u{2026}", Some(hw::AMBER))
-    } else if waiting {
-        ("NOW MOVE A CONTROL\u{2026}", Some(hw::AMBER))
-    } else {
-        ("MIDI LEARN", None)
-    };
-    let r = hw::Cap::new(label).lit(lit).show(ui).on_hover_text(
+    let active = touching || waiting;
+    let r = hw::Cap::new("MIDI LEARN")
+        .lit(active.then_some(hw::AMBER))
+        .show(ui)
+        .on_hover_text(
         "Map a knob of this plugin to a control on your device: click here, turn the knob in the plugin's own window, then move the control. Click again to cancel.",
     );
     if r.clicked() {
-        actions.push(Action::TouchLearn(!(touching || waiting)));
+        actions.push(Action::TouchLearn(!active));
     }
 }
 
@@ -1296,7 +1442,13 @@ fn fx_knobs(
 
 /// The effects drawer: which slot it is for, its plugin inserts, and the built-in effects as four
 /// pedals in signal order (EQ, compressor, delay, reverb).
-fn fx_drawer(ui: &mut egui::Ui, s: &Session, i: usize, actions: &mut Vec<Action>) {
+fn fx_drawer(
+    ui: &mut egui::Ui,
+    s: &Session,
+    i: usize,
+    height: &mut f32,
+    actions: &mut Vec<Action>,
+) {
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         hw::engraved(ui, "Slot");
@@ -1323,53 +1475,61 @@ fn fx_drawer(ui: &mut egui::Ui, s: &Session, i: usize, actions: &mut Vec<Action>
     let mut fx = before;
     let reduction = f32::from_bits(s.engine.shared.comp_reduction[i].load(Ordering::Relaxed));
     ui.add_space(4.0);
-    // One row of pedals that scrolls sideways when the window is narrow. (A vertical scroll
-    // area would not do inside a panel that sizes itself to its content.)
-    egui::ScrollArea::horizontal().show(ui, |ui| {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(14.0, 14.0);
-            let blue = Color32::from_rgb(0x5a, 0xa9, 0xe0);
-            let mut on = fx.eq.enabled;
-            let switch = hw::pedal(ui, "EQ", blue, &mut on, |ui| {
-                fx_knobs(ui, s, i, &mut fx, &EQ_KNOBS, blue, actions);
-            });
-            fx.eq.enabled = on;
-            fx_switch_target(ui, s, &switch, i, FxKind::Eq, actions);
+    // The pedals have a height of their own, set by the strip below them; what does not fit
+    // scrolls. (The height is given, not measured: a scroll area cannot grow to fit its content
+    // inside a panel that sizes itself to what is in it.)
+    let h = *height;
+    ui.allocate_ui(egui::vec2(ui.available_width(), h), |ui| {
+        ui.set_min_height(h);
+        egui::ScrollArea::both()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(14.0, 14.0);
+                    let blue = Color32::from_rgb(0x5a, 0xa9, 0xe0);
+                    let mut on = fx.eq.enabled;
+                    let switch = hw::pedal(ui, "EQ", blue, &mut on, |ui| {
+                        fx_knobs(ui, s, i, &mut fx, &EQ_KNOBS, blue, actions);
+                    });
+                    fx.eq.enabled = on;
+                    fx_switch_target(ui, s, &switch, i, FxKind::Eq, actions);
 
-            let amber = hw::AMBER;
-            let mut on = fx.comp.enabled;
-            let switch = hw::pedal(ui, "COMPRESSOR", amber, &mut on, |ui| {
-                fx_knobs(ui, s, i, &mut fx, &COMP_KNOBS, amber, actions);
-                hw::meter(ui, reduction / 24.0, amber, "GAIN REDUCTION");
-            });
-            fx.comp.enabled = on;
-            fx_switch_target(ui, s, &switch, i, FxKind::Comp, actions);
+                    let amber = hw::AMBER;
+                    let mut on = fx.comp.enabled;
+                    let switch = hw::pedal(ui, "COMPRESSOR", amber, &mut on, |ui| {
+                        fx_knobs(ui, s, i, &mut fx, &COMP_KNOBS, amber, actions);
+                        hw::meter(ui, reduction / 24.0, amber, "GAIN REDUCTION");
+                    });
+                    fx.comp.enabled = on;
+                    fx_switch_target(ui, s, &switch, i, FxKind::Comp, actions);
 
-            let green = hw::GREEN;
-            let mut on = fx.delay.enabled;
-            let switch = hw::pedal(ui, "DELAY", green, &mut on, |ui| {
-                fx_knobs(ui, s, i, &mut fx, &DELAY_KNOBS, green, actions);
-                let ping_pong = fx.delay.ping_pong;
-                if hw::Cap::new("PING-PONG")
-                    .lit(ping_pong.then_some(green))
-                    .show(ui)
-                    .clicked()
-                {
-                    fx.delay.ping_pong = !ping_pong;
-                }
-            });
-            fx.delay.enabled = on;
-            fx_switch_target(ui, s, &switch, i, FxKind::Delay, actions);
+                    let green = hw::GREEN;
+                    let mut on = fx.delay.enabled;
+                    let switch = hw::pedal(ui, "DELAY", green, &mut on, |ui| {
+                        fx_knobs(ui, s, i, &mut fx, &DELAY_KNOBS, green, actions);
+                        let ping_pong = fx.delay.ping_pong;
+                        if hw::Cap::new("PING-PONG")
+                            .lit(ping_pong.then_some(green))
+                            .show(ui)
+                            .clicked()
+                        {
+                            fx.delay.ping_pong = !ping_pong;
+                        }
+                    });
+                    fx.delay.enabled = on;
+                    fx_switch_target(ui, s, &switch, i, FxKind::Delay, actions);
 
-            let purple = Color32::from_rgb(0xb0, 0x7a, 0xe0);
-            let mut on = fx.reverb.enabled;
-            let switch = hw::pedal(ui, "REVERB", purple, &mut on, |ui| {
-                fx_knobs(ui, s, i, &mut fx, &REVERB_KNOBS, purple, actions);
+                    let purple = Color32::from_rgb(0xb0, 0x7a, 0xe0);
+                    let mut on = fx.reverb.enabled;
+                    let switch = hw::pedal(ui, "REVERB", purple, &mut on, |ui| {
+                        fx_knobs(ui, s, i, &mut fx, &REVERB_KNOBS, purple, actions);
+                    });
+                    fx.reverb.enabled = on;
+                    fx_switch_target(ui, s, &switch, i, FxKind::Reverb, actions);
+                });
             });
-            fx.reverb.enabled = on;
-            fx_switch_target(ui, s, &switch, i, FxKind::Reverb, actions);
-        });
     });
+    *height = (h + hw::grip(ui)).clamp(140.0, 800.0);
     if fx != before {
         actions.push(Action::SetFx(i, fx));
     }

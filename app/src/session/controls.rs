@@ -629,6 +629,11 @@ impl Session {
         }
     }
 
+    /// The name of what is being learned (a parameter's), if it has one.
+    pub fn learn_label(&self) -> Option<&str> {
+        self.learn_label.as_deref()
+    }
+
     pub fn learning(&self) -> Option<ControlAction> {
         self.learn
     }

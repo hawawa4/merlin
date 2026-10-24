@@ -16,10 +16,7 @@ use crate::ui::{Action, UiState};
 /// How long Unlock has to be held: long enough that a brush against a touch screen does nothing.
 pub const UNLOCK_HOLD: Duration = Duration::from_millis(1200);
 
-const ALERT: Color32 = Color32::from_rgb(0xa0, 0x30, 0x30);
-
 pub fn show(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
-    egui::Panel::top("perform-bar").show(ui, |ui| bar(ui, s, st, actions));
     egui::Panel::top("perform-transport").show(ui, |ui| transport(ui, s, actions));
     egui::Panel::bottom("perform-master").show(ui, |ui| master(ui, s, actions));
     egui::CentralPanel::default().show(ui, |ui| {
@@ -35,78 +32,11 @@ pub fn show(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<
     }
 }
 
-fn bar(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
-    ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        ui.label(RichText::new(&s.rig.name).size(26.0).strong());
-        if let Some(n) = s.current_snapshot()
-            && let Some(snap) = s.snapshots().get(n)
-        {
-            ui.add_space(12.0);
-            ui.label(
-                RichText::new(format!("{}  {}", n + 1, snap.name))
-                    .size(26.0)
-                    .color(Color32::from_rgb(0x6c, 0xc9, 0xe0)),
-            );
-        }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let panic = egui::Button::new(
-                RichText::new("PANIC")
-                    .size(22.0)
-                    .strong()
-                    .color(Color32::WHITE),
-            )
-            .fill(ALERT)
-            .min_size(egui::vec2(130.0, 48.0));
-            let panic = ui.add(panic);
-            crate::map_mode::target(ui, s, &panic, ControlAction::Panic, None, actions);
-            if panic.clicked() && !s.map_mode {
-                actions.push(Action::Panic);
-            }
-            let capture = ui
-                .add_enabled(
-                    s.capture_minutes() > 0,
-                    egui::Button::new(RichText::new("CAPTURE").size(18.0))
-                        .min_size(egui::vec2(110.0, 48.0)),
-                )
-                .on_hover_text("Save the last minutes of what you played as a MIDI file");
-            crate::map_mode::target(ui, s, &capture, ControlAction::CaptureMidi, None, actions);
-            if capture.clicked() && !s.map_mode {
-                actions.push(Action::CaptureMidi);
-            }
-            lock_button(ui, st, actions);
-            if !st.locked {
-                crate::map_mode::toggle(ui, s, actions);
-            }
-            if ui
-                .add(
-                    egui::Button::new(RichText::new("Full screen").size(16.0))
-                        .min_size(egui::vec2(110.0, 48.0)),
-                )
-                .clicked()
-            {
-                actions.push(Action::ToggleFullscreen);
-            }
-            let exit = egui::Button::new(RichText::new("Leave").size(16.0))
-                .min_size(egui::vec2(80.0, 48.0));
-            if ui
-                .add_enabled(!st.locked, exit)
-                .on_disabled_hover_text("Locked: unlock first")
-                .clicked()
-            {
-                actions.push(Action::SetPerform(false));
-            }
-        });
-    });
-    ui.add_space(4.0);
-}
-
-/// Lock, or (while locked) Unlock that has to be held.
-fn lock_button(ui: &mut egui::Ui, st: &mut UiState, actions: &mut Vec<Action>) {
-    let size = egui::vec2(150.0, 48.0);
+/// Lock, or (while locked) Unlock that has to be held. It sits in the shared header.
+pub fn lock_cap(ui: &mut egui::Ui, st: &mut UiState, actions: &mut Vec<Action>) {
     if !st.locked {
-        if ui
-            .add(egui::Button::new(RichText::new("Lock").size(16.0)).min_size(size))
+        if crate::hw::Cap::new("LOCK")
+            .show(ui)
             .on_hover_text(
                 "Stops this view from being left, and ignores dropped files, until unlocked",
             )
@@ -119,18 +49,16 @@ fn lock_button(ui: &mut egui::Ui, st: &mut UiState, actions: &mut Vec<Action>) {
     let held = st.unlock_since.map_or(0.0, |t| {
         t.elapsed().as_secs_f32() / UNLOCK_HOLD.as_secs_f32()
     });
-    let r = ui.add(
-        egui::Button::new(RichText::new("LOCKED · hold to unlock").size(14.0).strong())
-            .min_size(size)
-            .fill(Color32::from_rgb(0x3a, 0x3a, 0x1e)),
-    );
+    let r = crate::hw::Cap::new("LOCKED \u{b7} HOLD TO UNLOCK")
+        .lit(Some(crate::hw::AMBER))
+        .show(ui)
+        .on_hover_text("Hold the button down for a moment to unlock");
     if held > 0.0 {
         let bar = egui::Rect::from_min_size(
-            egui::pos2(r.rect.left(), r.rect.bottom() - 5.0),
-            egui::vec2(r.rect.width() * held.min(1.0), 5.0),
+            egui::pos2(r.rect.left() + 4.0, r.rect.bottom() - 6.0),
+            egui::vec2((r.rect.width() - 8.0) * held.min(1.0), 4.0),
         );
-        ui.painter()
-            .rect_filled(bar, 0.0, Color32::from_rgb(0xe0, 0xb4, 0x4a));
+        ui.painter().rect_filled(bar, 1.0, Color32::WHITE);
     }
     if r.is_pointer_button_down_on() {
         let since = *st.unlock_since.get_or_insert_with(Instant::now);
