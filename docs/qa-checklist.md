@@ -162,6 +162,16 @@ The app always listens to your keyboards and the on-screen keys. Nothing is writ
 - [ ] MIDI map mode: click **Capture MIDI**, press a pad or a foot switch: it is mapped. A controller-role device (the Launchkey's pads) and anything mapped never appears in the file.
 - [ ] A long session: leave it running for an hour of normal playing and check memory (Settings > Performance, or `ps`): the capture should stay a few MB at most.
 
+## 5b. Browser: favourites and tags
+- [ ] Click the `+` beside a plugin: it turns into `fav`, moves to the top under *Favourites*, and **Favourites** (above the list) shows only those. Quit and reopen: still favourites.
+- [ ] Right-click a plugin: *Favourite*, then *Tag as* with a submenu per family (Keys, Brass, Woodwinds...) and the instruments inside (Piano, Trumpet, Flute...). Tick *Keys > Piano*: the menu stays open; also tick *Synth > Pad*. Click outside. The plugin shows `Keys › Piano, Synth › Pad` under its name, and the family's name is gold in the menu.
+- [ ] Under the search box, choose the family *Keys*: only plugins tagged Keys remain, and the second list (*Any instrument*) becomes usable; pick *Piano*. *Untagged* lists what you have not tagged yet. It combines with the search box and **Favourites**.
+- [ ] Typing `piano` in the search box also finds plugins you tagged Piano.
+- [ ] Automatic tags: without tagging anything, plugins the app knows (Surge XT, u-he synths, SoundFonts like MuseScore General) already show a tag in *italics* under their name (hover: "Tagged automatically"), and the family filter finds them. Plugins nobody knows stay untagged: *Untagged* lists them.
+- [ ] Right-click an automatically tagged plugin and tick another tag: the automatic ones are ticked in the menu already, and after your click the line is no longer italic (it is yours now). Rescan (Settings > Plugins) and *Use automatic tags* in the menu: your tags are not touched by the rescan, and the menu entry brings the italics back.
+- [ ] *Clear tags* on an automatically tagged plugin leaves it with none, even after a rescan or restart (it's your choice, not a gap to fill).
+- [ ] Right-click > *Clear tags* removes them. Quit and reopen: tags are still there (they are in `~/.config/merlin/settings.toml` under `[tags]`).
+
 ## 6. Stability
 - [ ] Kill a Windows plugin's Wine process while the app runs: `pgrep -af yabridge-host`, then `kill -9 <pid>` of one. The app should restart itself from the autosave and name the plugin it quarantined (it comes back with *Retry*).
 - [ ] The 2-hour rehearsal: 6–8 instruments including a Windows one, switching and playing for 2 hours. For an unattended version: `just soak 7200 3 --windows "Six Sines"`, then read the `state:` lines (xruns, held keys, RSS, threads). Expect 0 xruns, 0 held keys at the end, memory flat.

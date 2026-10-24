@@ -1,9 +1,12 @@
 //! `~/.config/merlin/settings.toml`.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+
+use crate::tags::Tag;
 
 /// What a MIDI device is for (the setting; `InputRole` is the audio side of it).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,6 +70,10 @@ pub struct Settings {
     pub autosave_secs: u64,
     /// Browser favourites, as `Session::favorite_key` makes them.
     pub favorites: Vec<String>,
+    /// What the user tagged each plugin as (family and instrument), by the same key as favourites.
+    /// A plugin with an entry here, even an empty one, is the user's to tag and the scanner's
+    /// automatic tags are not used for it; plugins without one are tagged by the scanner.
+    pub tags: BTreeMap<String, Vec<Tag>>,
     /// The two audio outputs of the interface the click goes to; the main outputs when unset.
     pub click_output: Option<[String; 2]>,
     /// Folders of Windows VST2 plugins (`.dll`) outside the Windows prefix, to bridge.
@@ -91,6 +98,7 @@ impl Default for Settings {
             runtime_url: None,
             autosave_secs: 30,
             favorites: Vec::new(),
+            tags: BTreeMap::new(),
             click_output: None,
             windows_vst2_dirs: Vec::new(),
             capture_minutes: 30,
@@ -144,5 +152,27 @@ mod tests {
         let out = d.join("sub/s.toml");
         s.save(&out).unwrap();
         assert_eq!(Settings::load(&out).unwrap(), s);
+    }
+
+    #[test]
+    fn tags_survive_the_settings_file_and_old_files_have_none() {
+        let mut s = Settings::default();
+        s.tags.insert(
+            "clap:com.example.keys".into(),
+            vec![Tag::new("Keys", Some("Piano")), Tag::new("Synth", None)],
+        );
+        // "No tags" is a choice the scanner must respect, so an empty list is kept in the file.
+        s.tags.insert("clap:com.example.none".into(), Vec::new());
+        // Settings written after the tags: the file must stay valid TOML.
+        s.frames = 64;
+        let text = toml::to_string_pretty(&s).unwrap();
+        let back: Settings = toml::from_str(&text).unwrap();
+        assert_eq!(back, s, "{text}");
+        assert!(
+            toml::from_str::<Settings>("frames = 64\n")
+                .unwrap()
+                .tags
+                .is_empty()
+        );
     }
 }

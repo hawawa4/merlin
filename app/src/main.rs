@@ -7,6 +7,7 @@
 //! `merlin [--plugin-dir DIR]... [--rig FILE] [--fresh]`
 //! Test hook: `MERLIN_SCRIPT="3:load 1 Surge XT; 5:on 60; 6:peak; 8:quit"`.
 
+mod autotag;
 mod browser;
 mod drivers;
 mod guard;
@@ -24,6 +25,7 @@ mod session;
 mod setlist_ui;
 mod settings;
 mod settings_ui;
+mod tags;
 mod ui;
 
 use std::num::NonZeroU32;
@@ -804,6 +806,24 @@ impl Running {
             Action::ToggleFavorite(k) => {
                 if let Some(f) = s.found.get(k).cloned() {
                     s.toggle_favorite(&f);
+                }
+                Ok(())
+            }
+            Action::ToggleTag(k, tag) => {
+                if let Some(f) = s.found.get(k).cloned() {
+                    s.toggle_tag(&f, tag);
+                }
+                Ok(())
+            }
+            Action::ResetTags(k) => {
+                if let Some(f) = s.found.get(k).cloned() {
+                    s.reset_tags(&f);
+                }
+                Ok(())
+            }
+            Action::ClearTags(k) => {
+                if let Some(f) = s.found.get(k).cloned() {
+                    s.clear_tags(&f);
                 }
                 Ok(())
             }

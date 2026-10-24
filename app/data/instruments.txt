@@ -1,0 +1,96 @@
+# Which plugins are which instrument. The scanner reads this to tag plugins automatically
+# (unless the user tagged that plugin by hand).
+#
+# One rule per line:   Family > Instrument ; Family > Another : pattern, pattern, vendor:pattern
+#   - Tags are named as in the taxonomy (app/src/tags.rs). `Family` alone tags only the family.
+#   - A pattern matches the plugin's name (or, with `vendor:`, its vendor or the categories it
+#     lists, where some plugins put their maker) from the start of any
+#     word, ignoring case and punctuation: `piano` matches "Pianoteq" and "Grand Piano", `b-3`
+#     matches "B-3 V". A trailing `$` also requires the word to end there: `organ$` matches
+#     "Organ" but not "Organic". Several words must follow each other.
+#   - The FIRST rule that matches wins, so put specific things above general words
+#     ("electric piano" above "piano").
+#   - Anything no rule matches falls back on the plugin's own category (CLAP/VST3 features).
+# Add lines freely; `cargo test` checks that every tag exists.
+
+# --- Keys: specific products and makers
+Keys > Organ : organteq, hauptwerk, grandorgue, jorgan, hammond, b-3, b3$, tonewheel, drawbar, farfisa, pipe organ
+Keys > Piano : pianoteq, keyscape, noire, una corda, ravenscroft, synthogy, ivory, alicia, addictive keys, salamander, steinway, bosendorfer, garritan cfx, piano one
+Keys > Electric Piano : rhodes, wurli, lounge lizard, stage 73, suitcase, electric piano, e-piano, epiano, e piano
+Keys > Clavinet : clavinet, clav$
+Keys > Harpsichord : harpsichord, cembalo, virginal
+Keys > Accordion : accordion, bandoneon, concertina, melodica
+Keys > Organ : organ$, organs$
+Keys > Piano : piano
+
+# --- Strings, guitars and plucked (before the generic "string" so "steel string" is a guitar)
+Guitars & Plucked > Acoustic Guitar : acoustic guitar, steel string, nylon, classical guitar, flamenco
+Guitars & Plucked > Electric Guitar : electric guitar, strat$, telecaster, les paul, stratocaster
+Guitars & Plucked > Bass Guitar : bass guitar, electric bass, e-bass, fretless, p-bass, j-bass, picked bass, finger bass
+Guitars & Plucked > Banjo : banjo
+Guitars & Plucked > Mandolin : mandolin
+Guitars & Plucked > Ukulele : ukulele, ukelele
+Guitars & Plucked : guitar, pluck guitar
+Strings > Violin : violin, fiddle
+Strings > Viola : viola$
+Strings > Cello : cello
+Strings > Double Bass : double bass, contrabass, upright bass, doublebass
+Strings > Harp : harp$, harps$, celtic harp
+Strings > String Ensemble : string, solina, orchestral strings, violins, cellos, quartet
+
+# --- Woodwinds
+Woodwinds > Flute : flute, pan flute, panflute
+Woodwinds > Piccolo : piccolo
+Woodwinds > Oboe : oboe, english horn
+Woodwinds > Clarinet : clarinet
+Woodwinds > Bassoon : bassoon, contrabassoon
+Woodwinds > Saxophone : saxophone, sax$, saxes$, saxo
+Woodwinds > Recorder : recorder, ocarina, fife, tin whistle, whistle$
+Woodwinds : woodwind
+
+# --- Brass
+Brass > Trumpet : trumpet, cornet, flugelhorn, flugel
+Brass > Trombone : trombone
+Brass > Brass Section : brass, horn section, horns$
+Brass > Tuba : tuba, sousaphone, euphonium
+Brass > French Horn : french horn, horn$
+
+# --- Voices
+Voices > Choir : choir, choral, vox humana, aahs, ahhs, oohs
+Voices > Solo Voice : solo voice, solo vocal, soprano, tenor$, vocaloid
+Voices : voice$, voices$, vocal
+
+# --- Percussion
+Percussion > Timpani : timpani, kettle drum
+Percussion > Tuned Percussion : marimba, vibraphone, xylophone, glockenspiel, tubular bells, celesta, mallet, steel drum, steelpan, handpan, hang drum, hang$
+Percussion > World Percussion : djembe, conga, bongo, cajon, tabla, taiko, cuica, frame drum, tambourine, udu
+Percussion > Orchestral Percussion : orchestral percussion, cymbal, gong
+Percussion > Drum Kit : drum, ezdrummer, superior drummer, addictive drums, bfd$, battery, groove agent, drumrox, drumlabooh, avl drumkits, hydrogen, sitala, geonkick, kick$, beatbox, 808, 909
+Percussion : percussion
+
+# --- World instruments
+World > Sitar : sitar, tanpura
+World > Oud : oud$, saz$, bouzouki
+World > Koto : koto, shamisen, erhu, guzheng, pipa$
+World > Kalimba : kalimba, mbira
+World > Bagpipes : bagpipe, uilleann
+World : shakuhachi, didgeridoo, duduk, ethnic, world instrument
+
+# --- Libraries and workstations that hold many instruments
+Multi-instrument > General MIDI : general midi, timgm, gs$, sgm, arachno, airfont, musescore general, fluidr3, generaluser, timbres of heaven, gm$, soundfont gm
+Multi-instrument > Orchestral Library : labs$, spitfire, vienna, vsco, sonatina, bbc symphony, orchestral tools, east west, eastwest, hollywood, cinematic, orchestra
+Multi-instrument > Workstation : falcon, korg m1, triton, motif$, montage$, kronos, workstation, rompler, jv-1080, m1$
+Multi-instrument : kontakt, sfizz, sforzando, decent sampler, sampler$, soundfont$
+
+# --- Textures and effects played as instruments
+Other > Sound Effects : sfx, sound effects, foley, risers$
+Other > Texture : ambient, texture, soundscape, atmosphere, drone$, evolving
+
+# --- Synths: the sound of the patch, then the well-known synths and makers
+Synth > Pad : pad$, pads$
+Synth > Lead : lead$, leads$
+Synth > Pluck : pluck$, plucks$
+Synth > Arpeggio : arp$, arps$, arpeggio, arpeggiator
+Synth > Bass : sub bass, synth bass, bass station, moog bass, bass synth
+Synth > Poly : polysynth, poly synth, polysix, juno, jupiter, prophet, oberheim
+Synth : synth, podolski, tyrell, zebra, hive$, repro, bazille, ob-xf, ob-xd, surge, vital$, helm$, dexed, noisemaker, zynaddsubfx, yoshimi, odin, amsynth, pigments, serum, diva$, massive, sylenth, fluctus, apricot, extrabold, six sines, cardinal, vcv, monique, minimoog, moog, wavetable, vendor:u-he, vendor:tal, vendor:arturia, vendor:native instruments, vendor:xfer, vendor:vital, vendor:surge synth team, vendor:distrho, vendor:baconpaul

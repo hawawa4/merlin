@@ -36,6 +36,7 @@ use winit::event_loop::EventLoopProxy;
 
 use crate::guard::{self, Guard, HostInfo};
 use crate::settings::Settings;
+use crate::tags::Tag;
 
 /// Slots shown in the rack.
 pub const UI_SLOTS: usize = 8;
@@ -197,6 +198,8 @@ pub struct Session {
     /// What to tell the user instead of, or beside, a slot's editor (see `quirks`).
     pub notes: Vec<Option<String>>,
     pub found: Vec<Found>,
+    /// What the scanner tags each of `found` as (by `favorite_key`); the user's own tags win.
+    auto_tags: std::collections::HashMap<String, Vec<Tag>>,
     /// Effect plugins, for the inserts.
     pub effects: Vec<Found>,
     /// Every plugin file the scanner knows, including the ones that failed to load.
@@ -316,6 +319,7 @@ impl Session {
             view_id: None,
             notes: vec![None; UI_SLOTS],
             found: Vec::new(),
+            auto_tags: Default::default(),
             effects: Vec::new(),
             entries: Vec::new(),
             plugin_dirs: Vec::new(),
@@ -751,6 +755,34 @@ impl Session {
         self.save_settings();
     }
 
+    /// The tags of this plugin: the user's if they ever set any (even none), else the scanner's.
+    pub fn tags_of(&self, f: &Found) -> crate::tags::Tags<'_> {
+        let key = Self::favorite_key(f);
+        crate::tags::effective(self.settings.tags.get(&key), self.auto_tags.get(&key))
+    }
+
+    /// Ticks or unticks a tag. The first edit of an automatically tagged plugin starts from its
+    /// automatic tags and from then on the list is the user's.
+    pub fn toggle_tag(&mut self, f: &Found, tag: Tag) {
+        let mut list = self.tags_of(f).list.to_vec();
+        crate::tags::toggle(&mut list, tag);
+        self.settings.tags.insert(Self::favorite_key(f), list);
+        self.save_settings();
+    }
+
+    /// "No tags", and the scanner leaves it so.
+    pub fn clear_tags(&mut self, f: &Found) {
+        self.settings.tags.insert(Self::favorite_key(f), Vec::new());
+        self.save_settings();
+    }
+
+    /// Gives the plugin back to the scanner.
+    pub fn reset_tags(&mut self, f: &Found) {
+        if self.settings.tags.remove(&Self::favorite_key(f)).is_some() {
+            self.save_settings();
+        }
+    }
+
     /// Loads browser entry `k` into the slot being viewed if that is empty, else the first
     /// empty slot.
     pub fn load_into_free_slot(&mut self, k: usize) -> Result<()> {
@@ -922,6 +954,13 @@ impl Session {
 
     fn refresh_found(&mut self) {
         self.found = merlin_scanner::with_feature(&self.entries, "instrument");
+        let db = crate::autotag::Database::builtin();
+        self.auto_tags = self
+            .found
+            .iter()
+            .map(|f| (Self::favorite_key(f), db.tags_for(&f.info)))
+            .filter(|(_, tags)| !tags.is_empty())
+            .collect();
         self.effects = merlin_scanner::with_feature(&self.entries, "audio-effect");
     }
 

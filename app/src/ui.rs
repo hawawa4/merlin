@@ -148,6 +148,11 @@ pub enum Action {
     /// Download and install the Wine + yabridge runtime, then restart.
     InstallRuntime,
     ToggleFavorite(usize),
+    /// Add the tag to browser entry `k`, or take it off if it has it.
+    ToggleTag(usize, crate::tags::Tag),
+    ClearTags(usize),
+    /// Back to the scanner's automatic tags.
+    ResetTags(usize),
     /// Load browser entry `k` into a free slot.
     BrowserLoad(usize),
     /// A browser entry was dropped onto slot `i`.
@@ -257,6 +262,8 @@ pub struct UiState {
     pub param_insert: Option<usize>,
     pub param_query: String,
     pub favs_only: bool,
+    /// The browser shows only plugins with this tag (or none yet).
+    pub tag_filter: crate::tags::Filter,
     pub dir_text: String,
     pub sound_dir_text: String,
     pub vst2_dir_text: String,
@@ -304,6 +311,7 @@ impl UiState {
             preset_query: String::new(),
             macro_query: String::new(),
             favs_only: false,
+            tag_filter: Default::default(),
             dir_text: String::new(),
             sound_dir_text: String::new(),
             vst2_dir_text: String::new(),
