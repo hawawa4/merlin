@@ -14,10 +14,12 @@ Tick as you go; anything odd, send me what you saw (and the exact text of any er
 - [ ] Layer 3–4 slots (click one, shift-click others) and play. Each row shows a small `N.N%` next to its meter; Windows plugins add `wine N%`. Hover it for the explanation. Does anything go orange or red while you play normally?
 - [ ] Effects tab → *Load effect…* → "Surge XT Effects" as an insert. Untick **on** to bypass it: the sound should change back at once. Open it with **Edit**.
 - [ ] Save the rig, press **New**, reopen it. The insert, its settings and its bypass state come back.
+- [ ] Effects tab: EQ, compressor, delay and reverb are pedals with knobs, an LED and a footswitch. Click the footswitch: the LED lights and the effect is on. Turn knobs (drag, Shift for fine, wheel, double-click resets): the number under the knob follows and the sound changes. The compressor's lamps show gain reduction while you play.
+- [ ] **MIDI MAP** (Ctrl+M) on the Effects tab: every knob and footswitch is tinted. Click a knob, move a knob on your controller: the tint turns green with the control's name (`CC 74`), and the on-screen knob then follows the controller. Same on the SoundFont rack unit. *Pick up* (Settings > Controls) still stops jumps after a scene change.
 
 ## 2. SoundFonts
 - [ ] Load MuseScore General and a system SF2. Pick presets from the list, use the search box, move **level**.
-- [ ] Expand **Shape the sound**: attack, release, brightness, resonance, tuning, voices. Each should be audible; **Reset** undoes them. Save and reopen: values stay.
+- [ ] The **Shape the sound** rack unit above the preset list has a knob each for level, attack, release, brightness, resonance, tuning and voices. Drag a knob up and down (hold Shift for fine steps), use the scroll wheel over it, double-click to put it back. Each should be audible; **RESET** undoes all but level. Save and reopen: values stay.
 - [ ] Pick a drum kit (bank 128, e.g. "Standard") and play across the keyboard.
 - [ ] Settings → Plugins → *Sound folders*: add a folder with a `.sf2`; it appears in the browser.
 - [ ] Drag a `.sf2` from your file manager onto the window **while a plugin editor is showing** (not just on the empty dock). Banner appears? File loads?

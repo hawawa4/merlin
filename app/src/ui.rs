@@ -6,7 +6,10 @@ use std::sync::atomic::Ordering;
 
 use egui::{Color32, RichText};
 
-use merlin_model::{ControlAction, Format, FxKind, FxSettings};
+use merlin_model::{
+    COMP_KNOBS, ControlAction, DELAY_KNOBS, EQ_KNOBS, FX_KNOBS, Format, FxKind, FxKnob, FxSettings,
+    REVERB_KNOBS, SOUND_KNOBS, SamplerField,
+};
 
 use crate::browser;
 use crate::hw;
@@ -82,7 +85,8 @@ pub enum Action {
     Volume(usize, f32),
     /// Pick a SoundFont slot's preset (bank, program).
     SetPreset(usize, u16, u8),
-    SamplerGain(usize, f32),
+    /// Set one of a SoundFont slot's sound-shaping fields (in the field's own units).
+    SamplerField(usize, merlin_model::SamplerField, f32),
     SamplerTone(usize, merlin_hosting::SamplerTone),
     Transpose(usize, i8),
     Fit,
@@ -456,84 +460,74 @@ pub fn draw(
     });
 }
 
-/// The sliders of a sampler's tone. Returns the new tone when one was touched.
-fn tone_controls(
-    ui: &mut egui::Ui,
-    tone: merlin_hosting::SamplerTone,
-) -> Option<merlin_hosting::SamplerTone> {
-    let mut t = tone;
-    let times = |v: f64| format!("x{:.2}", 2f64.powf(v));
-    egui::Grid::new("sampler-tone")
-        .num_columns(2)
-        .spacing([12.0, 4.0])
-        .show(ui, |ui| {
-            ui.label("Attack");
-            ui.add(
-                egui::Slider::new(&mut t.attack, -3.0..=8.0)
-                    .custom_formatter(|v, _| times(v))
-                    .custom_parser(|s| {
-                        s.trim_start_matches('x')
-                            .parse::<f64>()
-                            .ok()
-                            .map(|m| m.log2())
-                    }),
-            )
-            .on_hover_text(
-                "How slowly notes fade in, relative to the sound's own attack (x1 = as made)",
-            );
-            ui.end_row();
-            ui.label("Release");
-            ui.add(
-                egui::Slider::new(&mut t.release, -3.0..=4.0)
-                    .custom_formatter(|v, _| times(v))
-                    .custom_parser(|s| {
-                        s.trim_start_matches('x')
-                            .parse::<f64>()
-                            .ok()
-                            .map(|m| m.log2())
-                    }),
-            )
-            .on_hover_text("How long notes ring after the key comes up (x1 = as made)");
-            ui.end_row();
-            ui.label("Brightness");
-            ui.add(
-                egui::Slider::new(&mut t.cutoff, -3.0..=3.0)
-                    .suffix(" oct")
-                    .fixed_decimals(1),
-            )
-            .on_hover_text("Filter cutoff in octaves: lower is darker, higher is brighter");
-            ui.end_row();
-            ui.label("Resonance");
-            ui.add(
-                egui::Slider::new(&mut t.resonance, 0.0..=24.0)
-                    .suffix(" dB")
-                    .fixed_decimals(0),
-            )
-            .on_hover_text("Emphasis at the filter cutoff");
-            ui.end_row();
-            ui.label("Tuning");
-            ui.add(
-                egui::Slider::new(&mut t.fine_tune, -100.0..=100.0)
-                    .suffix(" cents")
-                    .fixed_decimals(0),
-            )
-            .on_hover_text(
-                "Fine tuning, 100 cents is a semitone (use the slot's tr for whole semitones)",
-            );
-            ui.end_row();
-            ui.label("Voices");
-            let mut voices = t.polyphony as u32;
-            ui.add(egui::Slider::new(&mut voices, 4..=128))
-                .on_hover_text(
-                    "How many notes can sound at once; the oldest are cut when it is exceeded",
-                );
-            t.polyphony = voices as u16;
-            ui.end_row();
-        });
-    if ui.small_button("Reset").clicked() {
-        t = merlin_hosting::SamplerTone::default();
+/// How a sound-shaping field's value reads under its knob.
+fn sound_readout(field: SamplerField, v: f32) -> String {
+    match field {
+        SamplerField::Level => format!("{v:.2}"),
+        SamplerField::Attack | SamplerField::Release => format!("x{:.2}", 2f32.powf(v)),
+        SamplerField::Brightness => format!("{v:+.1} oct"),
+        SamplerField::Resonance => format!("{v:.0} dB"),
+        SamplerField::Tuning => format!("{v:+.0} ct"),
+        SamplerField::Voices => format!("{v:.0}"),
     }
-    (t != tone).then_some(t)
+}
+
+/// A SoundFont slot's "Shape the sound" rack unit: one knob per field, each mappable to MIDI.
+fn sound_rack(ui: &mut egui::Ui, s: &Session, i: usize, actions: &mut Vec<Action>) {
+    let rest = merlin_hosting::SamplerTone::default();
+    hw::rack(ui, "Shape the sound", &format!("slot {}", i + 1), |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            for (n, field) in SamplerField::ALL.into_iter().enumerate() {
+                let (lo, hi) = field.range();
+                let at = |v: f32| ((v - lo) / (hi - lo)).clamp(0.0, 1.0);
+                let default = match field {
+                    SamplerField::Level => 1.0,
+                    SamplerField::Attack => rest.attack,
+                    SamplerField::Release => rest.release,
+                    SamplerField::Brightness => rest.cutoff,
+                    SamplerField::Resonance => rest.resonance,
+                    SamplerField::Tuning => rest.fine_tune,
+                    SamplerField::Voices => f32::from(rest.polyphony),
+                };
+                let mut position = at(s.sampler_field(i, field).unwrap_or(default));
+                // Fields that go both ways around their resting point light up from there.
+                let origin = if lo < 0.0 { at(0.0) } else { 0.0 };
+                let r = hw::knob(
+                    ui,
+                    &mut position,
+                    field.name(),
+                    &|p| sound_readout(field, lo + (hi - lo) * p),
+                    at(default),
+                    origin,
+                    COLORS[i],
+                );
+                if r.changed() {
+                    actions.push(Action::SamplerField(i, field, lo + (hi - lo) * position));
+                }
+                crate::map_mode::target(
+                    ui,
+                    s,
+                    &r,
+                    ControlAction::SlotParam {
+                        slot: i as u8,
+                        insert: SOUND_KNOBS,
+                        id: n as u32,
+                    },
+                    Some(field.name()),
+                    actions,
+                );
+            }
+            ui.add_space(8.0);
+            if hw::Cap::new("RESET")
+                .show(ui)
+                .on_hover_text("Put the attack, release, brightness, resonance, tuning and voices back as the SoundFont made them")
+                .clicked()
+            {
+                actions.push(Action::SamplerTone(i, rest));
+            }
+        });
+    });
 }
 
 /// A SoundFont slot's panel: the preset list (bank and program), a search box, the level.
@@ -550,17 +544,6 @@ fn sampler_panel(
     ui.horizontal(|ui| {
         ui.label("Search");
         ui.add(egui::TextEdit::singleline(&mut st.preset_query).desired_width(220.0));
-        if let Some(mut gain) = s.sampler_gain(i) {
-            ui.add_space(12.0);
-            ui.label("level");
-            if ui
-                .add(egui::Slider::new(&mut gain, 0.0..=2.0).fixed_decimals(2))
-                .on_hover_text("Output level of this SoundFont (1.00 = the file's own level)")
-                .changed()
-            {
-                actions.push(Action::SamplerGain(i, gain));
-            }
-        }
         let now = presets
             .iter()
             .find(|p| (p.bank, p.program) == current)
@@ -568,16 +551,8 @@ fn sampler_panel(
         ui.add_space(12.0);
         ui.colored_label(COLORS[i], format!("now: {now}"));
     });
-    if let Some(tone) = s.sampler_tone(i) {
-        egui::CollapsingHeader::new("Shape the sound")
-            .default_open(false)
-            .show(ui, |ui| {
-                if let Some(new) = tone_controls(ui, tone)
-                    && new != tone
-                {
-                    actions.push(Action::SamplerTone(i, new));
-                }
-            });
+    if s.sampler_tone(i).is_some() {
+        sound_rack(ui, s, i, actions);
     }
     ui.separator();
     let query = st.preset_query.trim().to_lowercase();
@@ -1202,61 +1177,61 @@ fn dock_bar(ui: &mut egui::Ui, s: &Session, st: &UiState, actions: &mut Vec<Acti
     });
 }
 
-fn knob(
+/// The knobs of one built-in effect, drawn from the shared table. In map mode each is something a
+/// MIDI control can be mapped to.
+fn fx_knobs(
     ui: &mut egui::Ui,
-    value: &mut f32,
-    range: std::ops::RangeInclusive<f32>,
-    name: &str,
-    unit: &str,
-    log: bool,
-    decimals: usize,
+    s: &Session,
+    slot: usize,
+    fx: &mut FxSettings,
+    knobs: &[FxKnob],
+    accent: Color32,
+    actions: &mut Vec<Action>,
 ) {
-    ui.add(
-        egui::Slider::new(value, range)
-            .logarithmic(log)
-            .fixed_decimals(decimals)
-            .suffix(unit)
-            .text(name),
-    );
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+        for k in knobs {
+            let (Some(now), Some(rest)) =
+                (fx.knob_value(k.id), FxSettings::default().knob_value(k.id))
+            else {
+                continue;
+            };
+            let mut position = k.position(now);
+            // Knobs that go both ways light up from the middle.
+            let origin = if k.min < 0.0 && k.max > 0.0 {
+                k.position(0.0)
+            } else {
+                0.0
+            };
+            let r = hw::knob(
+                ui,
+                &mut position,
+                k.name,
+                &|p| k.show(k.value(p)),
+                k.position(rest),
+                origin,
+                accent,
+            );
+            if r.changed() {
+                fx.set_knob_position(k.id, position);
+            }
+            crate::map_mode::target(
+                ui,
+                s,
+                &r,
+                ControlAction::SlotParam {
+                    slot: slot as u8,
+                    insert: FX_KNOBS,
+                    id: k.id,
+                },
+                Some(&format!("{} {}", k.group, k.name)),
+                actions,
+            );
+        }
+    });
 }
 
-/// One effect "pedal": a framed section with an enable toggle.
-fn pedal(
-    ui: &mut egui::Ui,
-    title: &str,
-    color: Color32,
-    enabled: &mut bool,
-    body: impl FnOnce(&mut egui::Ui),
-) -> egui::Response {
-    egui::Frame::new()
-        .fill(color.gamma_multiply(if *enabled { 0.22 } else { 0.08 }))
-        .stroke(egui::Stroke::new(
-            1.0,
-            color.gamma_multiply(if *enabled { 1.0 } else { 0.4 }),
-        ))
-        .inner_margin(egui::Margin::same(8))
-        .corner_radius(4)
-        .show(ui, |ui| {
-            // Children of a wrapped row would inherit its horizontal layout.
-            ui.vertical(|ui| {
-                ui.set_width(285.0);
-                ui.spacing_mut().slider_width = 100.0;
-                let toggle = ui
-                    .horizontal(|ui| {
-                        let c = ui.checkbox(enabled, "");
-                        ui.label(RichText::new(title).strong().color(color));
-                        c
-                    })
-                    .inner;
-                ui.add_enabled_ui(*enabled, body);
-                toggle
-            })
-            .inner
-        })
-        .inner
-}
-
-/// The slot's built-in effects: EQ, compressor, delay, reverb, in signal order.
+/// The slot's built-in effects as four pedals, in signal order: EQ, compressor, delay, reverb.
 fn fx_panel(ui: &mut egui::Ui, s: &Session, i: usize, actions: &mut Vec<Action>) {
     inserts_section(ui, s, i, actions);
     let before = s.rig.slots[i].fx;
@@ -1265,218 +1240,86 @@ fn fx_panel(ui: &mut egui::Ui, s: &Session, i: usize, actions: &mut Vec<Action>)
     ui.add_space(6.0);
     egui::ScrollArea::vertical().show(ui, |ui| {
         ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(10.0, 10.0);
-            let toggle = pedal(
-                ui,
-                "EQ",
-                Color32::from_rgb(0x5a, 0xa9, 0xe0),
-                &mut fx.eq.enabled,
-                |ui| {
-                    knob(ui, &mut fx.eq.low_db, -18.0..=18.0, "low", " dB", false, 1);
-                    knob(
-                        ui,
-                        &mut fx.eq.low_hz,
-                        20.0..=800.0,
-                        "low freq",
-                        " Hz",
-                        true,
-                        0,
-                    );
-                    knob(ui, &mut fx.eq.mid_db, -18.0..=18.0, "mid", " dB", false, 1);
-                    knob(
-                        ui,
-                        &mut fx.eq.mid_hz,
-                        100.0..=10000.0,
-                        "mid freq",
-                        " Hz",
-                        true,
-                        0,
-                    );
-                    knob(ui, &mut fx.eq.mid_q, 0.2..=8.0, "mid Q", "", true, 2);
-                    knob(
-                        ui,
-                        &mut fx.eq.high_db,
-                        -18.0..=18.0,
-                        "high",
-                        " dB",
-                        false,
-                        1,
-                    );
-                    knob(
-                        ui,
-                        &mut fx.eq.high_hz,
-                        1500.0..=16000.0,
-                        "high freq",
-                        " Hz",
-                        true,
-                        0,
-                    );
-                },
-            );
-            crate::map_mode::target(
-                ui,
-                s,
-                &toggle,
-                ControlAction::ToggleFx {
-                    slot: i as u8,
-                    fx: FxKind::Eq,
-                },
-                None,
-                actions,
-            );
-            let toggle = pedal(
-                ui,
-                "COMPRESSOR",
-                Color32::from_rgb(0xe0, 0xb4, 0x4a),
-                &mut fx.comp.enabled,
-                |ui| {
-                    knob(
-                        ui,
-                        &mut fx.comp.threshold_db,
-                        -60.0..=0.0,
-                        "threshold",
-                        " dB",
-                        false,
-                        1,
-                    );
-                    knob(ui, &mut fx.comp.ratio, 1.0..=20.0, "ratio", ":1", true, 1);
-                    knob(
-                        ui,
-                        &mut fx.comp.attack_ms,
-                        0.1..=200.0,
-                        "attack",
-                        " ms",
-                        true,
-                        1,
-                    );
-                    knob(
-                        ui,
-                        &mut fx.comp.release_ms,
-                        5.0..=2000.0,
-                        "release",
-                        " ms",
-                        true,
-                        0,
-                    );
-                    knob(
-                        ui,
-                        &mut fx.comp.knee_db,
-                        0.0..=24.0,
-                        "knee",
-                        " dB",
-                        false,
-                        1,
-                    );
-                    knob(
-                        ui,
-                        &mut fx.comp.makeup_db,
-                        0.0..=24.0,
-                        "makeup",
-                        " dB",
-                        false,
-                        1,
-                    );
-                    ui.add(
-                        egui::ProgressBar::new((reduction / 24.0).clamp(0.0, 1.0))
-                            .text(format!("reduction {reduction:.1} dB")),
-                    );
-                },
-            );
-            crate::map_mode::target(
-                ui,
-                s,
-                &toggle,
-                ControlAction::ToggleFx {
-                    slot: i as u8,
-                    fx: FxKind::Comp,
-                },
-                None,
-                actions,
-            );
-            let toggle = pedal(
-                ui,
-                "DELAY",
-                Color32::from_rgb(0x6c, 0xc9, 0x6a),
-                &mut fx.delay.enabled,
-                |ui| {
-                    knob(
-                        ui,
-                        &mut fx.delay.time_ms,
-                        1.0..=1500.0,
-                        "time",
-                        " ms",
-                        true,
-                        0,
-                    );
-                    knob(
-                        ui,
-                        &mut fx.delay.feedback,
-                        0.0..=0.95,
-                        "feedback",
-                        "",
-                        false,
-                        2,
-                    );
-                    knob(ui, &mut fx.delay.mix, 0.0..=1.0, "mix", "", false, 2);
-                    knob(
-                        ui,
-                        &mut fx.delay.damping_hz,
-                        500.0..=18000.0,
-                        "damping",
-                        " Hz",
-                        true,
-                        0,
-                    );
-                    ui.checkbox(&mut fx.delay.ping_pong, "ping-pong");
-                },
-            );
-            crate::map_mode::target(
-                ui,
-                s,
-                &toggle,
-                ControlAction::ToggleFx {
-                    slot: i as u8,
-                    fx: FxKind::Delay,
-                },
-                None,
-                actions,
-            );
-            let toggle = pedal(
-                ui,
-                "REVERB",
-                Color32::from_rgb(0xb0, 0x7a, 0xe0),
-                &mut fx.reverb.enabled,
-                |ui| {
-                    knob(ui, &mut fx.reverb.room, 0.0..=1.0, "room", "", false, 2);
-                    knob(
-                        ui,
-                        &mut fx.reverb.damping,
-                        0.0..=1.0,
-                        "damping",
-                        "",
-                        false,
-                        2,
-                    );
-                    knob(ui, &mut fx.reverb.width, 0.0..=1.0, "width", "", false, 2);
-                    knob(ui, &mut fx.reverb.mix, 0.0..=1.0, "mix", "", false, 2);
-                },
-            );
-            crate::map_mode::target(
-                ui,
-                s,
-                &toggle,
-                ControlAction::ToggleFx {
-                    slot: i as u8,
-                    fx: FxKind::Reverb,
-                },
-                None,
-                actions,
-            );
+            ui.spacing_mut().item_spacing = egui::vec2(14.0, 14.0);
+            // Wrapping does not break between framed things, so break the rows here.
+            let per_row =
+                (((ui.available_width() + 14.0) / (hw::PEDAL_WIDTH + 14.0)) as usize).max(1);
+            let blue = Color32::from_rgb(0x5a, 0xa9, 0xe0);
+            let mut on = fx.eq.enabled;
+            let switch = hw::pedal(ui, "EQ", blue, &mut on, |ui| {
+                fx_knobs(ui, s, i, &mut fx, &EQ_KNOBS, blue, actions);
+            });
+            fx.eq.enabled = on;
+            fx_switch_target(ui, s, &switch, i, FxKind::Eq, actions);
+            if per_row == 1 {
+                ui.end_row();
+            }
+
+            let amber = hw::AMBER;
+            let mut on = fx.comp.enabled;
+            let switch = hw::pedal(ui, "COMPRESSOR", amber, &mut on, |ui| {
+                fx_knobs(ui, s, i, &mut fx, &COMP_KNOBS, amber, actions);
+                hw::meter(ui, reduction / 24.0, amber, "GAIN REDUCTION");
+            });
+            fx.comp.enabled = on;
+            fx_switch_target(ui, s, &switch, i, FxKind::Comp, actions);
+            if per_row <= 2 {
+                ui.end_row();
+            }
+
+            let green = hw::GREEN;
+            let mut on = fx.delay.enabled;
+            let switch = hw::pedal(ui, "DELAY", green, &mut on, |ui| {
+                fx_knobs(ui, s, i, &mut fx, &DELAY_KNOBS, green, actions);
+                let ping_pong = fx.delay.ping_pong;
+                if hw::Cap::new("PING-PONG")
+                    .lit(ping_pong.then_some(green))
+                    .show(ui)
+                    .clicked()
+                {
+                    fx.delay.ping_pong = !ping_pong;
+                }
+            });
+            fx.delay.enabled = on;
+            fx_switch_target(ui, s, &switch, i, FxKind::Delay, actions);
+            if per_row <= 3 {
+                ui.end_row();
+            }
+
+            let purple = Color32::from_rgb(0xb0, 0x7a, 0xe0);
+            let mut on = fx.reverb.enabled;
+            let switch = hw::pedal(ui, "REVERB", purple, &mut on, |ui| {
+                fx_knobs(ui, s, i, &mut fx, &REVERB_KNOBS, purple, actions);
+            });
+            fx.reverb.enabled = on;
+            fx_switch_target(ui, s, &switch, i, FxKind::Reverb, actions);
         });
     });
     if fx != before {
         actions.push(Action::SetFx(i, fx));
     }
+}
+
+/// Marks a pedal's footswitch as something a MIDI control can be mapped to.
+fn fx_switch_target(
+    ui: &mut egui::Ui,
+    s: &Session,
+    switch: &egui::Response,
+    slot: usize,
+    fx: FxKind,
+    actions: &mut Vec<Action>,
+) {
+    crate::map_mode::target(
+        ui,
+        s,
+        switch,
+        ControlAction::ToggleFx {
+            slot: slot as u8,
+            fx,
+        },
+        None,
+        actions,
+    );
 }
 
 /// The slot's insert chain: effect plugins between the instrument and the built-in effects.

@@ -156,19 +156,7 @@ impl Session {
                 let Some((field, v)) = target.sampler_value(value) else {
                     return;
                 };
-                if field == SamplerField::Level {
-                    self.set_sampler_gain(slot, v);
-                } else if let Some(mut tone) = self.sampler_tone(slot) {
-                    match field {
-                        SamplerField::Attack => tone.attack = v,
-                        SamplerField::Release => tone.release = v,
-                        SamplerField::Brightness => tone.cutoff = v,
-                        SamplerField::Resonance => tone.resonance = v,
-                        SamplerField::Tuning => tone.fine_tune = v,
-                        SamplerField::Level => {}
-                    }
-                    self.set_sampler_tone(slot, tone);
-                }
+                self.set_sampler_field(slot, field, v);
             }
         }
     }
@@ -208,16 +196,51 @@ impl Session {
         self.add_macro_target(slot, k, target, at);
     }
 
-    pub fn add_macro_sampler(&mut self, slot: usize, k: usize, field: SamplerField) {
-        let tone = self.sampler_tone(slot).unwrap_or_default();
-        let now = match field {
-            SamplerField::Level => self.sampler_gain(slot).unwrap_or(1.0),
+    /// Where a SoundFont slot's sound-shaping field sits, in the field's own units.
+    pub fn sampler_field(&self, slot: usize, field: SamplerField) -> Option<f32> {
+        if slot >= UI_SLOTS {
+            return None;
+        }
+        if field == SamplerField::Level {
+            return self.sampler_gain(slot);
+        }
+        let tone = self.sampler_tone(slot)?;
+        Some(match field {
             SamplerField::Attack => tone.attack,
             SamplerField::Release => tone.release,
             SamplerField::Brightness => tone.cutoff,
             SamplerField::Resonance => tone.resonance,
             SamplerField::Tuning => tone.fine_tune,
-        };
+            SamplerField::Voices => f32::from(tone.polyphony),
+            SamplerField::Level => return None,
+        })
+    }
+
+    /// Sets a SoundFont slot's sound-shaping field, in the field's own units (clamped to its range).
+    pub fn set_sampler_field(&mut self, slot: usize, field: SamplerField, v: f32) {
+        if slot >= UI_SLOTS {
+            return;
+        }
+        let (lo, hi) = field.range();
+        let v = if v.is_finite() { v.clamp(lo, hi) } else { lo };
+        if field == SamplerField::Level {
+            self.set_sampler_gain(slot, v);
+        } else if let Some(mut tone) = self.sampler_tone(slot) {
+            match field {
+                SamplerField::Attack => tone.attack = v,
+                SamplerField::Release => tone.release = v,
+                SamplerField::Brightness => tone.cutoff = v,
+                SamplerField::Resonance => tone.resonance = v,
+                SamplerField::Tuning => tone.fine_tune = v,
+                SamplerField::Voices => tone.polyphony = v.round() as u16,
+                SamplerField::Level => {}
+            }
+            self.set_sampler_tone(slot, tone);
+        }
+    }
+
+    pub fn add_macro_sampler(&mut self, slot: usize, k: usize, field: SamplerField) {
+        let now = self.sampler_field(slot, field).unwrap_or(0.0);
         let (lo, hi) = field.range();
         let at = (now - lo) / (hi - lo);
         self.add_macro_target(

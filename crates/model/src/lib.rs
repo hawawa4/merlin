@@ -20,12 +20,15 @@ mod setlist;
 mod snapshot;
 mod transport;
 
-pub use fx::{CompSettings, DelaySettings, EqSettings, FxSettings, ReverbSettings};
+pub use fx::{
+    COMP_KNOBS, CompSettings, DELAY_KNOBS, DelaySettings, EQ_KNOBS, EqSettings, FxKnob, FxSettings,
+    REVERB_KNOBS, ReverbSettings, fx_knob,
+};
 pub use knobs::{BRIGHTNESS_OCTAVES, DefaultKnob};
 pub use macros::{MACROS_PER_SLOT, MAX_MACRO_TARGETS, Macro, MacroTarget, SamplerField};
 pub use mapping::{
-    ControlAction, Curve, FxKind, Glue, INSTRUMENT, Mapping, Relative, Source, SourceKind, Switch,
-    Takeover,
+    ControlAction, Curve, FX_KNOBS, FxKind, Glue, INSTRUMENT, Mapping, Relative, SOUND_KNOBS,
+    Source, SourceKind, Switch, Takeover,
 };
 pub use migrate::{Migration, migrate};
 pub use setlist::{

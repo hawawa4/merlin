@@ -20,16 +20,19 @@ pub enum SamplerField {
     Brightness,
     Resonance,
     Tuning,
+    /// How many notes can sound at once (a whole number).
+    Voices,
 }
 
 impl SamplerField {
-    pub const ALL: [SamplerField; 6] = [
+    pub const ALL: [SamplerField; 7] = [
         Self::Level,
         Self::Attack,
         Self::Release,
         Self::Brightness,
         Self::Resonance,
         Self::Tuning,
+        Self::Voices,
     ];
 
     pub fn name(self) -> &'static str {
@@ -40,6 +43,7 @@ impl SamplerField {
             Self::Brightness => "Brightness",
             Self::Resonance => "Resonance",
             Self::Tuning => "Tuning",
+            Self::Voices => "Voices",
         }
     }
 
@@ -52,6 +56,7 @@ impl SamplerField {
             Self::Brightness => (-3.0, 3.0),
             Self::Resonance => (0.0, 24.0),
             Self::Tuning => (-100.0, 100.0),
+            Self::Voices => (4.0, 128.0),
         }
     }
 }

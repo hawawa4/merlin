@@ -401,8 +401,8 @@ impl Running {
                 s.set_sampler_tone(i, tone);
                 Ok(())
             }
-            Action::SamplerGain(i, g) => {
-                s.set_sampler_gain(i, g);
+            Action::SamplerField(i, field, v) => {
+                s.set_sampler_field(i, field, v);
                 Ok(())
             }
             Action::SetView(view) => {
@@ -1044,7 +1044,7 @@ impl Running {
                 s.say(format!(
                     "state: rig '{}'{}, xruns {xruns}, DSP {dsp:.1}%, held keys {held}, \
                      RSS {rss_mb} MB, threads {threads}, midi {midi}, master {:.2}, vol1 {:.2}, targets {:?}, dock shows {:?}, \
-                     popup {}, slots {}, perform {}, locked {}, macro1 {:.2}, gain1 {:.2}, position {:?}, tempo {:.0}, transport {} bar {} beat {} beats {}, run {:.1}s, underruns {}, stems {}, cue {:?}, pan1 {:.2}, fx1 {}, bypass1 {}, click {} level {:.2}, mapmode {}, mappings {}, params {:?}",
+                     popup {}, slots {}, perform {}, locked {}, macro1 {:.2}, gain1 {:.2}, position {:?}, tempo {:.0}, transport {} bar {} beat {} beats {}, run {:.1}s, underruns {}, stems {}, cue {:?}, pan1 {:.2}, fx1 {}, bypass1 {}, click {} level {:.2}, mapmode {}, mappings {}, params {:?}, reverbmix1 {:.2}, bright1 {:.2}",
                     s.rig.name,
                     if s.dirty { " (modified)" } else { "" },
                     s.rig.master_volume,
@@ -1087,7 +1087,10 @@ impl Running {
                     s.rig.transport.click_volume,
                     s.map_mode,
                     s.mappings().len(),
-                    s.param_report()
+                    s.param_report(),
+                    s.rig.slots[0].fx.reverb.mix,
+                    s.sampler_field(0, merlin_model::SamplerField::Brightness)
+                        .unwrap_or(-9.0)
                 ));
                 Ok(())
             }
@@ -1661,6 +1664,37 @@ fn parse_control_action(
         },
         "clicklevel" => A::ClickLevel,
         "tempo" => A::Tempo,
+        // fxknob <slot> <eq|compressor|delay|reverb> <knob name, spaces as _>
+        "fxknob" => {
+            let slot = num(words.next())?;
+            let (group, name) = (words.next()?, words.next()?);
+            let knob = merlin_model::EQ_KNOBS
+                .iter()
+                .chain(&merlin_model::COMP_KNOBS)
+                .chain(&merlin_model::DELAY_KNOBS)
+                .chain(&merlin_model::REVERB_KNOBS)
+                .find(|k| {
+                    k.group.eq_ignore_ascii_case(group) && k.name.replace(' ', "_") == name
+                })?;
+            A::SlotParam {
+                slot,
+                insert: merlin_model::FX_KNOBS,
+                id: knob.id,
+            }
+        }
+        // soundknob <slot> <level|attack|release|brightness|resonance|tuning|voices>
+        "soundknob" => {
+            let slot = num(words.next())?;
+            let field = words.next()?;
+            let id = merlin_model::SamplerField::ALL
+                .iter()
+                .position(|f| f.name().eq_ignore_ascii_case(field))?;
+            A::SlotParam {
+                slot,
+                insert: merlin_model::SOUND_KNOBS,
+                id: id as u32,
+            }
+        }
         _ => return None,
     })
 }

@@ -53,6 +53,12 @@ impl FxKind {
 
 /// `SlotParam::insert` value for the slot's instrument itself (the inserts count from 0).
 pub const INSTRUMENT: u8 = u8::MAX;
+/// `SlotParam::insert` value for a knob of the slot's built-in effects (`id` as in
+/// [`crate::fx_knob`]).
+pub const FX_KNOBS: u8 = u8::MAX - 1;
+/// `SlotParam::insert` value for a knob of a SoundFont slot's sound (`id` is the index of the
+/// [`crate::SamplerField`] in `SamplerField::ALL`).
+pub const SOUND_KNOBS: u8 = u8::MAX - 2;
 
 /// What a mapping does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -253,12 +259,22 @@ impl ControlAction {
             Self::ClickLevel => "Click level".into(),
             Self::Tempo => "Tempo".into(),
             Self::SlotParam { slot, insert, id } => {
-                let place = if insert == INSTRUMENT {
-                    String::new()
-                } else {
-                    format!(" · insert {}", insert as usize + 1)
-                };
-                format!("Parameter #{id} of slot {}{place}", slot as usize + 1)
+                let n = slot as usize + 1;
+                match insert {
+                    FX_KNOBS => match crate::fx_knob(id) {
+                        Some(k) => format!("{} {} of slot {n}", k.group, k.name),
+                        None => format!("Effect knob #{id} of slot {n}"),
+                    },
+                    SOUND_KNOBS => match crate::SamplerField::ALL.get(id as usize) {
+                        Some(f) => format!("Sound: {} of slot {n}", f.name()),
+                        None => format!("Sound knob #{id} of slot {n}"),
+                    },
+                    INSTRUMENT => format!("Parameter #{id} of slot {n}"),
+                    _ => format!(
+                        "Parameter #{id} of slot {n} · insert {}",
+                        insert as usize + 1
+                    ),
+                }
             }
         }
     }
@@ -449,7 +465,8 @@ impl Mapping {
             && match self.action {
                 ControlAction::ToggleInsertBypass { insert, .. } => (insert as usize) < MAX_INSERTS,
                 ControlAction::SlotParam { insert, .. } => {
-                    insert == INSTRUMENT || (insert as usize) < MAX_INSERTS
+                    matches!(insert, INSTRUMENT | FX_KNOBS | SOUND_KNOBS)
+                        || (insert as usize) < MAX_INSERTS
                 }
                 _ => true,
             }

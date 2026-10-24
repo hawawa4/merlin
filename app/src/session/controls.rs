@@ -12,8 +12,8 @@ use std::time::Duration;
 use merlin_audio_io::{ControlEvent, MARKER_INPUT, friendly_name};
 use merlin_control::{Context, Incoming, Message, Outcome};
 use merlin_model::{
-    ControlAction, FxKind, Glue, INSTRUMENT, MAX_TEMPO, MIN_TEMPO, Mapping, Source, SourceKind,
-    Takeover,
+    ControlAction, FX_KNOBS, FxKind, Glue, INSTRUMENT, MAX_TEMPO, MIN_TEMPO, Mapping, SOUND_KNOBS,
+    SamplerField, Source, SourceKind, Takeover,
 };
 
 use super::{MAX_SLOTS, Session, UI_SLOTS, UserEvent};
@@ -299,6 +299,22 @@ impl Session {
 
     /// Where a mapped parameter sits (0..=1 of its range): what was last set, else its default.
     fn param_position(&mut self, key: merlin_control::ParamKey) -> Option<f32> {
+        // Knobs of the built-in effects and the SoundFont sound are read from where they are, so
+        // a change made on screen and a change made by the controller are the same thing.
+        let slot = key.0 as usize;
+        match key.1 {
+            FX_KNOBS => {
+                let fx = self.rig.slots.get(slot)?.fx;
+                let knob = merlin_model::fx_knob(key.2)?;
+                return Some(knob.position(fx.knob_value(key.2)?));
+            }
+            SOUND_KNOBS => {
+                let field = *SamplerField::ALL.get(key.2 as usize)?;
+                let (lo, hi) = field.range();
+                return Some(((self.sampler_field(slot, field)? - lo) / (hi - lo)).clamp(0.0, 1.0));
+            }
+            _ => {}
+        }
         if let Some(&v) = self.param_values.get(&key) {
             return Some(v);
         }
@@ -314,6 +330,29 @@ impl Session {
 
     /// Puts a mapped parameter at `v` (0..=1 of its range).
     pub fn set_param_position(&mut self, key: merlin_control::ParamKey, v: f32) {
+        let slot = key.0 as usize;
+        let v = if v.is_finite() {
+            v.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        match key.1 {
+            FX_KNOBS if slot < UI_SLOTS => {
+                let mut fx = self.rig.slots[slot].fx;
+                if fx.set_knob_position(key.2, v) {
+                    self.set_fx(slot, fx);
+                }
+                return;
+            }
+            SOUND_KNOBS => {
+                if let Some(&field) = SamplerField::ALL.get(key.2 as usize) {
+                    let (lo, hi) = field.range();
+                    self.set_sampler_field(slot, field, lo + (hi - lo) * v);
+                }
+                return;
+            }
+            _ => {}
+        }
         let Some((slot, insert)) = self.param_target(key) else {
             return;
         };

@@ -3,7 +3,8 @@
 //! as a piece of gear rather than a form.
 
 use egui::{
-    Align2, Color32, CornerRadius, FontId, Margin, Rect, Response, Sense, Stroke, Ui, vec2,
+    Align2, Color32, CornerRadius, FontId, Margin, Painter, Pos2, Rect, Response, Sense, Shape,
+    Stroke, Ui, Vec2, pos2, vec2,
 };
 
 pub const CHASSIS: Color32 = Color32::from_rgb(0x1c, 0x1d, 0x20);
@@ -220,4 +221,280 @@ pub fn engraved(ui: &mut Ui, text: &str) -> Response {
 pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
     let l = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
     Color32::from_rgb(l(a.r(), b.r()), l(a.g(), b.g()), l(a.b(), b.b()))
+}
+
+/// A small indicator light.
+pub fn led(ui: &mut Ui, on: bool, colour: Color32) -> Response {
+    let (rect, r) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
+    let (c, radius) = (rect.center(), 4.0);
+    let p = ui.painter();
+    p.circle_filled(c, radius + 1.5, BEVEL_LO);
+    if on {
+        p.circle_filled(c, radius + 3.5, colour.gamma_multiply(0.18));
+        p.circle_filled(c, radius, colour);
+        p.circle_filled(c - vec2(1.2, 1.2), 1.4, mix(colour, Color32::WHITE, 0.7));
+    } else {
+        p.circle_filled(c, radius, colour.gamma_multiply(0.22));
+    }
+    r
+}
+
+/// A screw head, for the corners of panels.
+pub fn screw(p: &Painter, at: Pos2) {
+    p.circle_filled(at + vec2(0.0, 1.0), 4.0, BEVEL_LO);
+    p.circle_filled(at, 3.8, Color32::from_rgb(0x8a, 0x8d, 0x94));
+    p.circle_filled(
+        at - vec2(0.8, 0.8),
+        2.6,
+        Color32::from_rgb(0xa8, 0xab, 0xb2),
+    );
+    // The slot, turned a little differently on each screw.
+    let a = (at.x * 7.0 + at.y * 3.0).sin() * 1.2;
+    let d = vec2(a.cos(), a.sin()) * 2.8;
+    p.line_segment(
+        [at - d, at + d],
+        Stroke::new(1.3, Color32::from_rgb(0x3a, 0x3c, 0x42)),
+    );
+}
+
+/// 225 degrees (bottom left) to 45 degrees (bottom right) the long way round, in screen angles.
+const KNOB_START: f32 = std::f32::consts::PI * 0.75;
+const KNOB_SWEEP: f32 = std::f32::consts::PI * 1.5;
+
+fn arc(p: &Painter, c: Pos2, radius: f32, from: f32, to: f32, stroke: Stroke) {
+    let steps = (((to - from).abs() / 0.12).ceil() as usize).max(1);
+    let points: Vec<Pos2> = (0..=steps)
+        .map(|n| {
+            let a = from + (to - from) * n as f32 / steps as f32;
+            c + vec2(a.cos(), a.sin()) * radius
+        })
+        .collect();
+    p.add(Shape::line(points, stroke));
+}
+
+/// A rotary knob. `position` is where it points, 0..=1; the caller turns that into a value.
+/// Drag it up and down (Shift for fine), use the scroll wheel, double-click to go back to
+/// `default`. `origin` is where the lit ring starts: 0 for most knobs, the middle for ones that
+/// go both ways. `readout` writes the value under the knob.
+pub fn knob(
+    ui: &mut Ui,
+    position: &mut f32,
+    label: &str,
+    readout: &dyn Fn(f32) -> String,
+    default: f32,
+    origin: f32,
+    accent: Color32,
+) -> Response {
+    let (rect, mut r) = ui.allocate_exact_size(vec2(64.0, 78.0), Sense::click_and_drag());
+    let before = *position;
+    if r.dragged() {
+        let fine = ui.input(|i| i.modifiers.shift);
+        *position -= r.drag_delta().y * if fine { 0.0007 } else { 0.007 };
+    }
+    if r.hovered() {
+        let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+        if scroll != 0.0 {
+            *position += scroll * 0.002;
+            ui.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
+        }
+    }
+    if r.double_clicked() {
+        *position = default;
+    }
+    *position = position.clamp(0.0, 1.0);
+    if *position != before {
+        r.mark_changed();
+    }
+    if !ui.is_rect_visible(rect) {
+        return r;
+    }
+    let enabled = ui.is_enabled();
+    let accent = if enabled { accent } else { TEXT_DIM };
+    let c = pos2(rect.center().x, rect.top() + 26.0);
+    let p = ui.painter();
+    let angle = |q: f32| KNOB_START + KNOB_SWEEP * q;
+    // The ring: its track, and lit from the origin to where the knob points.
+    arc(p, c, 22.0, angle(0.0), angle(1.0), Stroke::new(3.0, WELL));
+    let (lo, hi) = (origin.min(*position), origin.max(*position));
+    if hi - lo > 0.002 {
+        arc(p, c, 22.0, angle(lo), angle(hi), Stroke::new(3.0, accent));
+    }
+    // The knob itself: shadow, bezel, cap, and a highlight where the light falls.
+    p.circle_filled(c + vec2(0.0, 2.5), 19.5, BEVEL_LO);
+    p.circle_filled(c, 19.0, Color32::from_rgb(0x55, 0x58, 0x60));
+    p.circle_filled(c, 17.2, Color32::from_rgb(0x2b, 0x2d, 0x32));
+    p.circle_filled(c - vec2(1.5, 2.5), 12.0, Color32::from_white_alpha(10));
+    let a = angle(*position);
+    let d = vec2(a.cos(), a.sin());
+    p.line_segment(
+        [c + d * 5.0, c + d * 15.0],
+        Stroke::new(2.6, mix(accent, Color32::WHITE, 0.55)),
+    );
+    let active = r.dragged() || r.hovered();
+    p.text(
+        pos2(c.x, rect.top() + 54.0),
+        Align2::CENTER_TOP,
+        label.to_uppercase(),
+        FontId::proportional(9.5),
+        TEXT_DIM,
+    );
+    p.text(
+        pos2(c.x, rect.top() + 65.0),
+        Align2::CENTER_TOP,
+        readout(*position),
+        FontId::proportional(11.0),
+        if active {
+            mix(accent, Color32::WHITE, 0.4)
+        } else {
+            TEXT
+        },
+    );
+    r
+}
+
+/// The stomp button of a pedal.
+pub fn footswitch(ui: &mut Ui) -> Response {
+    let (rect, r) = ui.allocate_exact_size(vec2(46.0, 46.0), Sense::click());
+    let down = r.is_pointer_button_down_on();
+    let c = rect.center() + if down { vec2(0.0, 1.0) } else { Vec2::ZERO };
+    let p = ui.painter();
+    p.circle_filled(c + vec2(0.0, 2.5), 21.0, BEVEL_LO);
+    p.circle_filled(c, 20.0, Color32::from_rgb(0x9b, 0x9f, 0xa7));
+    p.circle_filled(c, 17.5, Color32::from_rgb(0x4d, 0x50, 0x57));
+    let dome = if down { 0x6a } else { 0x84 };
+    p.circle_filled(c, 14.5, Color32::from_rgb(dome, dome + 3, dome + 8));
+    p.circle_filled(
+        c - vec2(2.5, 3.5),
+        7.0,
+        Color32::from_white_alpha(if down { 14 } else { 34 }),
+    );
+    r
+}
+
+/// How wide a [`pedal`] is, so rows of them can be broken before they run off the screen.
+pub const PEDAL_WIDTH: f32 = 4.0 * 64.0 + 3.0 * 4.0 + 24.0 + 3.0;
+
+/// A guitar-pedal enclosure: the effect's name and light, its knobs, and the footswitch that turns
+/// it on. Returns the footswitch's response (clicked = toggled).
+pub fn pedal(
+    ui: &mut Ui,
+    title: &str,
+    colour: Color32,
+    on: &mut bool,
+    body: impl FnOnce(&mut Ui),
+) -> Response {
+    let paint = mix(colour, Color32::BLACK, if *on { 0.50 } else { 0.70 });
+    let mut switch = None;
+    let framed = egui::Frame::new()
+        .fill(paint)
+        .stroke(Stroke::new(1.5, mix(colour, Color32::BLACK, 0.25)))
+        .corner_radius(10)
+        .inner_margin(Margin::same(12))
+        .show(ui, |ui| {
+            ui.vertical(|ui| {
+                ui.set_width(4.0 * 64.0 + 3.0 * 4.0);
+                ui.horizontal(|ui| {
+                    led(ui, *on, colour);
+                    ui.label(egui::RichText::new(title).size(14.0).strong().color(mix(
+                        colour,
+                        Color32::WHITE,
+                        0.75,
+                    )));
+                });
+                ui.add_space(4.0);
+                body(ui);
+                ui.add_space(8.0);
+                ui.vertical_centered(|ui| {
+                    let mut r = footswitch(ui);
+                    if r.clicked() {
+                        *on = !*on;
+                        r.mark_changed();
+                    }
+                    switch = Some(r);
+                });
+            });
+        });
+    let rect = framed.response.rect;
+    for corner in [
+        rect.left_top(),
+        rect.right_top(),
+        rect.left_bottom(),
+        rect.right_bottom(),
+    ] {
+        let inward = vec2(
+            if corner.x == rect.left() { 8.0 } else { -8.0 },
+            if corner.y == rect.top() { 8.0 } else { -8.0 },
+        );
+        screw(ui.painter(), corner + inward);
+    }
+    switch.expect("the footswitch is always drawn")
+}
+
+/// A 19-inch rack unit: a wide faceplate with mounting ears and a title.
+pub fn rack(ui: &mut Ui, title: &str, subtitle: &str, body: impl FnOnce(&mut Ui)) {
+    let width = ui.available_width();
+    let framed = egui::Frame::new()
+        .fill(Color32::from_rgb(0x2d, 0x2f, 0x34))
+        .stroke(Stroke::new(1.0, BEVEL_HI.gamma_multiply(0.4)))
+        .corner_radius(3)
+        .inner_margin(Margin {
+            left: 40,
+            right: 40,
+            top: 8,
+            bottom: 8,
+        })
+        .show(ui, |ui| {
+            ui.set_min_width(width - 82.0);
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(title.to_uppercase())
+                        .size(13.0)
+                        .strong()
+                        .color(TEXT),
+                );
+                ui.label(egui::RichText::new(subtitle).size(11.0).color(TEXT_DIM));
+            });
+            ui.add_space(2.0);
+            body(ui);
+        });
+    let rect = framed.response.rect;
+    let p = ui.painter();
+    for (x0, x1) in [
+        (rect.left(), rect.left() + 28.0),
+        (rect.right() - 28.0, rect.right()),
+    ] {
+        let ear = Rect::from_min_max(pos2(x0, rect.top()), pos2(x1, rect.bottom()));
+        p.rect_filled(ear, 0.0, Color32::from_rgb(0x1f, 0x20, 0x24));
+        let x = (x0 + x1) / 2.0;
+        screw(p, pos2(x, rect.top() + 14.0));
+        screw(p, pos2(x, rect.bottom() - 14.0));
+    }
+}
+
+/// A row of lamps that fill up with `fraction` (0..=1): a level or gain-reduction meter.
+pub fn meter(ui: &mut Ui, fraction: f32, colour: Color32, label: &str) {
+    const LAMPS: usize = 14;
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(label).size(9.5).color(TEXT_DIM));
+        let (rect, _) =
+            ui.allocate_exact_size(vec2(LAMPS as f32 * 9.0 + 4.0, 12.0), Sense::hover());
+        let p = ui.painter();
+        p.rect_filled(rect, 3.0, WELL);
+        let lit = (fraction.clamp(0.0, 1.0) * LAMPS as f32).round() as usize;
+        for n in 0..LAMPS {
+            let at = Rect::from_min_size(
+                pos2(rect.left() + 3.0 + n as f32 * 9.0, rect.top() + 3.0),
+                vec2(7.0, 6.0),
+            );
+            p.rect_filled(
+                at,
+                1.0,
+                if n < lit {
+                    colour
+                } else {
+                    colour.gamma_multiply(0.18)
+                },
+            );
+        }
+    });
 }
