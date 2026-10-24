@@ -42,6 +42,10 @@ struct Entry {
     native: EditorSize,
     /// The plugin does nothing with a content scale (found out the first time it is asked).
     ignores_zoom: bool,
+    /// The factor of its native size the editor was last scaled to.
+    zoom: f64,
+    /// How much bigger than native its floating window is.
+    float_scale: f64,
     can_resize: bool,
     scroll: (u32, u32),
 }
@@ -60,6 +64,8 @@ impl Entry {
                 height: 0,
             },
             ignores_zoom: false,
+            zoom: 1.0,
+            float_scale: 1.0,
             can_resize: false,
             scroll: (0, 0),
         }
@@ -226,34 +232,51 @@ impl EditorManager {
         let k = (f64::from(w) / f64::from(native.width))
             .min(f64::from(h) / f64::from(native.height))
             .clamp(MIN_FIT, 1.0);
+        self.scale_editor(slot, k, (w, h), plugins)?;
+        Ok(())
+    }
+
+    /// Makes the slot's editor `k` times its native size, if the plugin allows: `true` when it
+    /// did. `room` is a (width, height) to ask a resizable plugin for, to see whether it keeps its
+    /// own shape.
+    fn scale_editor(
+        &mut self,
+        slot: usize,
+        k: f64,
+        room: (u32, u32),
+        plugins: &mut dyn PluginLookup,
+    ) -> Result<bool> {
+        let native = self.entries[slot].native;
         let want = EditorSize {
             width: ((f64::from(native.width) * k).round() as u32).max(1),
             height: ((f64::from(native.height) * k).round() as u32).max(1),
         };
         let Some(editor) = plugins.plugin(slot).and_then(|p| p.editor()) else {
-            return Ok(());
+            return Ok(false);
         };
         let cur = self.entries[slot].size;
         if cur.width.abs_diff(want.width) <= 2 && cur.height.abs_diff(want.height) <= 2 {
-            return Ok(());
+            return Ok(true);
         }
-        // 1. Ask the plugin to draw itself smaller: that scales its picture. Many editors take a
-        //    window size as a viewport only, so resizing them just crops what they draw. The scale
-        //    asked for is of the plugin's normal size (as the display's scale is), so it does not
-        //    depend on what was asked before. The size the plugin says it then has is not
+        // 1. Ask the plugin to draw itself at another scale: that scales its picture. Many editors
+        //    take a window size as a viewport only, so resizing them just crops what they draw. The
+        //    scale asked for is of the plugin's normal size (as the display's scale is), so it does
+        //    not depend on what was asked before. The size the plugin says it then has is not
         //    trusted (some report it wrongly), so the window is made the size wanted.
         if !self.entries[slot].ignores_zoom {
             let before = editor.size();
+            let same = (k - self.entries[slot].zoom).abs() < 0.02;
             match editor.set_zoom(self.scale * k) {
-                Some(got) if got != before => {
+                Some(got) if got != before || same => {
                     let size = editor.adjust_size(want);
                     if editor.can_resize() {
                         editor.set_size(size);
                     }
                     let e = &mut self.entries[slot];
-                    (e.size, e.scroll) = (size, (0, 0));
+                    (e.size, e.scroll, e.zoom) = (size, (0, 0), k);
                     self.dock.set_canvas_size(slot, size.width, size.height)?;
-                    return self.dock.scroll_to(slot, 0, 0);
+                    self.dock.scroll_to(slot, 0, 0)?;
+                    return Ok(true);
                 }
                 _ => self.entries[slot].ignores_zoom = true,
             }
@@ -262,16 +285,16 @@ impl EditorManager {
         //    which a plugin that scales its picture does and one that crops it does not: ask
         //    for a shape that is not its own and see whether it gives back its own shape.
         if !editor.can_resize() {
-            return Ok(());
+            return Ok(false);
         }
         let shaped = editor.adjust_size(EditorSize {
-            width: w,
-            height: (h / 2).max(1),
+            width: room.0,
+            height: (room.1 / 2).max(1),
         });
         let own = f64::from(native.width) / f64::from(native.height);
         let got = f64::from(shaped.width) / f64::from(shaped.height.max(1));
         if (got / own - 1.0).abs() > 0.03 {
-            return Ok(());
+            return Ok(false);
         }
         let size = editor.adjust_size(want);
         if editor.set_size(size) {
@@ -279,7 +302,8 @@ impl EditorManager {
             self.dock.set_canvas_size(slot, size.width, size.height)?;
         }
         self.entries[slot].scroll = (0, 0);
-        self.dock.scroll_to(slot, 0, 0)
+        self.dock.scroll_to(slot, 0, 0)?;
+        Ok(true)
     }
 
     /// Puts an editor back to the size it was made, at the display's own scale: undoes
@@ -309,7 +333,7 @@ impl EditorManager {
             editor.set_size(size);
         }
         let e = &mut self.entries[slot];
-        (e.size, e.scroll) = (size, (0, 0));
+        (e.size, e.scroll, e.zoom) = (size, (0, 0), 1.0);
         self.dock.set_canvas_size(slot, size.width, size.height)?;
         self.dock.scroll_to(slot, 0, 0)
     }
@@ -337,8 +361,39 @@ impl EditorManager {
 
     /// Brings a floating editor back: the caller shows it in the dock again if it is wanted
     /// there.
-    pub fn pop_in(&mut self, slot: usize) -> Result<()> {
-        self.dock.unfloat(slot)
+    pub fn pop_in(&mut self, slot: usize, plugins: &mut dyn PluginLookup) -> Result<()> {
+        self.dock.unfloat(slot)?;
+        self.entries[slot].float_scale = 1.0;
+        self.restore_one(slot, plugins)
+    }
+
+    /// How much bigger than native a floating editor's window is (1.0 unless asked).
+    pub fn float_scale(&self, slot: usize) -> f64 {
+        self.entries[slot].float_scale
+    }
+
+    /// Makes a floating editor's window `k` times its native size. `false` if the plugin cannot
+    /// be scaled (its window stays as it is).
+    pub fn set_float_scale(
+        &mut self,
+        slot: usize,
+        k: f64,
+        plugins: &mut dyn PluginLookup,
+    ) -> Result<bool> {
+        if !self.dock.is_floating(slot) {
+            return Ok(false);
+        }
+        let done = if (k - 1.0).abs() < 0.01 {
+            self.restore_one(slot, plugins)?;
+            true
+        } else {
+            let native = self.entries[slot].native;
+            self.scale_editor(slot, k, (native.width, native.height), plugins)?
+        };
+        if done {
+            self.entries[slot].float_scale = k;
+        }
+        Ok(done)
     }
 
     pub fn any_floating(&self) -> bool {

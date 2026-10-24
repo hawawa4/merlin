@@ -1459,7 +1459,9 @@ impl Session {
 
     /// Brings an editor's window back into the dock.
     pub fn pop_in_editor(&mut self, id: usize) {
-        let _ = self.editors.pop_in(id);
+        let _ = self
+            .editors
+            .pop_in(id, &mut lookup(&mut self.plugins, &mut self.inserts));
         if self.view_id == Some(id) {
             // Show it in the dock again.
             if id < UI_SLOTS {
@@ -1468,6 +1470,21 @@ impl Session {
                 let k = id - UI_SLOTS;
                 self.show_insert_editor(k / MAX_INSERTS, k % MAX_INSERTS);
             }
+        }
+    }
+
+    /// Makes a floating editor's window bigger than its native size (1.0, 1.25, 1.5...).
+    pub fn set_float_scale(&mut self, id: usize, k: f64) {
+        let result =
+            self.editors
+                .set_float_scale(id, k, &mut lookup(&mut self.plugins, &mut self.inserts));
+        match result {
+            Ok(true) => {}
+            Ok(false) => {
+                let title = self.editor_title(id);
+                self.say(format!("{title} cannot be scaled: it keeps its own size"));
+            }
+            Err(e) => self.say(format!("could not scale the editor window: {e:#}")),
         }
     }
 

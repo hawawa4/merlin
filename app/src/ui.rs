@@ -93,6 +93,8 @@ pub enum Action {
     /// Move an editor (by editor id) out into a window of its own, or back into the dock.
     PopOut(usize),
     PopIn(usize),
+    /// Scale a floating editor's window (editor id, factor of its native size).
+    FloatScale(usize, f32),
     Scroll(u32, u32),
     NoteOn(u8),
     NoteOff(u8),
@@ -558,7 +560,7 @@ pub fn draw(
             && s.editors.is_floating(id)
         {
             ui.centered_and_justified(|ui| {
-                ui.label("This plugin is open in its own window");
+                ui.add(egui::Label::new("This plugin is open in its own window").selectable(false));
             });
             return;
         }
@@ -571,7 +573,13 @@ pub fn draw(
         } else {
             ""
         };
-        ui.centered_and_justified(|ui| ui.label(text));
+        // An empty label would still fill the panel, sit on top of the scroll bars drawn above
+        // and take their mouse events (and show a text cursor over them).
+        if !text.is_empty() {
+            ui.centered_and_justified(|ui| {
+                ui.add(egui::Label::new(text).selectable(false));
+            });
+        }
     });
 }
 
@@ -1055,7 +1063,7 @@ fn capture_button(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
     let minutes = s.capture_minutes();
     let (listened, kept) = s.capture_status();
     let r = ui
-        .add_enabled_ui(minutes > 0, |ui| hw::Cap::new("CAPTURE MIDI").show(ui))
+        .add_enabled_ui(minutes > 0, |ui| hw::Cap::new("CAPTURE MIDI").icon(hw::Icon::Tape).show(ui))
         .inner
         .on_hover_text(if minutes == 0 {
             "MIDI capture is off (Settings > MIDI)".to_owned()
@@ -1340,6 +1348,7 @@ fn touch_learn_cap(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
     let waiting = matches!(s.learning(), Some(ControlAction::SlotParam { .. }));
     let active = touching || waiting;
     let r = hw::Cap::new("MIDI LEARN")
+        .icon(hw::Icon::Learn)
         .lit(active.then_some(hw::AMBER))
         .show(ui)
         .on_hover_text(
@@ -1348,6 +1357,31 @@ fn touch_learn_cap(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
     if r.clicked() {
         actions.push(Action::TouchLearn(!active));
     }
+}
+
+/// The sizes a popped-out window can be: a row of caps in a recessed track, as on hardware.
+fn float_scales(ui: &mut egui::Ui, s: &Session, id: usize, actions: &mut Vec<Action>) {
+    let now = s.editors.float_scale(id);
+    hw::inset().show(ui, |ui| {
+        ui.spacing_mut().item_spacing.x = 3.0;
+        for (k, label) in [
+            (1.0_f32, "1\u{d7}"),
+            (1.25, "1.25\u{d7}"),
+            (1.5, "1.5\u{d7}"),
+        ] {
+            let on = (f64::from(k) - now).abs() < 0.01;
+            let cap = hw::Cap::new(label)
+                .lit(on.then_some(hw::AMBER))
+                .min_width(44.0)
+                .show(ui)
+                .on_hover_text(
+                    "How big the plugin's window is, compared to the size it was made for",
+                );
+            if cap.clicked() {
+                actions.push(Action::FloatScale(id, k));
+            }
+        }
+    });
 }
 
 fn dock_bar(ui: &mut egui::Ui, s: &Session, st: &UiState, actions: &mut Vec<Action>) {
@@ -1403,12 +1437,17 @@ fn dock_bar(ui: &mut egui::Ui, s: &Session, st: &UiState, actions: &mut Vec<Acti
         {
             let floating = s.editors.is_floating(id);
             let pop = hw::Cap::new(if floating { "BRING BACK" } else { "POP OUT" })
+                .icon(if floating {
+                    hw::Icon::PopIn
+                } else {
+                    hw::Icon::PopOut
+                })
                 .lit(floating.then_some(hw::AMBER))
                 .show(ui)
                 .on_hover_text(if floating {
-                    "Put the plugin's window back into the dock"
+                    "Bring the plugin's window back into the dock"
                 } else {
-                    "Open the plugin in a window of its own, at the size it was made for"
+                    "Pop out: open the plugin in a window of its own, at the size it was made for"
                 });
             if pop.clicked() {
                 actions.push(if floating {
@@ -1417,9 +1456,13 @@ fn dock_bar(ui: &mut egui::Ui, s: &Session, st: &UiState, actions: &mut Vec<Acti
                     Action::PopOut(id)
                 });
             }
+            if floating {
+                float_scales(ui, s, id, actions);
+            }
         }
         // Lit: the editor is scaled down to fit the dock, as far as the plugin allows.
         let fit = hw::Cap::new("FIT TO WINDOW")
+            .icon(hw::Icon::FitHeight)
             .lit(st.auto_fit.then_some(hw::AMBER))
             .show(ui)
             .on_hover_text(

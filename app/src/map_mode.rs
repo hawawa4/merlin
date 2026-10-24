@@ -87,6 +87,7 @@ pub fn target(
 /// The header button that switches map mode on and off: lit while on.
 pub fn toggle(ui: &mut Ui, s: &Session, actions: &mut Vec<Action>) {
     if crate::hw::Cap::new("MIDI MAP")
+        .icon(crate::hw::Icon::Map)
         .lit(s.map_mode.then_some(LEARNING))
         .show(ui)
         .on_hover_text(

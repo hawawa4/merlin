@@ -968,7 +968,12 @@ impl Running {
                 Ok(())
             }
             Action::PopIn(id) => {
+                self.ui.last_fit = None;
                 s.pop_in_editor(id);
+                Ok(())
+            }
+            Action::FloatScale(id, k) => {
+                s.set_float_scale(id, f64::from(k));
                 Ok(())
             }
             Action::Fit => s
@@ -1658,6 +1663,9 @@ fn parse_script() -> Vec<(Duration, Action)> {
                     Action::Scroll(words.next()?.parse().ok()?, words.next()?.parse().ok()?)
                 }
                 "popout" => Action::PopOut(words.next()?.parse().ok()?),
+                "floatscale" => {
+                    Action::FloatScale(words.next()?.parse().ok()?, words.next()?.parse().ok()?)
+                }
                 "popin" => Action::PopIn(words.next()?.parse().ok()?),
                 "on" => Action::NoteOn(words.next()?.parse().ok()?),
                 "off" => Action::NoteOff(words.next()?.parse().ok()?),

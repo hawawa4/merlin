@@ -413,6 +413,27 @@ fn restoring_puts_a_fitted_editor_back_at_its_native_size_and_scale() {
 }
 
 #[test]
+fn a_floating_window_can_be_made_bigger_than_native_if_the_plugin_scales() {
+    let (mut m, mut rack, _conn) = need_x!(setup(8));
+    rack.0[0] = Some(Fake::new(300, 200, true).zoomable());
+    rack.0[1] = Some(Fake::new(300, 200, false));
+    for slot in [0, 1] {
+        m.show(slot, &mut rack).unwrap();
+        m.pop_out(slot, "Fake", &mut rack).unwrap();
+    }
+    assert!(m.set_float_scale(0, 1.5, &mut rack).unwrap());
+    assert!(rack.log(0).contains(&"zoom 1.500".to_string()));
+    assert_eq!(m.info(0).unwrap().size.width, 448);
+    assert_eq!(m.float_scale(0), 1.5);
+    assert!(m.set_float_scale(0, 1.0, &mut rack).unwrap());
+    assert_eq!(m.info(0).unwrap().size.width, 296);
+    // One that cannot be scaled or resized stays as it is.
+    assert!(!m.set_float_scale(1, 1.5, &mut rack).unwrap());
+    assert_eq!(m.float_scale(1), 1.0);
+    assert_eq!(m.info(1).unwrap().size.width, 300);
+}
+
+#[test]
 fn an_editor_can_float_in_a_window_of_its_own_and_come_back() {
     let (mut m, mut rack, conn) = need_x!(setup(8));
     m.show(0, &mut rack).unwrap();
@@ -430,7 +451,7 @@ fn an_editor_can_float_in_a_window_of_its_own_and_come_back() {
     assert_eq!(m.shown(), Some(1));
     assert!(viewable(&m, 0));
     // A floating editor is not evicted.
-    m.pop_in(0).unwrap();
+    m.pop_in(0, &mut rack).unwrap();
     sync(&conn);
     assert!(!m.is_floating(0));
     assert!(!m.dock().canvas_viewable(0));

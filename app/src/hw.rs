@@ -46,7 +46,7 @@ impl Cap {
     /// Draws a small picture on the cap instead of a label.
     pub fn icon(mut self, icon: Icon) -> Self {
         self.icon = Some(icon);
-        self.min_width = self.min_width.max(40.0);
+        self.min_width = self.min_width.max(icon.width());
         self
     }
 
@@ -70,7 +70,13 @@ impl Cap {
         let galley = ui
             .painter()
             .layout_no_wrap(self.label.clone(), font.clone(), TEXT);
-        let size = vec2((galley.size().x + 22.0).max(self.min_width), 26.0);
+        // A cap with a picture is as wide as the picture needs, not as its label.
+        let wide = if self.icon.is_some() {
+            0.0
+        } else {
+            galley.size().x + 22.0
+        };
+        let size = vec2(wide.max(self.min_width), 26.0);
         let (rect, r) = ui.allocate_exact_size(size, Sense::click());
         if !ui.is_rect_visible(rect) {
             return r;
@@ -160,10 +166,31 @@ pub enum Icon {
     Keyboard,
     ChevronLeft,
     ChevronRight,
+    /// A window with an arrow leaving it: open in a window of its own.
+    PopOut,
+    /// The same with the arrow going in: bring it back.
+    PopIn,
+    /// An up-and-down arrow between two bars: fit the height.
+    FitHeight,
+    /// A keyboard under a graduation cap: learn (a control for a knob).
+    Learn,
+    /// A keyboard beside a globe: the MIDI map.
+    Map,
+    /// A cassette: record what was played.
+    Tape,
 }
 
 impl Icon {
+    fn width(self) -> f32 {
+        match self {
+            Self::Map => 54.0,
+            _ => 40.0,
+        }
+    }
+
     fn paint(self, p: &Painter, c: Pos2, colour: Color32) {
+        let line = Stroke::new(1.5, colour);
+        let at = |x: f32, y: f32| c + vec2(x, y);
         match self {
             Self::ChevronLeft | Self::ChevronRight => {
                 let tip = if matches!(self, Self::ChevronLeft) {
@@ -180,32 +207,143 @@ impl Icon {
                     Stroke::new(2.0, colour),
                 ));
             }
-            Self::Keyboard => {
-                let body = Rect::from_center_size(c, vec2(22.0, 13.0));
-                p.rect_stroke(
-                    body,
-                    2.0,
+            Self::Keyboard => keyboard(p, c, vec2(22.0, 13.0), colour),
+            Self::PopOut | Self::PopIn => {
+                // The window, open at the top right where the arrow goes through.
+                p.add(Shape::line(
+                    vec![
+                        at(-2.0, -5.0),
+                        at(-8.0, -5.0),
+                        at(-8.0, 7.0),
+                        at(6.0, 7.0),
+                        at(6.0, 2.0),
+                    ],
+                    line,
+                ));
+                if matches!(self, Self::PopOut) {
+                    p.line_segment([at(-1.0, 2.0), at(8.0, -7.0)], line);
+                    p.add(Shape::line(
+                        vec![at(3.0, -7.5), at(8.5, -7.5), at(8.5, -2.0)],
+                        line,
+                    ));
+                } else {
+                    p.line_segment([at(8.0, -7.0), at(0.0, 1.0)], line);
+                    p.add(Shape::line(
+                        vec![at(0.0, -4.0), at(0.0, 1.0), at(5.0, 1.0)],
+                        line,
+                    ));
+                }
+            }
+            Self::FitHeight => {
+                p.line_segment([at(-7.0, -9.0), at(7.0, -9.0)], line);
+                p.line_segment([at(-7.0, 9.0), at(7.0, 9.0)], line);
+                p.line_segment([at(0.0, -6.0), at(0.0, 6.0)], line);
+                p.add(Shape::line(
+                    vec![at(-4.0, -3.0), at(0.0, -7.0), at(4.0, -3.0)],
+                    line,
+                ));
+                p.add(Shape::line(
+                    vec![at(-4.0, 3.0), at(0.0, 7.0), at(4.0, 3.0)],
+                    line,
+                ));
+            }
+            Self::Learn => {
+                // The mortarboard: a flat diamond on a cap, with a tassel.
+                p.add(Shape::convex_polygon(
+                    vec![
+                        at(-10.0, -6.0),
+                        at(0.0, -10.5),
+                        at(10.0, -6.0),
+                        at(0.0, -1.5),
+                    ],
+                    colour,
+                    Stroke::NONE,
+                ));
+                p.add(Shape::line(
+                    vec![
+                        at(-5.0, -3.5),
+                        at(-5.0, -0.5),
+                        at(0.0, 1.5),
+                        at(5.0, -0.5),
+                        at(5.0, -3.5),
+                    ],
                     Stroke::new(1.3, colour),
-                    egui::StrokeKind::Inside,
+                ));
+                p.line_segment([at(9.0, -6.0), at(9.0, -0.5)], Stroke::new(1.2, colour));
+                p.circle_filled(at(9.0, 0.5), 1.3, colour);
+                keyboard(p, at(0.0, 7.0), vec2(20.0, 9.0), colour);
+            }
+            Self::Map => {
+                keyboard(p, at(-11.0, 0.0), vec2(20.0, 12.0), colour);
+                // A globe: the outline, a meridian, the equator and two parallels.
+                let g = at(12.0, 0.0);
+                let r = 8.0;
+                p.circle_stroke(g, r, Stroke::new(1.3, colour));
+                let meridian: Vec<Pos2> = (0..=24)
+                    .map(|n| {
+                        let a = n as f32 / 24.0 * std::f32::consts::TAU;
+                        g + vec2(a.cos() * 3.6, a.sin() * r)
+                    })
+                    .collect();
+                p.add(Shape::line(meridian, Stroke::new(1.0, colour)));
+                p.line_segment(
+                    [g + vec2(-r, 0.0), g + vec2(r, 0.0)],
+                    Stroke::new(1.0, colour),
                 );
-                // Five white keys, the black ones between them.
-                for n in 1..5 {
-                    let x = body.left() + body.width() * n as f32 / 5.0;
+                for y in [-4.0_f32, 4.0] {
+                    let half = (r * r - y * y).sqrt();
                     p.line_segment(
-                        [pos2(x, body.top() + 5.0), pos2(x, body.bottom())],
+                        [g + vec2(-half, y), g + vec2(half, y)],
                         Stroke::new(1.0, colour),
                     );
                 }
-                for n in [1, 2, 4] {
-                    let x = body.left() + body.width() * n as f32 / 5.0;
-                    p.rect_filled(
-                        Rect::from_min_size(pos2(x - 1.6, body.top() + 1.0), vec2(3.2, 6.0)),
-                        0.5,
-                        colour,
-                    );
+            }
+            Self::Tape => {
+                let body = Rect::from_center_size(c, vec2(26.0, 17.0));
+                p.rect_stroke(
+                    body,
+                    2.5,
+                    Stroke::new(1.4, colour),
+                    egui::StrokeKind::Inside,
+                );
+                // Two reels, and the window the tape runs past.
+                for x in [-6.0, 6.0] {
+                    p.circle_stroke(at(x, -2.0), 3.2, Stroke::new(1.2, colour));
+                    p.circle_filled(at(x, -2.0), 1.0, colour);
                 }
+                p.add(Shape::line(
+                    vec![at(-8.0, 8.5), at(-5.0, 3.5), at(5.0, 3.5), at(8.0, 8.5)],
+                    Stroke::new(1.2, colour),
+                ));
             }
         }
+    }
+}
+
+/// A little keyboard of five white keys and three black ones, outlined.
+fn keyboard(p: &Painter, c: Pos2, size: Vec2, colour: Color32) {
+    let body = Rect::from_center_size(c, size);
+    p.rect_stroke(
+        body,
+        2.0,
+        Stroke::new(1.3, colour),
+        egui::StrokeKind::Inside,
+    );
+    let black = size.y * 0.5;
+    for n in 1..5 {
+        let x = body.left() + body.width() * n as f32 / 5.0;
+        p.line_segment(
+            [pos2(x, body.top() + black - 1.0), pos2(x, body.bottom())],
+            Stroke::new(1.0, colour),
+        );
+    }
+    for n in [1, 2, 4] {
+        let x = body.left() + body.width() * n as f32 / 5.0;
+        p.rect_filled(
+            Rect::from_min_size(pos2(x - 1.6, body.top() + 1.0), vec2(3.2, black)),
+            0.5,
+            colour,
+        );
     }
 }
 
