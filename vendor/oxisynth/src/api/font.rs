@@ -63,6 +63,25 @@ impl Synth {
         Ok(())
     }
 
+    /// Selects a bank and program of one particular SoundFont on a channel, instead of the first
+    /// font in the stack that has them (what a program change does). A preset the font lacks
+    /// leaves the channel without one.
+    pub fn program_select(
+        &mut self,
+        channel: u8,
+        sfont_id: SoundFontId,
+        banknum: u32,
+        prognum: u8,
+    ) -> Result<(), OxiError> {
+        let preset = self.core.font_bank.preset(sfont_id, banknum, prognum);
+        let channel = self.core.channels.get_mut(channel as usize)?;
+        channel.set_banknum(banknum);
+        channel.set_prognum(prognum);
+        channel.set_sfontnum(preset.as_ref().map(|_| sfont_id));
+        channel.set_preset(preset);
+        Ok(())
+    }
+
     /// Count the number of loaded SoundFonts.
     pub fn sound_font_count(&self) -> usize {
         self.core.font_bank.count()

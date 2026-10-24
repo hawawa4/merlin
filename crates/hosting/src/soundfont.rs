@@ -16,7 +16,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow, bail};
 use merlin_model::Format;
-use oxisynth::{GeneratorType, MidiEvent as OxiEvent, Synth, SynthDescriptor};
+use oxisynth::{GeneratorType, MidiEvent as OxiEvent, SoundFontId, Synth, SynthDescriptor};
 
 use crate::{
     Io, MidiEvent, MidiKind, ParamInfo, PluginEditor, PluginHandle, PluginInfo, PluginProcessor,
@@ -29,6 +29,11 @@ const BASE_GAIN: f32 = 1.0;
 /// State formats: v1 had the preset and the level, v2 adds the tone controls.
 const STATE_V1: &[u8; 4] = b"ISF1";
 const STATE_V2: &[u8; 4] = b"ISF2";
+/// A folder of SoundFonts: v2 plus the name of the file the preset is in, so adding or removing a
+/// file in the folder does not move a saved preset to another file.
+const STATE_V3: &[u8; 4] = b"ISF3";
+/// A folder holds at most this many SoundFonts (a file's number must fit the high byte of a bank).
+pub const MAX_COLLECTION: usize = 255;
 
 /// True for a file this module plays.
 pub fn is_soundfont(path: &Path) -> bool {
@@ -53,6 +58,83 @@ pub fn info_for(path: &Path) -> PluginInfo {
         version: String::new(),
         features: vec!["instrument".into(), "soundfont".into()],
     }
+}
+
+/// The SoundFont files an instrument is made of: the file itself, or, for a folder, the
+/// SoundFonts directly inside it, in name order.
+pub fn files_of(path: &Path) -> Vec<PathBuf> {
+    if !path.is_dir() {
+        return vec![path.to_owned()];
+    }
+    let mut files: Vec<PathBuf> = std::fs::read_dir(path)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && is_soundfont(p))
+        .collect();
+    files.sort();
+    files.truncate(MAX_COLLECTION);
+    files
+}
+
+/// A folder that is an instrument of its own: all the SoundFonts in it play as one. (Plugin
+/// bundles are folders too, but they have an extension of their own.)
+pub fn is_collection(path: &Path) -> bool {
+    path.is_dir()
+        && !path.extension().is_some_and(|e| {
+            ["vst3", "lv2", "clap", "vst", "component"]
+                .iter()
+                .any(|x| e.eq_ignore_ascii_case(x))
+        })
+}
+
+/// A file or folder this module plays.
+pub fn is_source(path: &Path) -> bool {
+    is_soundfont(path) || is_collection(path)
+}
+
+/// What the browser shows for a folder of SoundFonts: one instrument named like the folder.
+pub fn collection_info(dir: &Path) -> PluginInfo {
+    let name = dir
+        .file_name()
+        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    PluginInfo {
+        format: Format::SoundFont,
+        id: format!("folder:{name}"),
+        name,
+        vendor: "SoundFont folder".into(),
+        version: String::new(),
+        features: vec!["instrument".into(), "soundfont".into()],
+    }
+}
+
+/// The presets of all the fonts as one list. A single font keeps its own numbers; with several, a
+/// preset's bank is `file number << 8 | the file's bank` (banks above 255 are left out) and its
+/// name says which file it is in.
+fn merged_presets(fonts: &[Arc<Font>]) -> Vec<PresetInfo> {
+    if let [only] = fonts {
+        return only.presets.clone();
+    }
+    fonts
+        .iter()
+        .enumerate()
+        .flat_map(|(n, font)| {
+            let stem = font
+                .path
+                .file_stem()
+                .map_or_else(String::new, |s| s.to_string_lossy().into_owned());
+            font.presets
+                .iter()
+                .filter(|p| p.bank < 256)
+                .map(move |p| PresetInfo {
+                    bank: (n as u16) << 8 | p.bank,
+                    program: p.program,
+                    name: p.name.clone(),
+                    file: Some(stem.clone()),
+                })
+        })
+        .collect()
 }
 
 /// A decoded SoundFont, shared between slots.
@@ -119,6 +201,7 @@ impl Font {
                     bank: u16::try_from(p.banknum()).ok()?,
                     program: u8::try_from(p.num()).ok()?,
                     name: p.name().to_string(),
+                    file: None,
                 })
             })
             .collect();
@@ -139,22 +222,6 @@ impl Font {
             .unwrap()
             .insert(path.to_owned(), Arc::downgrade(&font));
         Ok(font)
-    }
-
-    /// The preset to start with: General MIDI piano if there is one, else the first.
-    fn default_preset(&self) -> (u16, u8) {
-        let p = self
-            .presets
-            .iter()
-            .find(|p| (p.bank, p.program) == (0, 0))
-            .unwrap_or(&self.presets[0]);
-        (p.bank, p.program)
-    }
-
-    fn has(&self, bank: u16, program: u8) -> bool {
-        self.presets
-            .binary_search_by_key(&(bank, program), |p| (p.bank, p.program))
-            .is_ok()
     }
 }
 
@@ -199,30 +266,107 @@ fn pack(bank: u16, program: u8) -> u32 {
     (bank as u32) << 8 | program as u32
 }
 
+/// The fonts an instrument plays and their presets as one list (see [`merged_presets`]).
+struct Fonts {
+    fonts: Vec<Arc<Font>>,
+    presets: Vec<PresetInfo>,
+}
+
+impl Fonts {
+    fn has(&self, bank: u16, program: u8) -> bool {
+        self.presets
+            .binary_search_by_key(&(bank, program), |p| (p.bank, p.program))
+            .is_ok()
+    }
+
+    /// The preset to start with: General MIDI piano if there is one, else the first.
+    fn default_preset(&self) -> (u16, u8) {
+        let p = self
+            .presets
+            .iter()
+            .find(|p| (p.bank, p.program) == (0, 0))
+            .unwrap_or(&self.presets[0]);
+        (p.bank, p.program)
+    }
+
+    /// Which font and which of its own banks a preset's number means.
+    fn split(&self, bank: u16) -> (usize, u16) {
+        if self.fonts.len() == 1 {
+            (0, bank)
+        } else {
+            (usize::from(bank >> 8), bank & 0xFF)
+        }
+    }
+}
+
 pub struct SoundFontPlugin {
     info: PluginInfo,
-    font: Arc<Font>,
+    fonts: Arc<Fonts>,
+    /// Whether it is a folder of fonts (its state names the file of the preset).
+    collection: bool,
     shared: Arc<Shared>,
 }
 
 impl SoundFontPlugin {
+    /// A SoundFont file, or a folder of them played as one instrument.
     pub fn open(path: &Path) -> Result<Self> {
-        let font = Font::load(path)?;
-        let (bank, program) = font.default_preset();
+        let collection = is_collection(path);
+        let files = files_of(path);
+        if files.is_empty() {
+            bail!("{} has no SoundFonts", path.display());
+        }
+        let mut fonts = Vec::new();
+        let mut problems = Vec::new();
+        for file in &files {
+            match Font::load(file) {
+                Ok(f) => fonts.push(f),
+                // One damaged file must not take the other fonts of the folder with it.
+                Err(e) if collection => problems.push(format!("{e:#}")),
+                Err(e) => return Err(e),
+            }
+        }
+        if fonts.is_empty() {
+            bail!(
+                "no SoundFont in {} could be read: {}",
+                path.display(),
+                problems.join("; ")
+            );
+        }
+        let presets = merged_presets(&fonts);
+        if presets.is_empty() {
+            bail!("{} has no presets", path.display());
+        }
+        let fonts = Fonts { fonts, presets };
+        let (bank, program) = fonts.default_preset();
         Ok(Self {
-            info: info_for(path),
+            info: if collection {
+                collection_info(path)
+            } else {
+                info_for(path)
+            },
             shared: Arc::new(Shared {
                 preset: AtomicU32::new(pack(bank, program)),
                 gain: AtomicU32::new(1.0f32.to_bits()),
                 tone: Default::default(),
                 polyphony: AtomicU32::new(SamplerTone::DEFAULT_POLYPHONY as u32),
             }),
-            font,
+            fonts: Arc::new(fonts),
+            collection,
         })
     }
 
+    /// The first decoded font (the only one, unless this is a folder).
     pub fn font(&self) -> &Arc<Font> {
-        &self.font
+        &self.fonts.fonts[0]
+    }
+
+    /// The file a preset number lives in, for a folder.
+    fn file_of(&self, bank: u16) -> Option<&str> {
+        self.fonts
+            .presets
+            .iter()
+            .find(|p| p.bank == bank)
+            .and_then(|p| p.file.as_deref())
     }
 }
 
@@ -243,10 +387,16 @@ impl PluginHandle for SoundFontPlugin {
             ..Default::default()
         })
         .map_err(|e| anyhow!("cannot start the SoundFont synth: {e:?}"))?;
-        synth.add_font(self.font.font.clone(), true);
+        let ids = self
+            .fonts
+            .fonts
+            .iter()
+            .map(|f| synth.add_font(f.font.clone(), true))
+            .collect();
         let mut p = Processor {
             synth,
-            font: self.font.clone(),
+            ids,
+            fonts: self.fonts.clone(),
             shared: self.shared.clone(),
             applied: u32::MAX,
             applied_gain: f32::NAN,
@@ -267,7 +417,7 @@ impl PluginHandle for SoundFontPlugin {
 
     fn save_state(&mut self) -> Result<Vec<u8>> {
         let p = self.shared.preset.load(Ordering::Relaxed);
-        let mut v = STATE_V2.to_vec();
+        let mut v = if self.collection { STATE_V3 } else { STATE_V2 }.to_vec();
         v.extend_from_slice(&((p >> 8) as u16).to_le_bytes());
         v.push(p as u8);
         v.extend_from_slice(&self.shared.gain.load(Ordering::Relaxed).to_le_bytes());
@@ -275,21 +425,42 @@ impl PluginHandle for SoundFontPlugin {
             v.extend_from_slice(&t.load(Ordering::Relaxed).to_le_bytes());
         }
         v.extend_from_slice(&(self.shared.polyphony.load(Ordering::Relaxed) as u16).to_le_bytes());
+        if self.collection {
+            let name = self.file_of((p >> 8) as u16).unwrap_or_default();
+            v.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            v.extend_from_slice(name.as_bytes());
+        }
         Ok(v)
     }
 
     fn load_state(&mut self, data: &[u8]) -> Result<()> {
-        let v2 = data.len() == 33 && &data[..4] == STATE_V2;
+        let v3 = data.len() >= 35 && &data[..4] == STATE_V3;
+        let v2 = (data.len() == 33 && &data[..4] == STATE_V2) || v3;
         let v1 = data.len() == 11 && &data[..4] == STATE_V1;
         if !v1 && !v2 {
             bail!("not a SoundFont slot state");
         }
-        let bank = u16::from_le_bytes([data[4], data[5]]);
+        let mut bank = u16::from_le_bytes([data[4], data[5]]);
         let program = data[6];
+        if v3 {
+            // Find the preset's file by name: the folder may have gained or lost files since.
+            let len = usize::from(u16::from_le_bytes([data[33], data[34]]));
+            if let Some(name) = data
+                .get(35..35 + len)
+                .and_then(|n| std::str::from_utf8(n).ok())
+                && let Some(p) = self
+                    .fonts
+                    .presets
+                    .iter()
+                    .find(|p| p.file.as_deref() == Some(name) && p.bank & 0xFF == bank & 0xFF)
+            {
+                bank = p.bank & 0xFF00 | (bank & 0xFF);
+            }
+        }
         let f =
             |at: usize| f32::from_le_bytes([data[at], data[at + 1], data[at + 2], data[at + 3]]);
         // A saved preset the file no longer has leaves the default in place.
-        if self.font.has(bank, program) {
+        if self.fonts.has(bank, program) {
             self.set_preset(bank, program);
         }
         if f(7).is_finite() {
@@ -309,7 +480,7 @@ impl PluginHandle for SoundFontPlugin {
     }
 
     fn presets(&self) -> Option<&[PresetInfo]> {
-        Some(&self.font.presets)
+        Some(&self.fonts.presets)
     }
 
     fn preset(&self) -> Option<(u16, u8)> {
@@ -318,7 +489,7 @@ impl PluginHandle for SoundFontPlugin {
     }
 
     fn set_preset(&mut self, bank: u16, program: u8) {
-        if self.font.has(bank, program) {
+        if self.fonts.has(bank, program) {
             self.shared
                 .preset
                 .store(pack(bank, program), Ordering::Relaxed);
@@ -356,7 +527,9 @@ impl PluginHandle for SoundFontPlugin {
 
 struct Processor {
     synth: Synth,
-    font: Arc<Font>,
+    /// The synth's id for each font, in the order of [`Fonts::fonts`].
+    ids: Vec<SoundFontId>,
+    fonts: Arc<Fonts>,
     shared: Arc<Shared>,
     /// The preset and gain the synth has now.
     applied: u32,
@@ -391,22 +564,14 @@ impl Processor {
             let (bank, program) = ((want >> 8) as u16, want as u8);
             let old = self.channel;
             self.send(OxiEvent::AllNotesOff { channel: old });
+            // Which font, and its own bank: the first font (or the only one) is the plain case.
+            let (font, bank) = self.fonts.split(bank);
             self.channel = if bank >= 128 { 9 } else { 0 };
-            let channel = self.channel;
-            self.send(OxiEvent::ControlChange {
-                channel,
-                ctrl: 0,
-                value: bank.min(127) as u8,
-            });
-            self.send(OxiEvent::ControlChange {
-                channel,
-                ctrl: 32,
-                value: 0,
-            });
-            self.send(OxiEvent::ProgramChange {
-                channel,
-                program_id: program,
-            });
+            if let Some(&id) = self.ids.get(font) {
+                let _ = self
+                    .synth
+                    .program_select(self.channel, id, u32::from(bank), program);
+            }
             // The tone belongs to the slot, not to a preset: put it on the new channel too.
             self.apply_tone(tone);
         }
@@ -454,11 +619,14 @@ impl Processor {
             MidiKind::ProgramChange { program, .. } => {
                 // A program change from the keyboard picks a preset of this file, in the bank
                 // last selected (the rack shows it too, through the shared value).
-                let bank = self
-                    .pending_bank
-                    .take()
-                    .unwrap_or((self.applied >> 8) as u16);
-                if self.font.has(bank, program) {
+                let current = (self.applied >> 8) as u16;
+                // A bank select names a bank of the font that is playing.
+                let bank = match self.pending_bank.take() {
+                    Some(b) if self.ids.len() > 1 => current & 0xFF00 | b & 0xFF,
+                    Some(b) => b,
+                    None => current,
+                };
+                if self.fonts.has(bank, program) {
                     self.shared
                         .preset
                         .store(pack(bank, program), Ordering::Relaxed);

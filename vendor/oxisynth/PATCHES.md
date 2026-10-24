@@ -9,3 +9,5 @@ Upstream: https://github.com/PolyMeilex/oxisynth. To be sent upstream; drop this
 3. `core/soundfont/mod.rs`: `SoundFont` is `Clone` (samples are shared) and has `presets()`,
    so the preset list is readable and one decoded file can serve several synths.
 4. `api/settings.rs`: `Synth::active_voice_count()`, so a host can skip a silent synth.
+5. `api/font.rs`: `Synth::program_select()`, to pick a preset of one particular SoundFont when
+   several are loaded (a program change takes the first font that has the bank and program).

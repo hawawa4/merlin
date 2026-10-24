@@ -488,3 +488,164 @@ fn drum_kits_play_on_their_own_channel() {
     }
     assert!(peak(&v) > 0.02);
 }
+
+/// A folder with three SoundFonts (links to system files; the first two are the same font under
+/// two names, the third a small GS variation font), if this machine has them.
+fn three_fonts(tag: &str) -> Option<PathBuf> {
+    let dir = Path::new("/usr/share/sounds/sf2");
+    let (gm, gs) = (dir.join("TimGM6mb.sf2"), dir.join("FluidR3_GS.sf2"));
+    if !gm.exists() || !gs.exists() {
+        return None;
+    }
+    let folder = std::env::temp_dir().join(format!(
+        "merlin-sf-{tag}-{}/Three Fonts",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&folder);
+    std::fs::create_dir_all(&folder).unwrap();
+    std::os::unix::fs::symlink(&gm, folder.join("B Tim.sf2")).unwrap();
+    std::os::unix::fs::symlink(&gm, folder.join("C Tim again.sf2")).unwrap();
+    std::os::unix::fs::symlink(gs, folder.join("D Gs.sf2")).unwrap();
+    // Not a SoundFont: ignored.
+    std::fs::write(folder.join("readme.txt"), b"x").unwrap();
+    Some(folder)
+}
+
+#[test]
+fn a_folder_of_soundfonts_is_one_instrument_named_like_the_folder() {
+    let Some(folder) = three_fonts("one") else {
+        return;
+    };
+    use merlin_hosting::soundfont::{collection_info, files_of, is_collection, is_source};
+    assert!(is_collection(&folder) && is_source(&folder));
+    assert!(!is_collection(Path::new(
+        "/usr/share/sounds/sf2/TimGM6mb.sf2"
+    )));
+    assert!(!is_collection(Path::new("/nonexistent")));
+    assert_eq!(files_of(&folder).len(), 3, "the readme is not a SoundFont");
+    let info = collection_info(&folder);
+    assert_eq!(
+        (info.name.as_str(), info.id.as_str()),
+        ("Three Fonts", "folder:Three Fonts")
+    );
+
+    let plugin = SoundFontPlugin::open(&folder).expect("open the folder");
+    assert_eq!(plugin.info().name, "Three Fonts");
+    let presets = plugin.presets().unwrap();
+    let from = |file: &str| {
+        presets
+            .iter()
+            .filter(|p| p.file.as_deref() == Some(file))
+            .count()
+    };
+    assert!(from("B Tim") > 50 && from("C Tim again") > 50 && from("D Gs") > 20);
+    // The same General MIDI piano is in two files, under different bank numbers.
+    let pianos: Vec<_> = presets
+        .iter()
+        .filter(|p| p.bank & 0xFF == 0 && p.program == 0)
+        .collect();
+    assert_eq!(pianos.len(), 2);
+    assert_ne!(pianos[0].bank, pianos[1].bank);
+    assert!(
+        presets
+            .windows(2)
+            .all(|w| (w[0].bank, w[0].program) <= (w[1].bank, w[1].program))
+    );
+    let _ = std::fs::remove_dir_all(folder.parent().unwrap());
+}
+
+#[test]
+fn a_preset_of_a_later_font_plays_from_that_font() {
+    let Some(folder) = three_fonts("play") else {
+        return;
+    };
+    let mut plugin = SoundFontPlugin::open(&folder).unwrap();
+    // A preset only the third file has: the synth must look in that file, not the first that
+    // happens to be on top of its stack.
+    let gs = plugin
+        .presets()
+        .unwrap()
+        .iter()
+        .find(|p| p.file.as_deref() == Some("D Gs") && p.program < 100)
+        .or_else(|| {
+            plugin
+                .presets()
+                .unwrap()
+                .iter()
+                .find(|p| p.file.as_deref() == Some("D Gs"))
+        })
+        .unwrap()
+        .clone();
+    let mut p = plugin.activate(SR, BLOCK as u32).unwrap();
+    plugin.set_preset(gs.bank, gs.program);
+    for _ in 0..50 {
+        block(&mut *p, &[]);
+    }
+    let mut out = block(&mut *p, &[MidiEvent::note_on(0, 0, 60, 110)]).0;
+    for _ in 0..40 {
+        out.extend(block(&mut *p, &[]).0);
+    }
+    assert!(peak(&out) > 0.005, "{} is audible: {}", gs.name, peak(&out));
+    assert_eq!(plugin.preset(), Some((gs.bank, gs.program)));
+
+    // And the piano of the first file still sounds, after going there from another font.
+    let piano = plugin
+        .presets()
+        .unwrap()
+        .iter()
+        .find(|p| p.file.as_deref() == Some("B Tim") && p.program == 0 && p.bank & 0xFF == 0)
+        .unwrap()
+        .clone();
+    block(&mut *p, &[MidiEvent::note_off(0, 0, 60)]);
+    plugin.set_preset(piano.bank, piano.program);
+    for _ in 0..500 {
+        block(&mut *p, &[]);
+    }
+    let mut out = block(&mut *p, &[MidiEvent::note_on(0, 0, 60, 100)]).0;
+    for _ in 0..40 {
+        out.extend(block(&mut *p, &[]).0);
+    }
+    assert!(peak(&out) > 0.02, "the piano is audible: {}", peak(&out));
+    let _ = std::fs::remove_dir_all(folder.parent().unwrap());
+}
+
+#[test]
+fn a_saved_preset_stays_in_its_file_when_the_folder_changes() {
+    let Some(folder) = three_fonts("state") else {
+        return;
+    };
+    let mut a = SoundFontPlugin::open(&folder).unwrap();
+    let in_second = a
+        .presets()
+        .unwrap()
+        .iter()
+        .find(|p| p.file.as_deref() == Some("C Tim again") && p.program == 24)
+        .unwrap()
+        .clone();
+    a.set_preset(in_second.bank, in_second.program);
+    let state = a.save_state().unwrap();
+
+    // A file that sorts first is added: every file's number moves up by one.
+    std::os::unix::fs::symlink(
+        "/usr/share/sounds/sf2/TimGM6mb.sf2",
+        folder.join("A Extra.sf2"),
+    )
+    .unwrap();
+    let mut b = SoundFontPlugin::open(&folder).unwrap();
+    b.load_state(&state).unwrap();
+    let (bank, program) = b.preset().unwrap();
+    let now = b
+        .presets()
+        .unwrap()
+        .iter()
+        .find(|p| (p.bank, p.program) == (bank, program))
+        .unwrap();
+    assert_eq!(
+        now.file.as_deref(),
+        Some("C Tim again"),
+        "still in the same file"
+    );
+    assert_eq!(program, 24);
+    assert_ne!(bank, in_second.bank, "although its number changed");
+    let _ = std::fs::remove_dir_all(folder.parent().unwrap());
+}

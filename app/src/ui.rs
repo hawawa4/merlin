@@ -46,7 +46,12 @@ pub fn found_label(f: &merlin_scanner::Found) -> String {
         label.push_str(" (LV2)");
     }
     if f.info.format == Format::SoundFont {
-        label.push_str(" (SoundFont)");
+        // A folder of SoundFonts plays as one instrument.
+        label.push_str(if f.path.is_dir() {
+            " (SoundFonts)"
+        } else {
+            " (SoundFont)"
+        });
     }
     if f.windows {
         label.push_str(" (Windows)");
@@ -321,14 +326,9 @@ pub struct UiState {
     pub keys_open: bool,
     /// The browser shows only plugins with this tag (or none yet).
     pub tag_filter: crate::tags::Filter,
-    pub dir_text: String,
-    pub sound_dir_text: String,
-    pub vst2_dir_text: String,
     pub wine_text: String,
     pub yab_text: String,
     pub installer_text: String,
-    /// The folder being typed for MIDI captures.
-    pub capture_dir_text: String,
     /// The mapping being composed on the Controls tab: what kind of action, and its numbers.
     pub new_kind: crate::settings_ui::ActionKind,
     pub new_slot: usize,
@@ -341,6 +341,10 @@ pub struct UiState {
     /// Test hook: open this slot's load menu on the next frame.
     pub force_menu: Option<usize>,
     pub popup_open: bool,
+    /// The scene whose name is being edited in the strip, and the text so far.
+    pub scene_edit: Option<(usize, String)>,
+    /// The file dialog that is open, if one is.
+    pub picking: Option<crate::dialog::Open>,
     pub status: StatusInfo,
 }
 
@@ -392,13 +396,9 @@ impl UiState {
             notice_at: None,
             keys_open: false,
             tag_filter: Default::default(),
-            dir_text: String::new(),
-            sound_dir_text: String::new(),
-            vst2_dir_text: String::new(),
             wine_text: String::new(),
             yab_text: String::new(),
             installer_text: String::new(),
-            capture_dir_text: String::new(),
             param_insert: None,
             param_query: String::new(),
             new_kind: Default::default(),
@@ -410,6 +410,8 @@ impl UiState {
             held_key: None,
             force_menu: None,
             popup_open: false,
+            scene_edit: None,
+            picking: None,
             status: StatusInfo::default(),
         }
     }
@@ -423,6 +425,7 @@ pub fn draw(
     actions: &mut Vec<Action>,
 ) {
     drag_overlay(ui, st);
+    poll_dialog(ui, s, st, actions);
     if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::M)) {
         actions.push(Action::SetMapMode(!s.map_mode));
     }
@@ -447,7 +450,7 @@ pub fn draw(
     if st.view() != View::Settings {
         egui::Panel::top("scenes")
             .frame(hw::chassis())
-            .show(ui, |ui| scenes_bar(ui, s, actions));
+            .show(ui, |ui| scenes_bar(ui, s, st, actions));
     }
     if st.setlist_open && !st.settings_open {
         egui::CentralPanel::default().show(ui, |ui| {
@@ -583,6 +586,51 @@ pub fn draw(
     });
 }
 
+/// Takes the answer of a file dialog when it comes: a folder goes to the list it was asked for,
+/// a program or installer into its text box.
+fn poll_dialog(ui: &egui::Ui, s: &mut Session, st: &mut UiState, actions: &mut Vec<Action>) {
+    use crate::dialog::{Poll, Want};
+    let Some(open) = &st.picking else { return };
+    match open.poll() {
+        Poll::Waiting => {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(100));
+            return;
+        }
+        Poll::Chosen(want, path) => {
+            let text = path.display().to_string();
+            match want {
+                Want::PluginDir => actions.push(Action::AddDir(text)),
+                Want::SoundDir => actions.push(Action::AddSoundDir(text)),
+                Want::Vst2Dir => actions.push(Action::AddWindowsVst2Dir(text)),
+                Want::CaptureDir => actions.push(Action::SetCaptureDir(Some(path))),
+                Want::WineProgram => st.wine_text = text,
+                Want::YabridgeDir => st.yab_text = text,
+                Want::Installer => st.installer_text = text,
+            }
+        }
+        Poll::Cancelled => {}
+        Poll::Failed(e) => s.say(e),
+    }
+    st.picking = None;
+}
+
+/// A button that opens a file dialog for `want` (greyed out while one is open).
+pub fn pick_button(
+    ui: &mut egui::Ui,
+    picking: &mut Option<crate::dialog::Open>,
+    label: &str,
+    want: crate::dialog::Want,
+    start: Option<&std::path::Path>,
+) -> bool {
+    let free = picking.is_none();
+    let clicked = ui.add_enabled(free, egui::Button::new(label)).clicked();
+    if clicked {
+        *picking = Some(crate::dialog::Open::start(want, start));
+    }
+    clicked
+}
+
 /// How a sound-shaping field's value reads under its knob.
 fn sound_readout(field: SamplerField, v: f32) -> String {
     match field {
@@ -670,7 +718,10 @@ fn sampler_panel(
         let now = presets
             .iter()
             .find(|p| (p.bank, p.program) == current)
-            .map_or("", |p| p.name.as_str());
+            .map_or_else(String::new, |p| match &p.file {
+                Some(file) => format!("{file} \u{b7} {}", p.name),
+                None => p.name.clone(),
+            });
         ui.add_space(12.0);
         ui.colored_label(COLORS[i], format!("now: {now}"));
     });
@@ -682,11 +733,28 @@ fn sampler_panel(
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
+            // A folder of SoundFonts: each file's presets under its name.
+            let mut file: Option<&str> = None;
             for p in presets {
-                if !query.is_empty() && !p.name.to_lowercase().contains(&query) {
+                let file_name = p.file.as_deref();
+                if !query.is_empty()
+                    && !p.name.to_lowercase().contains(&query)
+                    && !file_name.is_some_and(|f| f.to_lowercase().contains(&query))
+                {
                     continue;
                 }
-                let label = format!("{:>3}:{:<3}  {}", p.bank, p.program, p.name);
+                if let Some(name) = file_name.filter(|n| Some(*n) != file) {
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(name).strong().color(hw::TEXT_DIM));
+                }
+                file = file_name.or(file);
+                // In a folder the bank number carries the file's number too: show the file's own.
+                let bank = if file_name.is_some() {
+                    p.bank & 0xFF
+                } else {
+                    p.bank
+                };
+                let label = format!("{:>3}:{:<3}  {}", bank, p.program, p.name);
                 if ui
                     .selectable_label((p.bank, p.program) == current, label)
                     .clicked()
@@ -726,19 +794,61 @@ fn drag_overlay(ui: &mut egui::Ui, st: &UiState) {
 
 /// The saved performance states: click one to bring it back; right-click for more.
 /// Scenes (what the code calls snapshots): saved rack set-ups to recall with a click or a pedal.
-fn scenes_bar(ui: &mut egui::Ui, s: &mut Session, actions: &mut Vec<Action>) {
+fn scenes_bar(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, actions: &mut Vec<Action>) {
+    if st
+        .scene_edit
+        .as_ref()
+        .is_some_and(|(n, _)| *n >= s.snapshots().len())
+    {
+        st.scene_edit = None;
+    }
     ui.horizontal_wrapped(|ui| {
         hw::engraved(ui, "Scenes").on_hover_text(SCENES_HELP);
         let current = s.current_snapshot();
         for (n, snap) in s.snapshots().iter().enumerate() {
+            if let Some((_, text)) = st.scene_edit.as_mut().filter(|(e, _)| *e == n) {
+                // Renaming in place: Enter or a click elsewhere keeps the name, Escape drops it.
+                let edit = ui.add(
+                    egui::TextEdit::singleline(text)
+                        .desired_width(110.0)
+                        .margin(egui::Margin::symmetric(6, 4)),
+                );
+                if !edit.has_focus() && !edit.lost_focus() {
+                    edit.request_focus();
+                    // Select the old name so typing replaces it.
+                    if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), edit.id) {
+                        state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
+                            egui::text::CCursor::new(0),
+                            egui::text::CCursor::new(text.chars().count()),
+                        )));
+                        state.store(ui.ctx(), edit.id);
+                    }
+                }
+                let escaped = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                if escaped {
+                    st.scene_edit = None;
+                } else if edit.lost_focus() {
+                    let name = text.trim().to_owned();
+                    if !name.is_empty() && name != snap.name {
+                        actions.push(Action::RenameSnapshot(n, name));
+                    }
+                    st.scene_edit = None;
+                }
+                continue;
+            }
             let label = format!("{}  {}", n + 1, snap.name);
             let r = hw::Cap::new(label)
                 .lit((current == Some(n)).then_some(hw::AMBER))
                 .min_width(70.0)
                 .show(ui)
-                .on_hover_text("Click to bring this scene back. Right-click to rename, update or remove it.");
+                .on_hover_text(
+                    "Click to bring this scene back. Double-click to rename it. Right-click to overwrite or remove it. The lit scene is also updated when you save the rig.",
+                );
             if r.clicked() && !s.map_mode {
                 actions.push(Action::RecallSnapshot(n));
+            }
+            if r.double_clicked() && !s.map_mode {
+                st.scene_edit = Some((n, snap.name.clone()));
             }
             crate::map_mode::target(
                 ui,
@@ -749,14 +859,11 @@ fn scenes_bar(ui: &mut egui::Ui, s: &mut Session, actions: &mut Vec<Action>) {
                 actions,
             );
             r.context_menu(|ui| {
-                let mut name = snap.name.clone();
-                if ui
-                    .add(egui::TextEdit::singleline(&mut name).desired_width(160.0))
-                    .changed()
-                {
-                    actions.push(Action::RenameSnapshot(n, name));
+                if ui.button("Rename").clicked() {
+                    st.scene_edit = Some((n, snap.name.clone()));
+                    ui.close();
                 }
-                if ui.button("Update with what is set now").clicked() {
+                if ui.button("Overwrite with what is set now").clicked() {
                     actions.push(Action::UpdateSnapshot(n));
                     ui.close();
                 }
@@ -768,10 +875,11 @@ fn scenes_bar(ui: &mut egui::Ui, s: &mut Session, actions: &mut Vec<Action>) {
         }
         if hw::Cap::new("+ Store scene")
             .show(ui)
-            .on_hover_text("Remember the rack as it is now: which instruments play, their volumes, zones, effects and SoundFont sounds")
+            .on_hover_text("Remember the rack as it is now: which instruments play, their volumes, zones, effects and SoundFont sounds. Name it right away, then keep tuning: saving the rig updates the lit scene.")
             .clicked()
         {
             actions.push(Action::AddSnapshot);
+            st.scene_edit = Some((s.snapshots().len(), format!("Scene {}", s.snapshots().len() + 1)));
         }
         if s.snapshots().is_empty() {
             ui.label(
@@ -783,7 +891,7 @@ fn scenes_bar(ui: &mut egui::Ui, s: &mut Session, actions: &mut Vec<Action>) {
     });
 }
 
-const SCENES_HELP: &str = "A scene remembers which slots play, their volumes, zones, effects on or off and SoundFont sounds. Click one to bring it back (or map it to a pedal). Right-click to rename, update or remove it. Scenes are saved in the rig file.";
+const SCENES_HELP: &str = "A scene remembers which slots play, their volumes, zones, effects on or off and SoundFont sounds. Click one to bring it back (or map it to a pedal). Double-click to rename it; right-click to overwrite or remove it. Saving the rig also updates the lit scene with what is set now. Scenes are saved in the rig file.";
 
 fn header(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, actions: &mut Vec<Action>) {
     let perform = st.perform;
@@ -792,19 +900,9 @@ fn header(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, actions: &mut Ve
     ui.horizontal(|ui| {
         ui.label(RichText::new("MERLIN").size(18.0).strong().color(hw::AMBER));
         ui.add_space(6.0);
-        if perform {
-            // No New / Open / Save on stage: only the name of what is loaded.
-            hw::plate().show(ui, |ui| {
-                ui.label(
-                    RichText::new(&s.rig.name)
-                        .size(15.0)
-                        .strong()
-                        .color(hw::TEXT),
-                );
-            });
-        } else {
-            file_plate(ui, s, actions);
-        }
+        // The header looks the same in every view, so nothing moves when you switch. On stage the
+        // file buttons are there but dead: no New / Open / Save while performing.
+        ui.add_enabled_ui(!perform, |ui| file_plate(ui, s, actions));
         ui.add_space(10.0);
         let views = [View::Rack, View::Setlist, View::Perform, View::Settings];
         let names = ["RACK", "SETLIST", "PERFORM", "SETTINGS"];
@@ -837,16 +935,9 @@ fn header(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, actions: &mut Ve
             crate::map_mode::target(ui, s, &m, ControlAction::MasterVolume, None, actions);
             ui.add_space(6.0);
             capture_button(ui, s, actions);
-            if !locked {
-                crate::map_mode::toggle(ui, s, actions);
-            }
-            if perform {
-                crate::perform::lock_cap(ui, st, actions);
-                if hw::Cap::new("FULL SCREEN").show(ui).clicked() {
-                    actions.push(Action::ToggleFullscreen);
-                }
-            } else {
-                let open = st.keys_open;
+            ui.add_enabled_ui(!locked, |ui| crate::map_mode::toggle(ui, s, actions));
+            let open = st.keys_open;
+            ui.add_enabled_ui(!perform, |ui| {
                 if hw::Cap::new("")
                     .icon(hw::Icon::Keyboard)
                     .lit(open.then_some(hw::AMBER))
@@ -860,7 +951,7 @@ fn header(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, actions: &mut Ve
                 {
                     actions.push(Action::KeysDrawer(!open));
                 }
-            }
+            });
         });
     });
 }
@@ -1538,7 +1629,14 @@ fn editor_view(
     let before = (x, y);
     // The mouse wheel scrolls from anywhere over the editor's room (over the plugin itself the
     // plugin gets it): up and down move the picture, sideways too, or up and down when there is
-    // no vertical bar.
+    // no vertical bar. egui feeds a wheel notch out over several frames; without a frame asked
+    // for until it is used up, the rest of each notch waits for the next event and the scroll
+    // looks slow and skips.
+    if (need_x || need_y)
+        && ui.input(|i| i.is_scrolling() || i.smooth_scroll_delta != egui::Vec2::ZERO)
+    {
+        ui.ctx().request_repaint();
+    }
     if (need_x || need_y)
         && ui
             .input(|i| i.pointer.hover_pos().or(i.pointer.latest_pos()))

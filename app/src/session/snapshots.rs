@@ -76,6 +76,16 @@ impl Session {
         self.say(format!("scene {} updated", n + 1));
     }
 
+    /// Saving the rig also saves the scene that is lit, so a scene can be tuned and kept.
+    pub fn save_current_scene(&mut self) {
+        if let Some(n) = self.last_snapshot
+            && n < self.rig.snapshots.len()
+        {
+            let snap = self.capture_snapshot(self.rig.snapshots[n].name.clone());
+            self.rig.snapshots[n] = snap;
+        }
+    }
+
     pub fn rename_snapshot(&mut self, n: usize, name: String) {
         if let Some(s) = self.rig.snapshots.get_mut(n) {
             s.name = name;

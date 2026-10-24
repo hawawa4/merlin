@@ -1,39 +1,21 @@
 # QA checklist
 
 Things only a person with ears and a mouse can check. Run `just dev` unless a step says otherwise.
-Tick as you go; anything odd, send me what you saw (and the exact text of any error in the log line under the title).
+Sections 0 to 2 (frame, rack and effects, SoundFonts) and 5 (controls) are checked and gone. Tick as you go; anything odd, send me what you saw (and the exact text of any error in the log line under the title).
 
-## 0. The frame (header, views, scenes, browser)
-- [ ] The rig's **name, New, Open… and Save** sit together in one plate. **Save** glows amber while the rig has unsaved changes and goes dark after saving.
-- [ ] **RACK / SETLIST / PERFORM / SETTINGS** is one switch: the view you are in is lit. Each button goes to that view; there are no *Close* buttons any more. In Perform with the lock on, the switch is not reachable (as before).
-- [ ] **MIDI MAP** is a normal button that lights amber while map mode is on (Ctrl+M still toggles it). **CAPTURE MIDI** greys out only when capture is off in Settings.
-- [ ] The **Scenes** strip (it was Snapshots): with none stored it says what a scene is; **+ Store scene** adds one; click one to recall it (it lights amber), right-click to rename, update or remove. It is hidden in Settings.
-- [ ] The browser is a tree: a branch per family (Keys, Synth...), then per instrument inside it, then *Untagged*. Click a branch to open or close it. Typing in the search box or picking a family opens everything that is left. **Favourites** (above the tree) shows only your starred plugins, as a plain list. Clicking a star in **All** only fills or empties that star: nothing moves. Drag or double-click a plugin as before; right-click still tags it.
+## 0. Re-check: fixes from your last report
+- [ ] **Text size and contrast.** Open **Settings** (every tab) and **Setlist** (add a song, a part, a track): all text is readable at a normal distance, the small grey help lines included. Anything still too small or too dim? Say which tab.
+- [ ] **The header never changes.** Click RACK, SETLIST, PERFORM, SETTINGS: the rig plate, the view switch, the three icon buttons, master and PANIC stay exactly where they are. In Perform, New / Open… / Save and the keyboard button are there but greyed out; **LOCK** and **FULL SCREEN** are now in the *Stage* strip right under the notice line. With the lock on, the view switch and MIDI MAP are greyed (not gone).
+- [ ] **Folder dialogs.** Settings > Plugins: **Add folder…** opens your desktop's folder chooser (KDE's or GTK's); choosing a folder adds it (and a rescan finds its plugins); cancelling adds nothing. Same for the sound folders, Settings > MIDI > MIDI capture > **Choose…** (and **Default**), Settings > Windows plugins > **Browse…** for the Wine program, the yabridge folder and the installer, and **Add folder…** for Windows VST2 folders. No box asks you to type a path to add (the Wine and yabridge boxes can still be typed in).
+- [ ] **Scenes** (see 5b below): rename by double-click, overwrite, and Save also saves the lit scene.
+- [ ] **Browser** (see 5o below): a small picture beside each family, instrument and plugin; right-click works every time; double-click fills the first empty slot.
+- [ ] **Mouse wheel on a plugin's scroll bar** (Podolski, or any editor bigger than the dock): turn the wheel over the empty room or the bar beside the plugin. It should now glide, one notch moving the picture the same way every time, as smooth as dragging the thumb. If it still skips, tell me which plugin and whether the wheel was over the bar or the empty room.
 
-## 1. Rack and effects
-- [ ] The **keyboard button** in the header (a little keyboard, next to MIDI MAP) shows and hides the on-screen keys; they start hidden. Hidden, they take no room at all and the editor grows. Playing with the mouse, the zones and the note dots work as before when it is shown.
-- [ ] **FIT TO WINDOW** (next to MIDI LEARN) starts **off**: a plugin's window is its normal size, with **scroll bars** in strips beside it when it is bigger than the space (drag the thumb, or click the track; try Podolski, whose window is a little taller than the dock). Turn it on (lit) and the window is scaled down to fit, keeping its shape, never bigger than it was made and never below 60 %: fold the rack, drag the effects strip, change the window size, and it follows (after the size holds still for a moment). Try Six Sines, Surge XT (CLAP and VST3), a Windows plugin, an LV2: is the whole picture shrunk, or cropped? Turn it off again: every window goes back to its normal size and scale, and the knobs answer as before.
-- [ ] The header and dock buttons are pictures with hover text: MIDI MAP is a keyboard beside a globe, CAPTURE MIDI a cassette, MIDI LEARN a keyboard under a graduation cap, POP OUT / BRING BACK a window with an arrow out / in, FIT TO WINDOW an up-and-down arrow between two bars.
-- [ ] The scroll bars beside a plugin's window react to the mouse (a text cursor over them was a bug: an empty label covered them). Drag the thumb on Podolski; the mouse wheel scrolls too, over the bar or over the empty room beside the plugin (over the plugin itself the plugin gets the wheel).
-- [ ] While a window is popped out, **1×  1.25×  1.5×** (next to BRING BACK) resize it (Six Sines, Surge XT scale; a plugin that cannot be scaled says so in the notice strip and stays at 1×).
-- [ ] **POP OUT** (next to FIT TO WINDOW) opens the plugin in a window of its own at exactly the size it was made for, with the dock saying so; **BRING BACK** (or closing that window) puts it back in the dock. The window cannot be resized; knobs, menus and the keyboard work in it as in the dock. Try one plugin from each format, a Windows one included, and an insert effect.
-- [ ] The browser has a **<** button at its top right that folds it to a narrow strip (click **>** to bring it back), and its right edge can be dragged to make it wider or narrower.
-- [ ] The **RACK** bar above the slots folds the rack down to the slot you are editing (and back). Open the **Effects** drawer and drag the dotted strip at the bottom of the pedals up and down: the pedals' area changes height, the editor below takes what is left.
-- [ ] The framed strip under the header is where the app talks to you: it turns amber and says what to do while you map something (*Turn a knob in the plugin's own window…*, *Now move a control on your device to map “Cutoff”*), green after a capture, red for an error, and shows the last message for a few seconds, then *Ready*. The engine's numbers sit at its right end.
-- [ ] Pedal LEDs are black when the effect is off and red when it is on.
-- [ ] Layer 3–4 slots (click one, shift-click others) and play. Each row shows a small `N.N%` next to its meter; Windows plugins add `wine N%`. Hover it for the explanation. Does anything go orange or red while you play normally?
-- [ ] Open the **Effects** drawer (the bar under the slot rows, with the chevron). The other slots fold away except the one you are on, its pedals open where the rack was, and the instrument's editor stays visible underneath. Click a number next to *Slot* to move to another slot's effects. Click the bar again and the rack comes back.
-- [ ] In the drawer: *+ Load effect* → "Surge XT Effects" as an insert. Click its **ON** (lit green) to bypass it: the sound should change back at once, and **ON** goes dark. Open its editor with **EDIT**; **REMOVE** takes it out.
-- [ ] Save the rig, press **New**, reopen it. The insert, its settings and its bypass state come back.
-- [ ] In the Effects drawer: EQ, compressor, delay and reverb are pedals with knobs, an LED and a footswitch. Click the footswitch: the LED lights and the effect is on. Turn knobs (drag, Shift for fine, wheel, double-click resets): the number under the knob follows and the sound changes. The compressor's lamps show gain reduction while you play.
-- [ ] **MIDI MAP** (Ctrl+M) in the Effects drawer: every knob and footswitch is tinted. Click a knob, move a knob on your controller: the tint turns green with the control's name (`CC 74`), and the on-screen knob then follows the controller. Same on the SoundFont rack unit. *Pick up* (Settings > Controls) still stops jumps after a scene change.
-
-## 2. SoundFonts
-- [ ] Load MuseScore General and a system SF2. Pick presets from the list, use the search box, move **level**.
-- [ ] The **Shape the sound** rack unit above the preset list has a knob each for level, attack, release, brightness, resonance, tuning and voices. Drag a knob up and down (hold Shift for fine steps), use the scroll wheel over it, double-click to put it back. Each should be audible; **RESET** undoes all but level. Save and reopen: values stay.
-- [ ] Pick a drum kit (bank 128, e.g. "Standard") and play across the keyboard.
-- [ ] Settings → Plugins → *Sound folders*: add a folder with a `.sf2`; it appears in the browser.
-- [ ] Drag a `.sf2` from your file manager onto the window **while a plugin editor is showing** (not just on the empty dock). Banner appears? File loads?
+## 2. SoundFont folders
+- [ ] **A folder of SoundFonts is one instrument.** Make a folder with two or more `.sf2`/`.sf3` files in it (for instance *Salamander* with a few fonts, inside a sound folder from Settings > Plugins, or inside `~/.local/share/soundfonts`) and rescan. The browser shows one entry, *Salamander (SoundFonts)*, named like the folder, instead of one per file. A folder with a single font keeps showing that font by its own name. The standard system folders (`/usr/share/sounds/sf2`, `~/.local/share/soundfonts` itself) keep their fonts as separate instruments; only the folders *inside* them (or a folder you add yourself in Settings) are grouped. Settings > Sound folders counts files.
+- [ ] Load that entry into a slot: *Shape the sound* and the preset list appear, and the list is grouped under each file's name (search also finds file names). *now:* says *file · preset*. Pick presets from different files: each plays its own file's sound (a General MIDI font and a special one: the special one's sounds must not fall silent or play the wrong piano). Program Change from a keyboard moves within the file that is playing.
+- [ ] Save the rig with a preset from the second file, **New**, reopen: same preset, same file. Then add another font to the folder (one that sorts first), rescan, reopen the rig: it is still the same file's preset. (Scenes remember a preset by number, so a scene stored before adding a file may point at another file's preset: tell me if that bites.)
+- [ ] A damaged `.sf2` in the folder does not stop the others from loading. A folder with many large fonts shows "decoding…" in the slot and the app keeps responding.
 
 ## 3. Windows plugins
 - [ ] Windows plugins are in the browser without pressing anything. Load Podolski and TyrellN6 (VST3 and CLAP). Play, use the editor, save and reopen.
@@ -46,19 +28,12 @@ Tick as you go; anything odd, send me what you saw (and the exact text of any er
 - [ ] When the fake keyboard exits, the log says the device is gone; run it again and it comes back with the role you set.
 - [ ] With a real keyboard (later): what is it called in the list? Does it play? Does unplugging and replugging it behave?
 
-## 5. Controls (needs a controller or a keyboard with pedals/knobs; or use the pretend one)
-- [ ] No hardware: `just e2e-controls` prints `ok: ...`.
-- [ ] Settings → Controls. Pick "Select a slot", slot 2, press **Learn…**, press a pad/button/pedal on your device. The mapping appears and pressing it switches slots.
-- [ ] Learn a foot switch for **Next slot** and another for **Previous slot**: do they walk through the loaded slots and wrap around?
-- [ ] Learn a fader or knob for **Volume of a slot** and another for **Master volume**. With "Pick up", does the knob do nothing until it reaches the current value, then follow it?
-- [ ] Map **Select the slot given by the number sent** to Program Change, then send program changes from your keyboard (or use its patch buttons).
-- [ ] A mapped key or pedal must no longer play the instrument; unmapped ones still do.
-- [ ] Save the rig, close, reopen: the mappings are still there.
-
 ## 5b. Scenes (no hardware needed except the last three items)
 Scenes are saved inside the rig file, so one file holds the whole setup.
-- [ ] Load 3 slots. Make a sound you like (slot 1 plays, volumes set, one effect on) and press **+ Store scene** in the strip under the title bar. Change things (select slot 3, lower a volume, mute a slot, switch an effect off, pick another SoundFont preset), save a second scene, then click between them. Each click restores: which slots play, volumes, mute, zones, effects on/off, insert bypass, SoundFont preset, master volume.
-- [ ] Right-click a scene: rename it, **Update with what is set now**, **Remove**.
+- [ ] Load 3 slots. Make a sound you like (slot 1 plays, volumes set, one effect on) and press **+ Store scene** in the strip under the title bar. The new scene's name opens for typing at once: type one and press Enter (Escape keeps *Scene N*). Change things (select slot 3, lower a volume, mute a slot, switch an effect off, pick another SoundFont preset), store a second scene, then click between them. Each click restores: which slots play, volumes, mute, zones, effects on/off, insert bypass, SoundFont preset, master volume.
+- [ ] **Double-click** a scene: its name becomes a text field with the old name selected. Enter or a click elsewhere keeps the new name, Escape drops it. A single click still just recalls it.
+- [ ] **Pre-create, then tune:** press **+ Store scene** four times, naming each (Verse, Chorus...). Click *Chorus*, change a few things, press the rig's **Save**: *Chorus* now holds those changes (click *Verse*, then *Chorus* again to see) and the other scenes are untouched.
+- [ ] Right-click a scene: **Rename** (same text field in the strip), **Overwrite with what is set now**, **Remove**. The menu has no text field in it any more, so it stays open until you pick something.
 - [ ] Recalling a scene while holding a key: no stuck note, no pop you wouldn't expect.
 - [ ] Save the rig, **New**, reopen it: the scenes are in the strip and still recall correctly.
 - [ ] Open a rig that has *fewer* instruments loaded than the scene expects (unload a slot after saving it): recalling works and nothing crashes.
@@ -66,11 +41,12 @@ Scenes are saved inside the rig file, so one file holds the whole setup.
 - [ ] *Next scene* and *Previous scene* on a foot switch step through the strip and wrap.
 - [ ] *Recall the scene given by the number sent* on Program Change: patch 0 is the first scene. After a recall, a mapped knob does nothing until it reaches the value (if set to Pick up).
 
+
 ## 5c. Perform view
-- [ ] Press **PERFORM** in the header (or F11). The header stays the same (name of the rig, view switch, MIDI MAP, CAPTURE MIDI, master, PANIC; New/Open/Save are not there, and LOCK and FULL SCREEN are added). The editor disappears and you get scene buttons, one tile per loaded instrument, the master fader and PANIC. Click a scene: it recalls and lights up.
+- [ ] Press **PERFORM** in the header (or F11). The header stays exactly as in the other views (New / Open… / Save and the keyboard button greyed out); LOCK and FULL SCREEN sit in the *Stage* strip below it. The editor disappears and you get scene buttons, one tile per loaded instrument, the master fader and PANIC. Click a scene: it recalls and lights up.
 - [ ] Click a tile's name: only that instrument plays (its border lights). **+** layers it with the others. **MUTE** mutes it. The tile's slider changes its volume and the bar above it moves while you play.
 - [ ] **Full screen** toggles the window; F11, Escape or **RACK** in the switch goes back to the rack, and the editor of the selected slot returns.
-- [ ] **LOCK**: then the view switch is greyed, Escape and F11 do nothing, and dropping a file on the window is ignored (the strip under the header says so). A quick click on **LOCKED · HOLD TO UNLOCK** does nothing; holding it for about a second (a white bar fills) unlocks.
+- [ ] **LOCK** (in the Stage strip): then the view switch and MIDI MAP are greyed, Escape and F11 do nothing, and dropping a file on the window is ignored (the strip under the header says so). A quick click on **LOCKED · HOLD TO UNLOCK** does nothing; holding it for about a second (a white bar fills) unlocks.
 - [ ] With a controller: scene and slot mappings keep working while locked; the tiles follow.
 - [ ] On a touch screen, if you have one: are the buttons big enough, does holding to unlock work?
 - [ ] Window start: launching the app from a terminal while typing elsewhere must not steal your typing focus (needs your KDE setup; see the log line "could not ask for a quiet start" if it fails).
@@ -183,7 +159,10 @@ The app always listens to your keyboards and the on-screen keys. Nothing is writ
 - [ ] MIDI map mode: click **Capture MIDI**, press a pad or a foot switch: it is mapped. A controller-role device (the Launchkey's pads) and anything mapped never appears in the file.
 - [ ] A long session: leave it running for an hour of normal playing and check memory (Settings > Performance, or `ps`): the capture should stay a few MB at most.
 
-## 5b. Browser: favourites and tags
+## 5o. Browser: icons, double-click, favourites and tags
+- [ ] Every family branch has a little picture (Keys a keyboard, Strings a violin, Guitars a guitar, Woodwinds a clarinet, Brass a trumpet, Voices a microphone, Percussion a drum, Synth a waveform, World a globe, Multi-instrument a rack, Other a sparkle), instruments with their own look have one too (Organ pipes, Harp, Saxophone, French Horn), and each plugin row shows the picture of its first tag (a plain circle with *?* under *Untagged*). Do they read at a glance? Are any wrong or ugly?
+- [ ] **Double-click** a plugin: it loads into the first empty slot (not the slot you are looking at), and double-clicking several in a row fills slots 1, 2, 3... Dragging onto a slot still works, with the name following the pointer.
+- [ ] **Right-click** a plugin name: the menu opens every time, also if you hold the button a moment or wiggle the mouse a little. Dragging with the left button still starts a drag, and a right-drag does not.
 - [ ] Click the star beside a plugin: it fills yellow where it is (the list does not move). **Favourites** (above the list) shows only starred plugins. Quit and reopen: still favourites.
 - [ ] Right-click a plugin: *Favourite*, then *Tag as* with a submenu per family (Keys, Brass, Woodwinds...) and the instruments inside (Piano, Trumpet, Flute...). Tick *Keys > Piano*: the menu stays open; also tick *Synth > Pad*. Click outside. The plugin shows `Keys › Piano, Synth › Pad` under its name, and the family's name is gold in the menu.
 - [ ] Under the search box, choose the family *Keys*: only plugins tagged Keys remain, and the second list (*Any instrument*) becomes usable; pick *Piano*. *Untagged* lists what you have not tagged yet. It combines with the search box and **Favourites**.

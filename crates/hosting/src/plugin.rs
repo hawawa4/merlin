@@ -46,6 +46,9 @@ pub struct PresetInfo {
     pub bank: u16,
     pub program: u8,
     pub name: String,
+    /// The file it comes from, when the instrument is a folder of SoundFonts. `bank` then
+    /// carries the file's number in its high byte and the file's own bank in its low byte.
+    pub file: Option<String>,
 }
 
 /// How a sampler's sound is shaped on top of its preset, in musical units. All zeros (and the

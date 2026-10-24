@@ -120,7 +120,7 @@ pub struct SlotCpu {
 struct FontMsg {
     slot: usize,
     found: Found,
-    font: Result<Arc<merlin_hosting::soundfont::Font>>,
+    fonts: Result<Vec<Arc<merlin_hosting::soundfont::Font>>>,
 }
 
 struct SlotWaker {
@@ -793,14 +793,12 @@ impl Session {
         }
     }
 
-    /// Loads browser entry `k` into the slot being viewed if that is empty, else the first
-    /// empty slot.
+    /// Loads browser entry `k` into the first empty slot (one that is not being loaded into
+    /// either, so a quick second double-click lands on the next row).
     pub fn load_into_free_slot(&mut self, k: usize) -> Result<()> {
         let found = self.found.get(k).cloned().context("no such plugin")?;
-        let free = self
-            .viewing
-            .filter(|&i| self.rig.slots[i].instrument.is_none())
-            .or_else(|| (0..UI_SLOTS).find(|&i| self.rig.slots[i].instrument.is_none()))
+        let free = (0..UI_SLOTS)
+            .find(|&i| self.rig.slots[i].instrument.is_none() && self.loading[i].is_none())
             .context("all slots are in use: drop it on one to replace it")?;
         self.load(free, &found)
     }
@@ -963,7 +961,11 @@ impl Session {
     }
 
     fn refresh_found(&mut self) {
-        self.found = merlin_scanner::with_feature(&self.entries, "instrument");
+        // Folders full of SoundFonts are one instrument each; the system folders keep theirs apart.
+        self.found = merlin_scanner::group_soundfonts(
+            merlin_scanner::with_feature(&self.entries, "instrument"),
+            &merlin_scanner::default_sound_dirs(),
+        );
         let db = crate::autotag::Database::builtin();
         self.auto_tags = self
             .found
@@ -1145,7 +1147,7 @@ impl Session {
             proxy: Mutex::new(self.proxy.clone()),
             slot: i,
         });
-        let plugin: Box<dyn PluginHandle> = if merlin_hosting::soundfont::is_soundfont(path) {
+        let plugin: Box<dyn PluginHandle> = if merlin_hosting::soundfont::is_source(path) {
             Box::new(merlin_hosting::soundfont::SoundFontPlugin::open(path)?)
         } else if path.extension().is_some_and(|e| e == "vst3") {
             Box::new(Vst3Library::load(path)?.create(id, waker)?)
@@ -1185,19 +1187,39 @@ impl Session {
     /// that has to be decoded first (seconds for an SF3) is decoded on a worker thread, and the
     /// slot says "loading" until it is ready.
     pub fn load(&mut self, i: usize, found: &Found) -> Result<()> {
-        use merlin_hosting::soundfont::{Font, is_soundfont};
+        use merlin_hosting::soundfont::{Font, files_of, is_source};
         self.loading[i] = None;
-        if is_soundfont(&found.path) && !Font::is_cached(&found.path) {
+        if is_source(&found.path) && !files_of(&found.path).iter().all(|f| Font::is_cached(f)) {
             self.loading[i] = Some((found.path.clone(), found.info.name.clone()));
             let (tx, owned, proxy) = (self.font_tx.clone(), found.clone(), self.proxy.clone());
             std::thread::Builder::new()
                 .name("soundfont-load".into())
                 .spawn(move || {
-                    let font = Font::load(&owned.path);
+                    // A folder's fonts decode side by side.
+                    let files = files_of(&owned.path);
+                    let fonts = std::thread::scope(|scope| {
+                        let jobs: Vec<_> = files
+                            .iter()
+                            .map(|f| scope.spawn(move || Font::load(f)))
+                            .collect();
+                        let loaded: Vec<_> =
+                            jobs.into_iter().filter_map(|j| j.join().ok()).collect();
+                        let ok: Vec<_> = loaded
+                            .iter()
+                            .filter_map(|r| r.as_ref().ok().cloned())
+                            .collect();
+                        match (ok.is_empty(), loaded.into_iter().find_map(Result::err)) {
+                            (true, Some(e)) => Err(e),
+                            (true, None) => {
+                                Err(anyhow!("{} has no SoundFonts", owned.path.display()))
+                            }
+                            _ => Ok(ok),
+                        }
+                    });
                     let _ = tx.send(FontMsg {
                         slot: i,
                         found: owned,
-                        font,
+                        fonts,
                     });
                     let _ = proxy.send_event(UserEvent::Font);
                 })
@@ -1218,13 +1240,13 @@ impl Session {
                 continue; // the slot was given something else meanwhile
             }
             self.loading[msg.slot] = None;
-            match msg.font {
-                // `font` stays alive until the plugin holds its own copy.
-                Ok(font) => {
+            match msg.fonts {
+                // The fonts stay alive until the plugin holds its own copies.
+                Ok(fonts) => {
                     if let Err(e) = self.load_now(msg.slot, &msg.found) {
                         self.say(format!("error: {e:#}"));
                     }
-                    drop(font);
+                    drop(fonts);
                 }
                 Err(e) => self.say(format!(
                     "slot {}: {}: {e:#}",
@@ -1853,7 +1875,7 @@ impl Session {
 
     /// Decodes every SoundFont the rig uses, one thread per file.
     fn decode_soundfonts(&self) -> Vec<Arc<merlin_hosting::soundfont::Font>> {
-        use merlin_hosting::soundfont::{Font, is_soundfont};
+        use merlin_hosting::soundfont::{Font, files_of, is_source};
         let mut paths: Vec<PathBuf> = self
             .rig
             .slots
@@ -1861,7 +1883,9 @@ impl Session {
             .filter_map(|s| s.instrument.as_ref())
             .filter_map(|r| self.locate(r).ok())
             .map(|(p, _)| p)
-            .filter(|p| is_soundfont(p) && !Font::is_cached(p))
+            .filter(|p| is_source(p))
+            .flat_map(|p| files_of(&p))
+            .filter(|p| !Font::is_cached(p))
             .collect();
         paths.sort();
         paths.dedup();

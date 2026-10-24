@@ -17,6 +17,7 @@ use crate::ui::{Action, UiState};
 pub const UNLOCK_HOLD: Duration = Duration::from_millis(1200);
 
 pub fn show(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
+    egui::Panel::top("perform-stage").show(ui, |ui| stage_strip(ui, st, actions));
     egui::Panel::top("perform-transport").show(ui, |ui| transport(ui, s, actions));
     egui::Panel::bottom("perform-master").show(ui, |ui| master(ui, s, actions));
     egui::CentralPanel::default().show(ui, |ui| {
@@ -32,7 +33,20 @@ pub fn show(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<
     }
 }
 
-/// Lock, or (while locked) Unlock that has to be held. It sits in the shared header.
+/// The stage view's own controls, so the header can stay the same as in every other view.
+fn stage_strip(ui: &mut egui::Ui, st: &mut UiState, actions: &mut Vec<Action>) {
+    ui.horizontal(|ui| {
+        crate::hw::engraved(ui, "Stage");
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            lock_cap(ui, st, actions);
+            if crate::hw::Cap::new("FULL SCREEN").show(ui).clicked() {
+                actions.push(Action::ToggleFullscreen);
+            }
+        });
+    });
+}
+
+/// Lock, or (while locked) Unlock that has to be held.
 pub fn lock_cap(ui: &mut egui::Ui, st: &mut UiState, actions: &mut Vec<Action>) {
     if !st.locked {
         if crate::hw::Cap::new("LOCK")

@@ -9,9 +9,11 @@
 
 mod autotag;
 mod browser;
+mod dialog;
 mod drivers;
 mod guard;
 mod hw;
+mod icons;
 mod keyboard;
 mod macro_panel;
 mod map_mode;
@@ -166,6 +168,7 @@ impl App {
         println!("main window X11 id {xid:#x}");
 
         let ctx = egui::Context::default();
+        hw::apply_style(&ctx);
         let config = egui_wgpu::WgpuConfiguration {
             wgpu_setup: egui_wgpu::WgpuSetup::from_display_handle(
                 event_loop.owned_display_handle(),
@@ -1014,13 +1017,17 @@ impl Running {
                 Ok(())
             }
             Action::SaveRig => {
+                s.save_current_scene();
                 let path = s
                     .rig_path
                     .clone()
                     .unwrap_or_else(|| paths::rigs_dir().join(paths::rig_file_name(&s.rig.name)));
                 s.save_rig(&path)
             }
-            Action::SaveAs(path) => s.save_rig(&path),
+            Action::SaveAs(path) => {
+                s.save_current_scene();
+                s.save_rig(&path)
+            }
             Action::OpenRig(path) | Action::OpenPath(path) => s.open_rig(&path),
             Action::Peak => {
                 let peaks = s.take_peaks();

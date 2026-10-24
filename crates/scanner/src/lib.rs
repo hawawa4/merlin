@@ -360,6 +360,50 @@ pub fn with_feature(entries: &[Entry], feature: &str) -> Vec<Found> {
     v
 }
 
+/// Folders full of SoundFonts become one instrument each, named like the folder: a folder with
+/// two or more SoundFont files directly inside it replaces them in the list. Files in
+/// `loose_dirs` (the standard system folders, which hold unrelated fonts side by side) stay
+/// instruments of their own, and so does a lone file in its folder.
+pub fn group_soundfonts(found: Vec<Found>, loose_dirs: &[PathBuf]) -> Vec<Found> {
+    use merlin_hosting::soundfont::collection_info;
+    let is_font =
+        |f: &Found| f.info.format == merlin_model::Format::SoundFont && is_soundfont(&f.path);
+    let mut count: std::collections::HashMap<PathBuf, usize> = Default::default();
+    for f in found.iter().filter(|f| is_font(f)) {
+        if let Some(dir) = f.path.parent() {
+            *count.entry(dir.to_owned()).or_default() += 1;
+        }
+    }
+    let grouped = |dir: &Path| {
+        count.get(dir).is_some_and(|&n| n >= 2) && !loose_dirs.iter().any(|d| d == dir)
+    };
+    let mut out = Vec::new();
+    let mut made: Vec<PathBuf> = Vec::new();
+    for f in found {
+        match f.path.parent().filter(|d| is_font(&f) && grouped(d)) {
+            Some(dir) => {
+                if !made.iter().any(|d| d == dir) {
+                    made.push(dir.to_owned());
+                    out.push(Found {
+                        path: dir.to_owned(),
+                        windows: false,
+                        info: collection_info(dir),
+                    });
+                }
+            }
+            None => out.push(f),
+        }
+    }
+    out.sort_by(|a, b| {
+        a.info
+            .name
+            .to_lowercase()
+            .cmp(&b.info.name.to_lowercase())
+            .then(a.windows.cmp(&b.windows))
+    });
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -642,5 +686,56 @@ mod tests {
         assert!(synth.is_instrument());
         assert_eq!(synth.format, Format::Vst3);
         assert!(load_any(Path::new("/nonexistent.vst3"), false).is_err());
+    }
+
+    fn font(path: &str) -> Found {
+        Found {
+            path: path.into(),
+            windows: false,
+            info: merlin_hosting::soundfont::info_for(Path::new(path)),
+        }
+    }
+
+    #[test]
+    fn a_folder_of_soundfonts_becomes_one_instrument_named_like_the_folder() {
+        let found = vec![
+            font("/sf/Pianos/a.sf2"),
+            font("/sf/Pianos/b.sf3"),
+            font("/sf/Strings/lone.sf2"),
+            font("/sf/Pianos/c.sf2"),
+            font("/sf/Brass/x.sf2"),
+            font("/sf/Brass/y.sf2"),
+        ];
+        let out = group_soundfonts(found, &[]);
+        let names: Vec<_> = out.iter().map(|f| f.info.name.as_str()).collect();
+        assert_eq!(names, ["Brass", "lone", "Pianos"]);
+        let pianos = out.iter().find(|f| f.info.name == "Pianos").unwrap();
+        assert_eq!(pianos.path, Path::new("/sf/Pianos"));
+        assert_eq!(pianos.info.id, "folder:Pianos");
+        assert!(pianos.info.is_instrument());
+    }
+
+    #[test]
+    fn the_system_folders_keep_their_fonts_apart() {
+        let found = vec![
+            font("/usr/share/sounds/sf2/a.sf2"),
+            font("/usr/share/sounds/sf2/b.sf2"),
+        ];
+        let out = group_soundfonts(found.clone(), &[PathBuf::from("/usr/share/sounds/sf2")]);
+        assert_eq!(out, found);
+    }
+
+    #[test]
+    fn plugins_are_never_grouped() {
+        let plugin = Found {
+            path: "/p/Synth.clap".into(),
+            windows: false,
+            info: PluginInfo {
+                features: vec!["instrument".into()],
+                ..info("synth")
+            },
+        };
+        let out = group_soundfonts(vec![plugin.clone(), plugin.clone()], &[]);
+        assert_eq!(out.len(), 2);
     }
 }

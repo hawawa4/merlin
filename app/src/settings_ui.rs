@@ -1,11 +1,11 @@
 //! The settings panel: plugins, audio, MIDI, Windows plugins, performance check.
 
-use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use egui::{Color32, RichText};
 
+use crate::dialog::Want;
 use crate::perf::{self, Status};
 use crate::session::Session;
 use crate::ui::{Action, UiState};
@@ -220,16 +220,7 @@ fn plugins(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<A
             }
         });
     }
-    ui.horizontal(|ui| {
-        ui.add(
-            egui::TextEdit::singleline(&mut st.dir_text)
-                .hint_text("/path/to/more/plugins")
-                .desired_width(360.0),
-        );
-        if ui.button("Add folder").clicked() && !st.dir_text.trim().is_empty() {
-            actions.push(Action::AddDir(std::mem::take(&mut st.dir_text)));
-        }
-    });
+    crate::ui::pick_button(ui, &mut st.picking, "Add folder…", Want::PluginDir, None);
     ui.add_space(12.0);
     sound_folders(ui, s, st, actions);
     ui.add_space(8.0);
@@ -393,14 +384,17 @@ fn click_output(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
 fn sound_folders(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
     use merlin_model::Format;
     let count = |dir: &std::path::Path| {
-        s.found
+        // Files, not browser entries: a folder of SoundFonts is one entry.
+        s.entries
             .iter()
-            .filter(|f| f.info.format == Format::SoundFont && f.path.starts_with(dir))
+            .filter(|e| {
+                e.path.starts_with(dir) && e.plugins.iter().any(|p| p.format == Format::SoundFont)
+            })
             .count()
     };
     ui.strong("Sound folders (SoundFonts)");
     ui.label(
-        RichText::new("Every .sf2 and .sf3 in these folders appears in the browser as an instrument. You can also drop a SoundFont file on the window.")
+        RichText::new("Every .sf2 and .sf3 in these folders appears in the browser as an instrument. A folder with several SoundFonts directly inside it (other than the standard folders below) shows up as one instrument named like the folder, with all its sounds in one list. You can also drop a SoundFont file on the window.")
             .small()
             .weak(),
     );
@@ -420,16 +414,7 @@ fn sound_folders(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut
             }
         });
     }
-    ui.horizontal(|ui| {
-        ui.add(
-            egui::TextEdit::singleline(&mut st.sound_dir_text)
-                .hint_text("/path/to/more/soundfonts")
-                .desired_width(360.0),
-        );
-        if ui.button("Add folder").clicked() && !st.sound_dir_text.trim().is_empty() {
-            actions.push(Action::AddSoundDir(std::mem::take(&mut st.sound_dir_text)));
-        }
-    });
+    crate::ui::pick_button(ui, &mut st.picking, "Add folder…", Want::SoundDir, None);
 }
 
 /// What the MIDI controls do: the list of mappings, and teaching a new one by moving a control.
@@ -805,20 +790,16 @@ fn capture(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<A
     }
     ui.horizontal(|ui| {
         ui.label("Save to");
-        if st.capture_dir_text.is_empty() {
-            st.capture_dir_text = s.capture_dir().display().to_string();
-        }
-        let edit =
-            ui.add(egui::TextEdit::singleline(&mut st.capture_dir_text).desired_width(320.0));
-        if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-            let text = st.capture_dir_text.trim().to_owned();
-            actions.push(Action::SetCaptureDir(
-                (!text.is_empty()).then(|| PathBuf::from(text)),
-            ));
-        }
+        ui.label(RichText::new(s.capture_dir().display().to_string()).monospace());
+        crate::ui::pick_button(
+            ui,
+            &mut st.picking,
+            "Choose…",
+            Want::CaptureDir,
+            Some(&s.capture_dir()),
+        );
         if ui.button("Default").clicked() {
             actions.push(Action::SetCaptureDir(None));
-            st.capture_dir_text.clear();
         }
     });
     if ui
@@ -904,14 +885,21 @@ fn own_wine(ui: &mut egui::Ui, st: &mut UiState, actions: &mut Vec<Action>) {
             .weak(),
     );
     ui.add_space(6.0);
-    for (label, text) in [
-        ("Wine program", &mut st.wine_text),
-        ("yabridge folder", &mut st.yab_text),
+    let picking = &mut st.picking;
+    for (label, text, browse) in [
+        ("Wine program", &mut st.wine_text, &Want::WineProgram),
+        ("yabridge folder", &mut st.yab_text, &Want::YabridgeDir),
     ] {
         ui.horizontal(|ui| {
             ui.label(label);
             ui.add(egui::TextEdit::singleline(text).desired_width(460.0));
             let path = std::path::Path::new(text.as_str());
+            let start = if *browse == Want::WineProgram {
+                path.parent()
+            } else {
+                Some(path)
+            };
+            crate::ui::pick_button(ui, picking, "Browse…", *browse, start);
             if text.is_empty() {
                 ui.label(RichText::new("not set").weak());
             } else if path.exists() {
@@ -1013,6 +1001,7 @@ fn windows_plugins(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &m
                         .hint_text("/path/to/Plugin-Setup.exe")
                         .desired_width(460.0),
                 );
+                crate::ui::pick_button(ui, &mut st.picking, "Browse…", Want::Installer, None);
                 if ui
                     .add_enabled(
                         !s.windows_busy() && !st.installer_text.trim().is_empty(),
@@ -1040,21 +1029,8 @@ fn windows_plugins(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &m
                     }
                 });
             }
-            ui.horizontal(|ui| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut st.vst2_dir_text)
-                        .hint_text("/path/to/VstPlugins")
-                        .desired_width(420.0),
-                );
-                if ui
-                    .add_enabled(
-                        !s.windows_busy() && !st.vst2_dir_text.trim().is_empty(),
-                        egui::Button::new("Add folder"),
-                    )
-                    .clicked()
-                {
-                    actions.push(Action::AddWindowsVst2Dir(std::mem::take(&mut st.vst2_dir_text)));
-                }
+            ui.add_enabled_ui(!s.windows_busy(), |ui| {
+                crate::ui::pick_button(ui, &mut st.picking, "Add folder…", Want::Vst2Dir, None);
             });
         });
     if !s.windows_status.is_empty() {

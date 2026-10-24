@@ -14,12 +14,37 @@ const CAP: Color32 = Color32::from_rgb(0x3a, 0x3d, 0x43);
 const BEVEL_HI: Color32 = Color32::from_rgb(0x62, 0x66, 0x6e);
 const BEVEL_LO: Color32 = Color32::from_rgb(0x0b, 0x0b, 0x0d);
 pub const TEXT: Color32 = Color32::from_rgb(0xdc, 0xdd, 0xe0);
-pub const TEXT_DIM: Color32 = Color32::from_rgb(0x8d, 0x90, 0x97);
+pub const TEXT_DIM: Color32 = Color32::from_rgb(0xae, 0xb1, 0xb8);
 
 pub const AMBER: Color32 = Color32::from_rgb(0xe8, 0xb4, 0x40);
 pub const GREEN: Color32 = Color32::from_rgb(0x58, 0xd0, 0x70);
 pub const RED: Color32 = Color32::from_rgb(0xff, 0x2a, 0x1e);
 pub const BLUE: Color32 = Color32::from_rgb(0x4a, 0xa3, 0xe0);
+
+/// The app-wide text: egui's defaults (9 pt small print, grey on grey) are unreadable on a stage
+/// monitor, and the settings and setlist are full of small, weak text.
+pub fn apply_style(ctx: &egui::Context) {
+    use egui::{FontFamily, TextStyle};
+    ctx.global_style_mut(|style| {
+        let sizes = [
+            (TextStyle::Small, 12.5, FontFamily::Proportional),
+            (TextStyle::Body, 14.5, FontFamily::Proportional),
+            (TextStyle::Button, 14.5, FontFamily::Proportional),
+            (TextStyle::Heading, 22.0, FontFamily::Proportional),
+            (TextStyle::Monospace, 14.0, FontFamily::Monospace),
+        ];
+        for (name, size, family) in sizes {
+            style.text_styles.insert(name, FontId::new(size, family));
+        }
+        // `.weak()` and plain labels: brighter, so they pass for contrast against the chassis.
+        style.visuals.weak_text_color = Some(Color32::from_rgb(0xb4, 0xb7, 0xbe));
+        style.visuals.widgets.noninteractive.fg_stroke.color = Color32::from_rgb(0xdc, 0xdd, 0xe0);
+        style.visuals.widgets.inactive.fg_stroke.color = Color32::from_rgb(0xe4, 0xe5, 0xe8);
+        style.visuals.widgets.hovered.fg_stroke.color = Color32::WHITE;
+        style.visuals.widgets.active.fg_stroke.color = Color32::WHITE;
+        style.spacing.interact_size.y = 24.0;
+    });
+}
 
 /// A raised key cap with a label. `lit` backlights it in that colour (a switch that is on, the
 /// view you are in); `base` paints the cap itself in a colour (a red panic button).
@@ -420,7 +445,7 @@ pub fn chassis() -> egui::Frame {
 pub fn engraved(ui: &mut Ui, text: &str) -> Response {
     ui.label(
         egui::RichText::new(text.to_uppercase())
-            .size(10.5)
+            .size(12.0)
             .strong()
             .color(TEXT_DIM),
     )
@@ -544,7 +569,7 @@ pub fn knob(
         pos2(c.x, rect.top() + 54.0),
         Align2::CENTER_TOP,
         label.to_uppercase(),
-        FontId::proportional(9.5),
+        FontId::proportional(11.5),
         TEXT_DIM,
     );
     p.text(
@@ -680,7 +705,7 @@ pub fn rack(ui: &mut Ui, title: &str, subtitle: &str, body: impl FnOnce(&mut Ui)
 pub fn meter(ui: &mut Ui, fraction: f32, colour: Color32, label: &str) {
     const LAMPS: usize = 14;
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(label).size(9.5).color(TEXT_DIM));
+        ui.label(egui::RichText::new(label).size(11.5).color(TEXT_DIM));
         let (rect, _) =
             ui.allocate_exact_size(vec2(LAMPS as f32 * 9.0 + 4.0, 12.0), Sense::hover());
         let p = ui.painter();

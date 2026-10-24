@@ -1,8 +1,9 @@
 //! The browser (left panel): search, favourites, and loading an instrument into a slot by
 //! double-click or by dragging it onto a slot.
 
-use egui::{Color32, Popup, PopupCloseBehavior, RichText};
+use egui::{Color32, Popup, PopupCloseBehavior, RichText, vec2};
 
+use crate::icons;
 use crate::quirks;
 use crate::session::Session;
 use crate::tags::{self, Filter, Tag};
@@ -96,7 +97,7 @@ pub fn panel(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec
                     // and only its star changes.
                     if st.favs_only {
                         for &k in &shown {
-                            row(ui, s, k, "favs", true, actions);
+                            row(ui, s, k, true, actions);
                         }
                         return;
                     }
@@ -104,27 +105,27 @@ pub fn panel(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec
                         let salt = family.name;
                         branch(
                             ui,
+                            icons::glyph_for(family.name, None),
                             family.name,
                             salt,
                             family.count(),
                             force_open,
-                            false,
                             |ui| {
                                 for &k in &family.general {
-                                    row(ui, s, k, salt, false, actions);
+                                    row(ui, s, k, false, actions);
                                 }
                                 for (instrument, list) in &family.instruments {
                                     let salt = format!("{}/{instrument}", family.name);
                                     branch(
                                         ui,
+                                        icons::glyph_for(family.name, Some(instrument)),
                                         instrument,
                                         &salt,
                                         list.len(),
                                         force_open,
-                                        false,
                                         |ui| {
                                             for &k in list {
-                                                row(ui, s, k, &salt, false, actions);
+                                                row(ui, s, k, false, actions);
                                             }
                                         },
                                     );
@@ -135,14 +136,14 @@ pub fn panel(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec
                     if !tree.untagged.is_empty() {
                         branch(
                             ui,
+                            icons::Glyph::Untagged,
                             "Untagged",
                             "untagged",
                             tree.untagged.len(),
                             force_open,
-                            false,
                             |ui| {
                                 for &k in &tree.untagged {
-                                    row(ui, s, k, "untagged", true, actions);
+                                    row(ui, s, k, true, actions);
                                 }
                             },
                         );
@@ -227,31 +228,60 @@ fn build_tree(s: &Session, shown: &[usize]) -> Tree {
     Tree { families, untagged }
 }
 
-/// One collapsible branch of the tree.
+/// One collapsible branch of the tree: a chevron, the picture of what is inside, its name.
+/// The whole header line opens and closes it.
 fn branch(
     ui: &mut egui::Ui,
+    glyph: icons::Glyph,
     title: &str,
     id: &str,
     count: usize,
     force_open: Option<bool>,
-    default_open: bool,
     body: impl FnOnce(&mut egui::Ui),
 ) {
-    egui::CollapsingHeader::new(RichText::new(format!("{title}  ({count})")).strong())
-        .id_salt(("browser-branch", id))
-        .default_open(default_open)
-        .open(force_open)
-        .show(ui, body);
+    let key = ui.make_persistent_id(("browser-branch", id));
+    let stored = ui
+        .data_mut(|d| d.get_persisted::<bool>(key))
+        .unwrap_or(false);
+    let open = force_open.unwrap_or(stored);
+    let head = ui
+        .horizontal(|ui| {
+            let (chevron, _) = ui.allocate_exact_size(vec2(12.0, 16.0), egui::Sense::hover());
+            let c = chevron.center();
+            let points = if open {
+                vec![
+                    c + vec2(-4.0, -2.0),
+                    c + vec2(4.0, -2.0),
+                    c + vec2(0.0, 3.0),
+                ]
+            } else {
+                vec![
+                    c + vec2(-2.0, -4.0),
+                    c + vec2(-2.0, 4.0),
+                    c + vec2(3.0, 0.0),
+                ]
+            };
+            ui.painter().add(egui::Shape::convex_polygon(
+                points,
+                crate::hw::TEXT_DIM,
+                egui::Stroke::NONE,
+            ));
+            icons::show(ui, glyph, crate::hw::TEXT);
+            ui.label(RichText::new(title).strong());
+            ui.label(RichText::new(format!("({count})")).small().weak());
+        })
+        .response
+        .interact(egui::Sense::click())
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+    if head.clicked() {
+        ui.data_mut(|d| d.insert_persisted(key, !open));
+    }
+    if open {
+        ui.indent(key, body);
+    }
 }
 
-fn row(
-    ui: &mut egui::Ui,
-    s: &Session,
-    k: usize,
-    branch: &str,
-    show_tags: bool,
-    actions: &mut Vec<Action>,
-) {
+fn row(ui: &mut egui::Ui, s: &Session, k: usize, show_tags: bool, actions: &mut Vec<Action>) {
     let f = &s.found[k];
     let unsupported = quirks::lookup(&f.info.id, f.windows).unsupported;
     let crashed = s.quarantine.get(&f.path, &f.info.id).is_some();
@@ -267,6 +297,17 @@ fn row(
         {
             actions.push(Action::ToggleFavorite(k));
         }
+        // The picture of the first tag, so a list of plugins says what each one is.
+        match s.tags_of(f).list.first() {
+            Some(tag) => {
+                icons::show(
+                    ui,
+                    icons::glyph_for(&tag.family, tag.instrument.as_deref()),
+                    crate::hw::TEXT_DIM,
+                );
+            }
+            None => icons::blank(ui),
+        }
         let mut text = RichText::new(found_label(f));
         if unsupported.is_some() {
             text = text.color(Color32::from_gray(100));
@@ -275,10 +316,19 @@ fn row(
         }
         let mut label = None;
         ui.vertical(|ui| {
-            let drag = ui.dnd_drag_source(ui.make_persistent_id(("found", k, branch)), k, |ui| {
-                ui.add(egui::Label::new(text).sense(egui::Sense::click()))
-            });
-            label = Some(drag.inner);
+            // One widget that clicks and drags, so a right-click is never taken by a drag layer
+            // laid over the name.
+            let name = ui.add(egui::Label::new(text).sense(egui::Sense::click_and_drag()));
+            if name.drag_started_by(egui::PointerButton::Primary) {
+                name.dnd_set_drag_payload(k);
+            }
+            if ui.ctx().is_being_dragged(name.id) {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                drag_preview(ui.ctx(), name.id, &found_label(f));
+            } else {
+                name.clone().on_hover_cursor(egui::CursorIcon::Grab);
+            }
+            label = Some(name);
             let tags = s.tags_of(f);
             if show_tags && !tags.list.is_empty() {
                 let line: Vec<String> = tags.list.iter().map(Tag::label).collect();
@@ -310,6 +360,20 @@ fn row(
             actions.push(Action::BrowserLoad(k));
         }
     });
+}
+
+/// The name of the plugin being dragged, following the pointer.
+fn drag_preview(ctx: &egui::Context, id: egui::Id, name: &str) {
+    let Some(pos) = ctx.pointer_interact_pos() else {
+        return;
+    };
+    egui::Area::new(id.with("drag-preview"))
+        .order(egui::Order::Tooltip)
+        .fixed_pos(pos + vec2(14.0, 8.0))
+        .interactable(false)
+        .show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| ui.label(name));
+        });
 }
 
 /// The two lists under the search box: a family, then an instrument of it.
