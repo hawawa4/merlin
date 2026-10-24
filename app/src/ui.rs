@@ -917,42 +917,38 @@ fn header(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, actions: &mut Ve
     // Everything has to fit on one line, so the fader, the meter and the rig's name shrink as the
     // window narrows (the header is the same in every view).
     let room = ui.available_width();
-    let (fit, two_rows) = if room >= 1400.0 {
+    let (fit, two_rows) = if room >= 1380.0 {
         (
             HeaderFit {
-                label: true,
-                slider: 80.0,
+                readout: true,
                 lamps: 24,
                 name: 120.0,
             },
             false,
         )
-    } else if room >= 1320.0 {
+    } else if room >= 1300.0 {
         (
             HeaderFit {
-                label: false,
-                slider: 64.0,
-                lamps: 18,
+                readout: true,
+                lamps: 20,
                 name: 104.0,
             },
             false,
         )
-    } else if room >= 1250.0 {
+    } else if room >= 1170.0 {
         (
             HeaderFit {
-                label: false,
-                slider: 44.0,
-                lamps: 12,
-                name: 84.0,
+                readout: false,
+                lamps: 16,
+                name: 90.0,
             },
             false,
         )
     } else {
-        // Too narrow for one line: the levels and the tempo go on a second one.
+        // Too narrow for one line: the levels and tempo go on a second one.
         (
             HeaderFit {
-                label: true,
-                slider: 80.0,
+                readout: true,
                 lamps: 24,
                 name: 104.0,
             },
@@ -1040,23 +1036,37 @@ fn header_levels(
     fit: HeaderFit,
     actions: &mut Vec<Action>,
 ) {
-    let mut master = s.rig.master_volume;
-    ui.spacing_mut().slider_width = fit.slider;
-    let slider = egui::Slider::new(&mut master, 0.0..=1.5).fixed_decimals(2);
-    let m = ui.add(if fit.label {
-        slider.text("master")
-    } else {
-        slider
-    });
-    let m = m.on_hover_text("Master volume");
-    if m.changed() {
-        actions.push(Action::SetMaster(master));
+    let master = s.rig.master_volume;
+    // Right to left: the reading first, so it ends up to the right of the fader.
+    if fit.readout {
+        ui.add_sized(
+            [58.0, 20.0],
+            egui::Label::new(
+                RichText::new(hw::gain_text(master))
+                    .monospace()
+                    .color(hw::TEXT_DIM),
+            )
+            .selectable(false),
+        );
+    }
+    let (m, new) = hw::meter_fader(
+        ui,
+        &st.meter,
+        fit.lamps,
+        ui.input(|i| i.time),
+        master,
+        !s.map_mode,
+    );
+    let m = m.on_hover_text(format!(
+        "Master volume {} and what is going to your speakers, left and right. Drag across the lamps \
+         to set the volume (Shift for fine steps), scroll over them, double-click for 0 dB. The round \
+         lamp lights if the output clips.",
+        hw::gain_text(master)
+    ));
+    if let Some(gain) = new {
+        actions.push(Action::SetMaster(gain));
     }
     crate::map_mode::target(ui, s, &m, ControlAction::MasterVolume, None, actions);
-    ui.add_space(4.0);
-    hw::level_meter(ui, &st.meter, fit.lamps, ui.input(|i| i.time)).on_hover_text(
-        "What is going to your speakers, left and right. The last lamp lights if it clips.",
-    );
     ui.add_space(6.0);
     tempo_plate(ui, s, actions);
 }
@@ -1064,9 +1074,8 @@ fn header_levels(
 /// How big the header's flexible parts are at this window width.
 #[derive(Clone, Copy)]
 struct HeaderFit {
-    /// The word "master" beside the fader.
-    label: bool,
-    slider: f32,
+    /// The master volume written out (in dB) beside the meter-fader.
+    readout: bool,
     lamps: usize,
     name: f32,
 }

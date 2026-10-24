@@ -440,17 +440,118 @@ impl Meter {
     }
 }
 
-/// A stereo level meter: two rows of lamps, green into amber into red, with a lamp held at each
-/// channel's peak and a clip lamp at the end that stays lit for two seconds.
-pub fn level_meter(ui: &mut Ui, meter: &Meter, lamps: usize, now: f64) -> Response {
+/// The top of the meter-fader's scale, in dB: a little above full scale, where the master volume
+/// can be turned up to (its gain goes to 1.5, +3.5 dB). No lamp ever lights up there.
+const FADER_TOP: f32 = 4.0;
+
+/// The dB a master gain sits at on the scale; silence is the left end.
+fn gain_to_db(gain: f32) -> f32 {
+    if gain <= 0.0 {
+        METER_FLOOR
+    } else {
+        (20.0 * gain.log10()).clamp(METER_FLOOR, FADER_TOP)
+    }
+}
+
+/// The master gain a scale position means: the bottom of the scale is silence.
+fn db_to_gain(db: f32) -> f32 {
+    if db <= METER_FLOOR + 1.0 {
+        0.0
+    } else {
+        10f32.powf(db / 20.0).min(1.5)
+    }
+}
+
+/// How a master gain reads: `-6.0 dB`, or `off` at the bottom of the scale.
+pub fn gain_text(gain: f32) -> String {
+    if gain <= 0.0 {
+        "off".to_owned()
+    } else {
+        format!("{:+.1} dB", 20.0 * gain.log10())
+    }
+}
+
+/// The stereo level meter and the master fader in one: two rows of lamps (green into amber into
+/// red) show what leaves the app, a lamp held at each channel's peak and a clip lamp at the end
+/// that stays lit for two seconds. An amber marker across both rows is the master volume on the
+/// same dB scale: drag anywhere on the lamps to move it (Shift for fine steps), scroll the wheel
+/// over it, double-click to put it at 0 dB. Returns the new gain when it was changed.
+pub fn meter_fader(
+    ui: &mut Ui,
+    meter: &Meter,
+    lamps: usize,
+    now: f64,
+    gain: f32,
+    interactive: bool,
+) -> (Response, Option<f32>) {
     let lamps = lamps.max(4);
     const LAMP: Vec2 = vec2(4.0, 6.0);
     const GAP: f32 = 1.0;
-    let width = lamps as f32 * (LAMP.x + GAP) + 24.0;
-    let (rect, r) = ui.allocate_exact_size(vec2(width, 26.0), Sense::hover());
-    if !ui.is_rect_visible(rect) {
-        return r;
+    const LEFT: f32 = 16.0;
+    let width = lamps as f32 * (LAMP.x + GAP) + LEFT + 8.0 + 16.0;
+    let sense = if interactive {
+        Sense::click_and_drag()
+    } else {
+        Sense::hover()
+    };
+    let (rect, r) = ui.allocate_exact_size(vec2(width, 26.0), sense);
+    // The scale runs along the lamps.
+    let x0 = rect.left() + LEFT;
+    let x1 = x0 + lamps as f32 * (LAMP.x + GAP) - GAP;
+    let at_db = |db: f32| x0 + (db - METER_FLOOR) / (FADER_TOP - METER_FLOOR) * (x1 - x0);
+    let db_at = |x: f32| METER_FLOOR + (x - x0) / (x1 - x0) * (FADER_TOP - METER_FLOOR);
+
+    let mut changed = None;
+    if interactive {
+        let id = r.id.with("fader");
+        let db_now = gain_to_db(gain);
+        if r.drag_started()
+            && let Some(p) = r.interact_pointer_pos()
+        {
+            // Fine steps are relative to where the drag began; otherwise the marker jumps to
+            // the pointer.
+            ui.data_mut(|d| d.insert_temp(id, (p.x, db_now)));
+        }
+        if r.dragged()
+            && let Some(p) = r.interact_pointer_pos()
+        {
+            let fine = ui.input(|i| i.modifiers.shift);
+            let (start_x, start_db) = ui
+                .data(|d| d.get_temp::<(f32, f32)>(id))
+                .unwrap_or((p.x, db_now));
+            let db = if fine {
+                start_db + (db_at(p.x) - db_at(start_x)) * 0.2
+            } else {
+                db_at(p.x)
+            };
+            changed = Some(db_to_gain(db.clamp(METER_FLOOR, FADER_TOP)));
+        } else if r.clicked()
+            && !r.double_clicked()
+            && let Some(p) = r.interact_pointer_pos()
+        {
+            changed = Some(db_to_gain(db_at(p.x).clamp(METER_FLOOR, FADER_TOP)));
+        }
+        if r.double_clicked() {
+            changed = Some(1.0);
+        }
+        if r.hovered() {
+            let wheel = ui.input(|i| i.smooth_scroll_delta.y);
+            if wheel != 0.0 {
+                // A 50-point notch is half a dB.
+                changed = Some(db_to_gain(
+                    (db_now + wheel * 0.01).clamp(METER_FLOOR, FADER_TOP),
+                ));
+            }
+        }
+        if changed.is_some() {
+            ui.ctx().request_repaint();
+        }
     }
+    if !ui.is_rect_visible(rect) {
+        return (r, changed);
+    }
+    let shown = changed.unwrap_or(gain);
+    let active = interactive && (r.hovered() || r.dragged());
     let p = ui.painter();
     p.rect_filled(rect, 5.0, WELL);
     p.rect_stroke(
@@ -467,7 +568,7 @@ pub fn level_meter(ui: &mut Ui, meter: &Meter, lamps: usize, now: f64) -> Respon
         ],
         Stroke::new(1.0, BEVEL_HI.gamma_multiply(0.25)),
     );
-    let clip = now - meter.clip_at < 2.0;
+    let step = (FADER_TOP - METER_FLOOR) / lamps as f32;
     for (c, label) in ["L", "R"].into_iter().enumerate() {
         let top = rect.top() + 5.0 + c as f32 * (LAMP.y + 3.0);
         p.text(
@@ -478,8 +579,8 @@ pub fn level_meter(ui: &mut Ui, meter: &Meter, lamps: usize, now: f64) -> Respon
             TEXT_DIM,
         );
         for n in 0..lamps {
-            // The lamp's own level: the scale is -60 dB at the left, 0 at the right.
-            let db = METER_FLOOR + (n as f32 + 1.0) * (-METER_FLOOR / lamps as f32);
+            // The lamp's own level: its top edge on the scale.
+            let db = METER_FLOOR + (n as f32 + 1.0) * step;
             let colour = if db > -3.0 {
                 RED
             } else if db > -12.0 {
@@ -487,12 +588,11 @@ pub fn level_meter(ui: &mut Ui, meter: &Meter, lamps: usize, now: f64) -> Respon
             } else {
                 GREEN
             };
-            let step = -METER_FLOOR / lamps as f32;
             // Lit once the level reaches the middle of the lamp's range; the held peak is the
             // one lamp whose range holds it.
             let held = meter.hold[c] > db - step && meter.hold[c] <= db;
-            let lit = meter.level[c] >= db - step * 0.5 || held;
-            let x = rect.left() + 16.0 + n as f32 * (LAMP.x + GAP);
+            let lit = (meter.level[c] >= db - step * 0.5 || held) && db - step <= 0.0;
+            let x = x0 + n as f32 * (LAMP.x + GAP);
             let lamp = Rect::from_min_size(pos2(x, top), LAMP);
             if lit {
                 p.rect_filled(lamp.expand(1.2), 1.5, colour.gamma_multiply(0.18));
@@ -502,15 +602,33 @@ pub fn level_meter(ui: &mut Ui, meter: &Meter, lamps: usize, now: f64) -> Respon
             }
         }
     }
+    // The master volume: a marker across both rows, with a pointer at each end.
+    let mx = at_db(gain_to_db(shown)).clamp(x0, x1);
+    let mark = if active { Color32::WHITE } else { AMBER };
+    p.line_segment(
+        [pos2(mx, rect.top() + 2.0), pos2(mx, rect.bottom() - 2.0)],
+        Stroke::new(2.0, mark),
+    );
+    for (y, sign) in [(rect.top() + 1.0, 1.0), (rect.bottom() - 1.0, -1.0)] {
+        p.add(Shape::convex_polygon(
+            vec![
+                pos2(mx - 3.5, y),
+                pos2(mx + 3.5, y),
+                pos2(mx, y + 4.0 * sign),
+            ],
+            mark,
+            Stroke::NONE,
+        ));
+    }
     // The clip lamp.
-    let lamp = pos2(rect.right() - 7.0, rect.center().y);
-    if clip {
+    let lamp = pos2(rect.right() - 9.0, rect.center().y);
+    if now - meter.clip_at < 2.0 {
         p.circle_filled(lamp, 5.0, RED.gamma_multiply(0.25));
         p.circle_filled(lamp, 3.0, RED);
     } else {
         p.circle_filled(lamp, 3.0, mix(WELL, RED, 0.2));
     }
-    r
+    (r, changed)
 }
 
 /// A star to mark favourites: an empty grey outline, or filled yellow when `on`.
@@ -1022,4 +1140,46 @@ pub fn scrollbar(
         p.line_segment([a, b], Stroke::new(1.0, TEXT_DIM));
     }
     *offset != before
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_master_gain_and_its_place_on_the_scale_agree() {
+        // Unity is 0 dB; the top of the knob's range is +3.5 dB, inside the scale.
+        assert!(gain_to_db(1.0).abs() < 1e-4);
+        assert!((gain_to_db(1.5) - 3.52).abs() < 0.01 && gain_to_db(1.5) < FADER_TOP);
+        // Silence is the left end, and the left end is silence.
+        assert_eq!(gain_to_db(0.0), METER_FLOOR);
+        assert_eq!(db_to_gain(METER_FLOOR), 0.0);
+        assert_eq!(db_to_gain(METER_FLOOR + 0.5), 0.0);
+        // The top of the scale does not go past what the engine takes.
+        assert_eq!(db_to_gain(FADER_TOP), 1.5);
+        for g in [0.01_f32, 0.1, 0.5, 0.707, 1.0, 1.4] {
+            assert!((db_to_gain(gain_to_db(g)) - g).abs() < 1e-3, "{g}");
+        }
+    }
+
+    #[test]
+    fn the_gain_reads_in_db() {
+        assert_eq!(gain_text(1.0), "+0.0 dB");
+        assert_eq!(gain_text(0.5), "-6.0 dB");
+        assert_eq!(gain_text(0.0), "off");
+    }
+
+    #[test]
+    fn the_meter_rises_at_once_and_falls_steadily() {
+        let mut m = Meter::new();
+        m.feed((1.0, 0.0), 0.0, 0.03);
+        assert!(m.level[0] > -0.1 && m.level[1] <= METER_FLOOR + 0.1);
+        m.feed((0.0, 0.0), 0.5, 0.5);
+        assert!(m.level[0] < -10.0 && m.level[0] > -20.0, "{}", m.level[0]);
+        // The peak lamp stays for a moment, then falls too.
+        assert!(m.hold[0] > -0.1);
+        m.feed((0.0, 0.0), 2.0, 0.5);
+        assert!(m.hold[0] < -5.0);
+        assert!(m.moving(2.0));
+    }
 }
