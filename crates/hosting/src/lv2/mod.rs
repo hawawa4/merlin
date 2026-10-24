@@ -243,6 +243,12 @@ impl PluginHandle for Lv2Plugin {
             .collect()
     }
 
+    fn param_value(&mut self, id: u32) -> Option<f64> {
+        self.control_inputs()
+            .any(|p| p.index == id as usize)
+            .then(|| f64::from(self.bank.get(id as usize)))
+    }
+
     fn set_param(&mut self, id: u32, value: f64) {
         let Some(p) = self.desc.ports.iter().find(|p| p.index == id as usize) else {
             return;

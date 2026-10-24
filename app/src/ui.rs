@@ -116,6 +116,11 @@ pub enum Action {
     /// Open or close the effects drawer (it takes the place of the rack, except for the slot
     /// being edited).
     FxDrawer(bool),
+    /// Start (true) or cancel (false) learning a plugin knob by touch: the user turns a knob in
+    /// the plugin's window of the slot being edited, then moves a control on their device.
+    TouchLearn(bool),
+    /// As above for a given slot and insert (for the test script).
+    TouchStart(usize, Option<usize>),
     /// Open or close the keyboard drawer.
     KeysDrawer(bool),
     /// Go to one of the app's views (the switch in the header).
@@ -1141,6 +1146,26 @@ fn keys(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Acti
     }
 }
 
+/// "MIDI LEARN" for the plugin in the dock: click, turn a knob in the plugin's window, then move
+/// a control on the device. The app finds the knob by watching which parameter moved.
+fn touch_learn_cap(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
+    let touching = s.touch_learning().is_some();
+    let waiting = matches!(s.learning(), Some(ControlAction::SlotParam { .. }));
+    let (label, lit) = if touching {
+        ("TURN A KNOB IN THE PLUGIN\u{2026}", Some(hw::AMBER))
+    } else if waiting {
+        ("NOW MOVE A CONTROL\u{2026}", Some(hw::AMBER))
+    } else {
+        ("MIDI LEARN", None)
+    };
+    let r = hw::Cap::new(label).lit(lit).show(ui).on_hover_text(
+        "Map a knob of this plugin to a control on your device: click here, turn the knob in the plugin's own window, then move the control. Click again to cancel.",
+    );
+    if r.clicked() {
+        actions.push(Action::TouchLearn(!(touching || waiting)));
+    }
+}
+
 fn dock_bar(ui: &mut egui::Ui, s: &Session, st: &UiState, actions: &mut Vec<Action>) {
     ui.horizontal(|ui| {
         let Some(i) = s.viewing else {
@@ -1157,13 +1182,16 @@ fn dock_bar(ui: &mut egui::Ui, s: &Session, st: &UiState, actions: &mut Vec<Acti
             }
         }
         tabs.push((DockTab::Macros, "Macros".to_owned()));
-        tabs.push((DockTab::Params, "Parameters".to_owned()));
+        tabs.push((DockTab::Params, "Parameter list".to_owned()));
         for (tab, label) in tabs {
             if ui.selectable_label(st.tab == tab, label).clicked() {
                 actions.push(Action::Tab(tab));
             }
         }
         ui.separator();
+        if matches!(st.tab, DockTab::Plugin | DockTab::Insert(_)) {
+            touch_learn_cap(ui, s, actions);
+        }
         if st.tab == DockTab::Params {
             ui.colored_label(COLORS[i], format!("PARAMETERS · {}", i + 1));
             return;

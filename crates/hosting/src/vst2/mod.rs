@@ -371,6 +371,10 @@ impl PluginHandle for Vst2Plugin {
             .collect()
     }
 
+    fn param_value(&mut self, id: u32) -> Option<f64> {
+        (id < self.num_params().max(0) as u32).then(|| f64::from(self.get_param(id as i32)))
+    }
+
     fn set_param(&mut self, id: u32, value: f64) {
         let value = value.clamp(0.0, 1.0) as f32;
         match self.params_tx.as_mut() {

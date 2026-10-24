@@ -86,6 +86,7 @@ def main():
     backing_check()
     timeline_check()
     targets_check()
+    touch_check()
     capture_check()
     launchkey_check()
 
@@ -508,6 +509,42 @@ def targets_check():
         print(out[-3000:])
         sys.exit(1)
     print(f"ok: pan, effect switches (flip and latching), click level, tempo, a plugin parameter, a reverb knob and a SoundFont knob follow their controls: {seq[-1]}, {last[6]}, reverb mix {last[7]}, brightness {last[8]}")
+
+
+TOUCH_SCRIPT = "; ".join(
+    [
+        "1:load 1 Surge XT",
+        "5:mapparam cc 55 1 inst Volume",
+        "6:touch 1",
+        "15.5:report",
+        "17:quit",
+    ]
+)
+# CC 55 moves Surge's Volume (an old mapping); the app, learning by touch, sees the parameter move
+# and takes it as the one to map; the next control moved, CC 70, is mapped to it and replaces CC 55
+# (pick-up: it does nothing until it reaches the parameter, which is near the middle).
+TOUCH_CONTROLS = "2:B0 55 64; 4:B0 70 100; 5:B0 70 64; 6:B0 70 127; 7:B0 70 32; 8:B0 55 0"
+
+
+def touch_check():
+    out = run(TOUCH_SCRIPT, TOUCH_CONTROLS, 9, args=("--plugin-dir", str(ROOT / "test-assets/dl/surge-linux")))
+    last = re.findall(r"mappings (\d+), params \[(.*?)\]", out)
+    problems = []
+    if "now move a control on your device" not in out:
+        problems.append("the app never found the parameter that moved")
+    if not last:
+        problems.append("no report")
+    else:
+        n, params = last[-1]
+        if n != "1":
+            problems.append(f"mappings {n}, wanted 1 (the learned one replaces the old one)")
+        if not re.search(r"1#\d+=0\.25", params):
+            problems.append(f"the learned control did not drive the parameter: {params!r}")
+    if problems:
+        print("FAIL (touch)\n  " + "\n  ".join(problems))
+        print(out[-3000:])
+        sys.exit(1)
+    print(f"ok: a parameter that moved was found, mapped to the next control and followed it: {last[-1][1]}")
 
 
 FAKE_LAUNCHKEY = ROOT / "target/release/examples/fake_launchkey"

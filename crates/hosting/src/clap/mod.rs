@@ -186,6 +186,12 @@ impl PluginHandle for ClapPlugin {
             .collect()
     }
 
+    fn param_value(&mut self, id: u32) -> Option<f64> {
+        let handle = self.instance.plugin_handle();
+        let ext = handle.get_extension::<PluginParams>()?;
+        ext.get_value(&handle, ClapId::from_raw(id)?)
+    }
+
     fn set_param(&mut self, id: u32, value: f64) {
         if let Some(tx) = self.params_tx.as_mut() {
             let _ = tx.push(ParamChange { id, value });

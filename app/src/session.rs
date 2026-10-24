@@ -216,6 +216,8 @@ pub struct Session {
     control_stop: Arc<std::sync::atomic::AtomicBool>,
     /// The action a control is being learned for, while the user is teaching one.
     learn: Option<merlin_model::ControlAction>,
+    /// Waiting for the user to touch a knob in a plugin's window (see [`crate::touch`]).
+    touch: Option<controls::TouchLearn>,
     last_control: Option<String>,
     /// The snapshot recalled last.
     last_snapshot: Option<usize>,
@@ -237,6 +239,9 @@ pub struct Session {
     param_values: std::collections::HashMap<merlin_control::ParamKey, f32>,
     /// The name to keep with the mapping being learned (a plugin parameter's).
     learn_label: Option<String>,
+    /// The mapping being learned replaces what the control had (learning by touch), instead of
+    /// adding a second source.
+    learn_replaces: bool,
     /// MIDI map mode: the controls on screen show what they are mapped to, and clicking one
     /// teaches it.
     pub map_mode: bool,
@@ -331,6 +336,7 @@ impl Session {
             control_rx,
             control_stop,
             learn: None,
+            touch: None,
             last_control: None,
             last_snapshot: None,
             position: None,
@@ -342,6 +348,7 @@ impl Session {
             taps: Vec::new(),
             param_values: Default::default(),
             learn_label: None,
+            learn_replaces: false,
             map_mode: false,
             param_cache: Default::default(),
             midi_seen: Default::default(),

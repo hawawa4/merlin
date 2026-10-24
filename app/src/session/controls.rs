@@ -7,7 +7,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use merlin_audio_io::{ControlEvent, MARKER_INPUT, friendly_name};
 use merlin_control::{Context, Incoming, Message, Outcome};
@@ -16,7 +16,7 @@ use merlin_model::{
     SamplerField, Source, SourceKind, Takeover,
 };
 
-use super::{MAX_SLOTS, Session, UI_SLOTS, UserEvent};
+use super::{MAX_SLOTS, Session, UI_SLOTS, UserEvent, insert_id};
 
 /// How often the pump looks for new control messages: a foot switch should feel instant, and
 /// the wait costs next to nothing.
@@ -70,6 +70,21 @@ fn decode(data: [u8; 3]) -> Option<(u8, Message)> {
         _ => return None,
     };
     Some((channel, message))
+}
+
+/// How long to wait for a touch.
+const TOUCH_WAIT: Duration = Duration::from_secs(30);
+/// How long one poll may spend reading parameters.
+const TOUCH_BUDGET: Duration = Duration::from_millis(6);
+
+/// A touch-learn in progress.
+pub(super) struct TouchLearn {
+    slot: usize,
+    insert: Option<usize>,
+    ids: Vec<u32>,
+    detector: crate::touch::Detector,
+    cursor: usize,
+    until: Instant,
 }
 
 impl Session {
@@ -484,6 +499,111 @@ impl Session {
         }
     }
 
+    // ---- learn by touch -----------------------------------------------------------------
+
+    /// Starts waiting for the user to turn a knob in the window of the slot's instrument (or of
+    /// one of its inserts). The first parameter that moves becomes the thing to map: the next
+    /// control the user moves on their device is mapped to it.
+    pub fn start_touch_learn(&mut self, slot: usize, insert: Option<usize>) {
+        self.cancel_learn();
+        self.touch = None;
+        if slot >= UI_SLOTS {
+            return;
+        }
+        let params: Vec<(u32, f64)> = self
+            .plugin_params(slot, insert)
+            .iter()
+            .map(|p| (p.id, (p.max - p.min).abs()))
+            .collect();
+        if params.is_empty() {
+            self.say("this plugin lists no parameters to touch".to_owned());
+            return;
+        }
+        let detector = crate::touch::Detector::new(params);
+        self.touch = Some(TouchLearn {
+            slot,
+            insert,
+            ids: detector.ids(),
+            detector,
+            cursor: 0,
+            until: Instant::now() + TOUCH_WAIT,
+        });
+        self.say("turn a knob in the plugin's window".to_owned());
+    }
+
+    pub fn cancel_touch_learn(&mut self) {
+        self.touch = None;
+    }
+
+    /// Which plugin is being watched for a touch, if any.
+    pub fn touch_learning(&self) -> Option<(usize, Option<usize>)> {
+        self.touch.as_ref().map(|t| (t.slot, t.insert))
+    }
+
+    /// Reads parameters for a few milliseconds (a plugin behind Wine answers slowly), and hands
+    /// the one that moved over to the ordinary learn. Call it often while touch-learning.
+    pub fn poll_touch_learn(&mut self, now: Instant) {
+        let Some(mut t) = self.touch.take() else {
+            return;
+        };
+        if now >= t.until {
+            self.say("nothing was touched".to_owned());
+            return;
+        }
+        let (slot, insert) = (t.slot, t.insert);
+        let (call_id, loaded) = match insert {
+            None => (slot, self.plugins[slot].as_mut()),
+            Some(i) => (
+                insert_id(slot, i),
+                self.inserts[slot].get_mut(i).and_then(Option::as_mut),
+            ),
+        };
+        let Some(loaded) = loaded else {
+            return;
+        };
+        let _call = self
+            .guard
+            .call(call_id, "reading parameters", Duration::from_secs(10));
+        let started = Instant::now();
+        let mut found = None;
+        while started.elapsed() < TOUCH_BUDGET {
+            let Some(&id) = t.ids.get(t.cursor) else {
+                t.cursor = 0;
+                t.detector.end_pass();
+                // Give the app its turn between passes.
+                break;
+            };
+            t.cursor += 1;
+            if let Some(v) = loaded.plugin.param_value(id)
+                && let Some(hit) = t.detector.feed(id, v)
+            {
+                found = Some(hit);
+                break;
+            }
+        }
+        match found {
+            Some(id) => {
+                let name = self
+                    .plugin_params(slot, insert)
+                    .iter()
+                    .find(|p| p.id == id)
+                    .map(|p| p.name.clone())
+                    .unwrap_or_default();
+                self.say(format!("{name}: now move a control on your device"));
+                self.start_learn_labelled(
+                    ControlAction::SlotParam {
+                        slot: slot as u8,
+                        insert: insert.map_or(INSTRUMENT, |i| i as u8),
+                        id,
+                    },
+                    Some(name),
+                );
+                self.learn_replaces = true;
+            }
+            None => self.touch = Some(t),
+        }
+    }
+
     // ---- learn --------------------------------------------------------------------------
 
     /// Waits for the next control the user moves or presses, and maps it to `action`.
@@ -503,6 +623,7 @@ impl Session {
     pub fn cancel_learn(&mut self) {
         self.learn = None;
         self.learn_label = None;
+        self.learn_replaces = false;
         if let Some(b) = self.backend.as_ref() {
             b.interest.learning.store(false, Ordering::Relaxed);
         }
@@ -542,8 +663,9 @@ impl Session {
             mapping.takeover = Takeover::Pickup;
         }
         mapping.label = self.learn_label.take();
-        // In map mode a control has one source: teaching it again replaces the old one.
-        let replace = self.map_mode;
+        // In map mode (and when learned by touch) a control has one source: teaching it again
+        // replaces the old one.
+        let replace = self.map_mode || self.learn_replaces;
         self.cancel_learn();
         if replace {
             self.rig.mappings.retain(|m| m.action != action);

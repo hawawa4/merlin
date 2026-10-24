@@ -408,6 +408,11 @@ impl PluginHandle for Vst3Plugin {
         }
     }
 
+    fn param_value(&mut self, id: u32) -> Option<f64> {
+        // SAFETY: a plain read on the main thread.
+        Some(unsafe { self.controller.getParamNormalized(id) })
+    }
+
     fn set_param(&mut self, id: u32, value: f64) {
         self.host.send_param(id, value);
         // SAFETY: simple controller call on the main thread; keeps the editor in step.

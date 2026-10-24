@@ -157,6 +157,11 @@ pub trait PluginHandle {
     fn params(&mut self) -> Vec<ParamInfo>;
     /// Sets a parameter from the main thread (reaches the plugin on the next block).
     fn set_param(&mut self, id: u32, value: f64);
+    /// Where a parameter is now, in the same units as [`set_param`](Self::set_param), including
+    /// what the user did in the plugin's own window. `None` if the plugin cannot say. Main thread.
+    fn param_value(&mut self, _id: u32) -> Option<f64> {
+        None
+    }
 
     fn save_state(&mut self) -> Result<Vec<u8>>;
     fn load_state(&mut self, data: &[u8]) -> Result<()>;

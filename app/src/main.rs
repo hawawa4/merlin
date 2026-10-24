@@ -27,6 +27,7 @@ mod setlist_ui;
 mod settings;
 mod settings_ui;
 mod tags;
+mod touch;
 mod ui;
 
 use std::num::NonZeroU32;
@@ -411,6 +412,26 @@ impl Running {
                     self.ui.settings_open = view == ui::View::Settings;
                     self.ui.setlist_open = view == ui::View::Setlist;
                 }
+                Ok(())
+            }
+            Action::TouchLearn(start) => {
+                match (start, s.viewing) {
+                    (true, Some(i)) => {
+                        let insert = match self.ui.tab {
+                            ui::DockTab::Insert(k) => Some(k),
+                            _ => None,
+                        };
+                        s.start_touch_learn(i, insert);
+                    }
+                    _ => {
+                        s.cancel_touch_learn();
+                        s.cancel_learn();
+                    }
+                }
+                Ok(())
+            }
+            Action::TouchStart(slot, insert) => {
+                s.start_touch_learn(slot, insert);
                 Ok(())
             }
             Action::FxDrawer(open) => {
@@ -1139,6 +1160,7 @@ impl Running {
                 || self.session.transport_running()
                 || self.session.counting_in()
                 || self.ui.held_key.is_some()
+                || self.session.touch_learning().is_some()
                 || self
                     .session
                     .engine
@@ -1166,6 +1188,7 @@ impl Running {
             self.ask_redraw();
         }
         self.session.poll_midi_hotplug();
+        self.session.poll_touch_learn(now);
         self.session.update_surfaces();
         self.session.update_loads();
         if self.session.restart_requested {
@@ -1333,6 +1356,17 @@ fn parse_script() -> Vec<(Duration, Action)> {
                         _ => settings_ui::SettingsTab::Plugins,
                     }),
                 },
+                // touch <slot> [insertK]: start learning by touch (the test moves a parameter)
+                "touch" => {
+                    let slot = slot(words.next())?;
+                    let insert = match words.next() {
+                        Some(t) if t.starts_with("insert") => {
+                            Some(t["insert".len()..].parse::<usize>().ok()?.checked_sub(1)?)
+                        }
+                        _ => None,
+                    };
+                    Action::TouchStart(slot, insert)
+                }
                 "drawer" => match (words.next()?, words.next()? == "on") {
                     ("fx", open) => Action::FxDrawer(open),
                     ("keys", open) => Action::KeysDrawer(open),
