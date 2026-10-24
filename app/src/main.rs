@@ -453,7 +453,15 @@ impl Running {
             Action::AutoFit(on) => {
                 self.ui.auto_fit = on;
                 self.ui.last_fit = None;
-                Ok(())
+                self.ui.fit_wait = None;
+                if on {
+                    Ok(())
+                } else {
+                    // Off puts every editor back at the size it was made.
+                    let s = &mut self.session;
+                    s.editors
+                        .restore_native(&mut session::lookup(&mut s.plugins, &mut s.inserts))
+                }
             }
             Action::KeysDrawer(open) => {
                 self.ui.keys_open = open;
@@ -955,6 +963,14 @@ impl Running {
                 s.set_transpose(i, t);
                 Ok(())
             }
+            Action::PopOut(id) => {
+                s.pop_out_editor(id);
+                Ok(())
+            }
+            Action::PopIn(id) => {
+                s.pop_in_editor(id);
+                Ok(())
+            }
             Action::Fit => s
                 .editors
                 .fit(&mut session::lookup(&mut s.plugins, &mut s.inserts)),
@@ -1206,6 +1222,7 @@ impl Running {
         }
         self.session.poll_midi_hotplug();
         self.session.poll_touch_learn(now);
+        self.session.poll_floating_editors();
         self.session.update_surfaces();
         self.session.update_loads();
         if self.session.restart_requested {
@@ -1225,6 +1242,10 @@ impl Running {
             self.service_at,
             self.repaint_at,
             Some(self.next_status),
+            self.session
+                .editors
+                .any_floating()
+                .then(|| Instant::now() + Duration::from_millis(200)),
             script,
         ]
         .into_iter()
@@ -1633,6 +1654,11 @@ fn parse_script() -> Vec<(Duration, Action)> {
                     }
                 }
                 "fit" => Action::Fit,
+                "scroll" => {
+                    Action::Scroll(words.next()?.parse().ok()?, words.next()?.parse().ok()?)
+                }
+                "popout" => Action::PopOut(words.next()?.parse().ok()?),
+                "popin" => Action::PopIn(words.next()?.parse().ok()?),
                 "on" => Action::NoteOn(words.next()?.parse().ok()?),
                 "off" => Action::NoteOff(words.next()?.parse().ok()?),
                 "panic" => Action::Panic,

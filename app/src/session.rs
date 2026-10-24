@@ -1428,6 +1428,59 @@ impl Session {
         }
     }
 
+    /// What an editor id is called, for the title of its window.
+    fn editor_title(&self, id: usize) -> String {
+        let (slot, name) = if id < UI_SLOTS {
+            let name = self.plugins[id]
+                .as_ref()
+                .map(|l| l.plugin.info().name.clone());
+            (id, name)
+        } else {
+            let k = id - UI_SLOTS;
+            let name = self.inserts[k / MAX_INSERTS][k % MAX_INSERTS]
+                .as_ref()
+                .map(|l| l.plugin.info().name.clone());
+            (k / MAX_INSERTS, name)
+        };
+        format!("{} \u{b7} slot {}", name.unwrap_or_default(), slot + 1)
+    }
+
+    /// Opens an editor in a window of its own, at its native size.
+    pub fn pop_out_editor(&mut self, id: usize) {
+        let title = self.editor_title(id);
+        if let Err(e) = self.editors.pop_out(
+            id,
+            &title,
+            &mut lookup(&mut self.plugins, &mut self.inserts),
+        ) {
+            self.say(format!("could not open {title} in its own window: {e:#}"));
+        }
+    }
+
+    /// Brings an editor's window back into the dock.
+    pub fn pop_in_editor(&mut self, id: usize) {
+        let _ = self.editors.pop_in(id);
+        if self.view_id == Some(id) {
+            // Show it in the dock again.
+            if id < UI_SLOTS {
+                self.show_editor(id);
+            } else {
+                let k = id - UI_SLOTS;
+                self.show_insert_editor(k / MAX_INSERTS, k % MAX_INSERTS);
+            }
+        }
+    }
+
+    /// The user closed a floating editor window: it goes back to the dock.
+    pub fn poll_floating_editors(&mut self) {
+        if !self.editors.any_floating() {
+            return;
+        }
+        for id in self.editors.closed_floats() {
+            self.pop_in_editor(id);
+        }
+    }
+
     /// Shows an insert's editor in the dock.
     pub fn show_insert_editor(&mut self, slot: usize, index: usize) {
         let id = insert_id(slot, index);

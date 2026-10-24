@@ -90,6 +90,9 @@ pub enum Action {
     SamplerTone(usize, merlin_hosting::SamplerTone),
     Transpose(usize, i8),
     Fit,
+    /// Move an editor (by editor id) out into a window of its own, or back into the dock.
+    PopOut(usize),
+    PopIn(usize),
     Scroll(u32, u32),
     NoteOn(u8),
     NoteOff(u8),
@@ -377,7 +380,7 @@ impl UiState {
             macro_query: String::new(),
             favs_only: false,
             fx_open: false,
-            auto_fit: true,
+            auto_fit: false,
             last_fit: None,
             fit_wait: None,
             browser_open: true,
@@ -385,7 +388,7 @@ impl UiState {
             fx_height: 370.0,
             notice_count: 0,
             notice_at: None,
-            keys_open: true,
+            keys_open: false,
             tag_filter: Default::default(),
             dir_text: String::new(),
             sound_dir_text: String::new(),
@@ -550,6 +553,15 @@ pub fn draw(
             return;
         }
         let note = s.viewing.and_then(|i| s.notes[i].as_deref());
+        if let Some(id) = s.view_id
+            && matches!(st.tab, DockTab::Plugin | DockTab::Insert(_))
+            && s.editors.is_floating(id)
+        {
+            ui.centered_and_justified(|ui| {
+                ui.label("This plugin is open in its own window");
+            });
+            return;
+        }
         let text = if s.viewing.is_none() {
             "Load an instrument into a slot, then select it"
         } else if st.popup_open {
@@ -1386,7 +1398,27 @@ fn dock_bar(ui: &mut egui::Ui, s: &Session, st: &UiState, actions: &mut Vec<Acti
         if s.view_id.and_then(|id| s.editors.info(id)).is_none() {
             return;
         }
-        // On: the editor is resized to fill the dock, if the plugin lets itself be resized.
+        if let Some(id) = s.view_id
+            && matches!(st.tab, DockTab::Plugin | DockTab::Insert(_))
+        {
+            let floating = s.editors.is_floating(id);
+            let pop = hw::Cap::new(if floating { "BRING BACK" } else { "POP OUT" })
+                .lit(floating.then_some(hw::AMBER))
+                .show(ui)
+                .on_hover_text(if floating {
+                    "Put the plugin's window back into the dock"
+                } else {
+                    "Open the plugin in a window of its own, at the size it was made for"
+                });
+            if pop.clicked() {
+                actions.push(if floating {
+                    Action::PopIn(id)
+                } else {
+                    Action::PopOut(id)
+                });
+            }
+        }
+        // Lit: the editor is scaled down to fit the dock, as far as the plugin allows.
         let fit = hw::Cap::new("FIT TO WINDOW")
             .lit(st.auto_fit.then_some(hw::AMBER))
             .show(ui)

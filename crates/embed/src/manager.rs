@@ -23,6 +23,10 @@ pub struct EditorInfo {
     pub scroll: (u32, u32),
 }
 
+/// Fit never scales an editor below this fraction of its own size: smaller than that, plugins
+/// stop answering their controls reliably, and the scroll bars are the better answer.
+const MIN_FIT: f64 = 0.6;
+
 #[derive(Clone, Copy, Debug)]
 pub struct ShowOutcome {
     /// The editor did not exist yet and was created.
@@ -167,7 +171,9 @@ impl EditorManager {
         let (size, scroll) = (e.size, e.scroll);
         self.dock.set_canvas_size(slot, size.width, size.height)?;
         self.dock.scroll_to(slot, scroll.0, scroll.1)?;
-        self.dock.show(Some(slot))?;
+        // A floating editor stays in its window; the dock shows nothing in its place.
+        let in_dock = !self.dock.is_floating(slot);
+        self.dock.show(in_dock.then_some(slot))?;
         self.refresh_visibility()?;
         self.evict_at = Some(Instant::now() + EVICT_DELAY);
         Ok(ShowOutcome {
@@ -190,6 +196,7 @@ impl EditorManager {
     /// Destroys a slot's editor (before its plugin is removed, or to free it). The canvas stays
     /// for the slot's next editor.
     pub fn forget(&mut self, slot: usize, plugins: &mut dyn PluginLookup) -> Result<()> {
+        self.dock.unfloat(slot)?;
         if self.entries[slot].created {
             if let Some(editor) = plugins.plugin(slot).and_then(|p| p.editor()) {
                 editor.detach();
@@ -218,7 +225,7 @@ impl EditorManager {
         }
         let k = (f64::from(w) / f64::from(native.width))
             .min(f64::from(h) / f64::from(native.height))
-            .min(1.0);
+            .clamp(MIN_FIT, 1.0);
         let want = EditorSize {
             width: ((f64::from(native.width) * k).round() as u32).max(1),
             height: ((f64::from(native.height) * k).round() as u32).max(1),
@@ -275,6 +282,78 @@ impl EditorManager {
         self.dock.scroll_to(slot, 0, 0)
     }
 
+    /// Puts an editor back to the size it was made, at the display's own scale: undoes
+    /// [`fit`](Self::fit).
+    pub fn restore_native(&mut self, plugins: &mut dyn PluginLookup) -> Result<()> {
+        for slot in 0..MAX_EDITORS {
+            if self.entries[slot].created {
+                self.restore_one(slot, plugins)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn restore_one(&mut self, slot: usize, plugins: &mut dyn PluginLookup) -> Result<()> {
+        let native = self.entries[slot].native;
+        if native.width == 0 || self.entries[slot].size == native {
+            return Ok(());
+        }
+        let Some(editor) = plugins.plugin(slot).and_then(|p| p.editor()) else {
+            return Ok(());
+        };
+        if !self.entries[slot].ignores_zoom {
+            let _ = editor.set_zoom(self.scale);
+        }
+        let size = editor.adjust_size(native);
+        if editor.can_resize() {
+            editor.set_size(size);
+        }
+        let e = &mut self.entries[slot];
+        (e.size, e.scroll) = (size, (0, 0));
+        self.dock.set_canvas_size(slot, size.width, size.height)?;
+        self.dock.scroll_to(slot, 0, 0)
+    }
+
+    /// Moves a slot's editor out of the dock into a window of its own, at its native size.
+    pub fn pop_out(
+        &mut self,
+        slot: usize,
+        title: &str,
+        plugins: &mut dyn PluginLookup,
+    ) -> Result<()> {
+        if !self.entries[slot].created {
+            return Ok(());
+        }
+        self.restore_one(slot, plugins)?;
+        if self.dock.shown() == Some(slot) {
+            self.dock.show(None)?;
+        }
+        self.dock.float(slot, title)?;
+        if let Some(editor) = plugins.plugin(slot).and_then(|p| p.editor()) {
+            editor.show();
+        }
+        self.refresh_visibility()
+    }
+
+    /// Brings a floating editor back: the caller shows it in the dock again if it is wanted
+    /// there.
+    pub fn pop_in(&mut self, slot: usize) -> Result<()> {
+        self.dock.unfloat(slot)
+    }
+
+    pub fn any_floating(&self) -> bool {
+        (0..MAX_EDITORS).any(|s| self.dock.is_floating(s))
+    }
+
+    pub fn is_floating(&self, slot: usize) -> bool {
+        self.dock.is_floating(slot)
+    }
+
+    /// Slots whose floating window the user has closed.
+    pub fn closed_floats(&mut self) -> Vec<usize> {
+        self.dock.closed_floats()
+    }
+
     /// Scrolls the shown editor (for editors larger than the dock).
     pub fn scroll(&mut self, x: u32, y: u32) -> Result<()> {
         if let Some(slot) = self.dock.shown() {
@@ -314,7 +393,9 @@ impl EditorManager {
         let keep = self.dock.shown();
         while self.live_editors() > self.cache_cap {
             let victim = (0..MAX_EDITORS)
-                .filter(|&s| self.entries[s].created && Some(s) != keep)
+                .filter(|&s| {
+                    self.entries[s].created && Some(s) != keep && !self.dock.is_floating(s)
+                })
                 .min_by_key(|&s| self.entries[s].last_shown);
             let Some(victim) = victim else { break };
             let _ = self.forget(victim, plugins);

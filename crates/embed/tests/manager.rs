@@ -215,6 +215,18 @@ macro_rules! need_x {
     };
 }
 
+/// Waits for a window manager to map a top-level window, if there is one.
+fn viewable(m: &EditorManager, slot: usize) -> bool {
+    let until = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < until {
+        if m.dock().canvas_viewable(slot) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    false
+}
+
 fn sync(conn: &RustConnection) {
     conn.get_input_focus().unwrap().reply().unwrap();
 }
@@ -336,34 +348,42 @@ fn nothing_is_visible_without_a_selected_editor() {
 fn fit_asks_a_zoomable_plugin_for_an_absolute_scale_and_sizes_the_window_itself() {
     let (mut m, mut rack, _conn) = need_x!(setup(8));
     rack.0[0] = Some(Fake::new(300, 200, true).zoomable());
-    m.set_rect(0, 100, 150, 100).unwrap();
+    m.set_rect(0, 100, 210, 140).unwrap();
     m.show(0, &mut rack).unwrap();
     m.scroll(10, 20).unwrap();
     m.fit(&mut rack).unwrap();
-    // Half the size fits: half the scale, and the window is made that size (the fake takes
+    // 0.7 of the size fits: that scale, and the window is made that size (the fake takes
     // multiples of 8) whatever size the plugin claims to have.
     assert!(
-        rack.log(0).contains(&"zoom 0.500".to_string()),
+        rack.log(0).contains(&"zoom 0.700".to_string()),
         "{:?}",
         rack.log(0)
     );
-    assert!(rack.log(0).contains(&"set_size 144x96".to_string()));
+    assert!(rack.log(0).contains(&"set_size 208x136".to_string()));
     let info = m.info(0).unwrap();
     assert_eq!(
         info.size,
         EditorSize {
-            width: 144,
-            height: 96
+            width: 208,
+            height: 136
         }
     );
     assert_eq!(info.scroll, (0, 0));
-    // Asked again for another size, the scale is of the normal size, not of what it is now.
+    // Asked again for a much smaller dock, the scale is of the normal size, not of what it is
+    // now, and it never goes below the floor (the rest is for the scroll bars).
     m.set_rect(0, 100, 75, 50).unwrap();
     m.fit(&mut rack).unwrap();
     assert!(
-        rack.log(0).contains(&"zoom 0.250".to_string()),
+        rack.log(0).contains(&"zoom 0.600".to_string()),
         "{:?}",
         rack.log(0)
+    );
+    assert_eq!(
+        m.info(0).unwrap().size,
+        EditorSize {
+            width: 176,
+            height: 120
+        }
     );
     // Room to spare: never bigger than it was made, so back to the normal scale.
     m.set_rect(0, 100, 640, 400).unwrap();
@@ -376,6 +396,50 @@ fn fit_asks_a_zoomable_plugin_for_an_absolute_scale_and_sizes_the_window_itself(
 }
 
 #[test]
+fn restoring_puts_a_fitted_editor_back_at_its_native_size_and_scale() {
+    let (mut m, mut rack, _conn) = need_x!(setup(8));
+    rack.0[0] = Some(Fake::new(300, 200, true).zoomable());
+    m.set_rect(0, 100, 210, 140).unwrap();
+    m.show(0, &mut rack).unwrap();
+    m.fit(&mut rack).unwrap();
+    assert_ne!(m.info(0).unwrap().size.width, 300);
+    m.restore_native(&mut rack).unwrap();
+    assert_eq!(
+        rack.log(0).last().map(String::as_str),
+        Some("set_size 296x200")
+    );
+    assert!(rack.log(0).contains(&"zoom 1.000".to_string()));
+    assert_eq!(m.info(0).unwrap().size.height, 200);
+}
+
+#[test]
+fn an_editor_can_float_in_a_window_of_its_own_and_come_back() {
+    let (mut m, mut rack, conn) = need_x!(setup(8));
+    m.show(0, &mut rack).unwrap();
+    assert_eq!(m.shown(), Some(0));
+    m.pop_out(0, "Fake · slot 1", &mut rack).unwrap();
+    sync(&conn);
+    assert!(m.is_floating(0) && m.any_floating());
+    // The dock shows nothing in its place, and showing the slot again keeps it floating.
+    assert_eq!(m.shown(), None);
+    m.show(0, &mut rack).unwrap();
+    assert_eq!(m.shown(), None);
+    assert!(viewable(&m, 0));
+    // Another editor still goes to the dock.
+    m.show(1, &mut rack).unwrap();
+    assert_eq!(m.shown(), Some(1));
+    assert!(viewable(&m, 0));
+    // A floating editor is not evicted.
+    m.pop_in(0).unwrap();
+    sync(&conn);
+    assert!(!m.is_floating(0));
+    assert!(!m.dock().canvas_viewable(0));
+    m.show(0, &mut rack).unwrap();
+    assert_eq!(m.shown(), Some(0));
+    assert!(m.dock().canvas_viewable(0));
+}
+
+#[test]
 fn fit_resizes_a_plugin_that_keeps_its_shape_when_it_has_no_zoom() {
     let (mut m, mut rack, _conn) = need_x!(setup(8));
     rack.0[0] = Some(Fake::new(300, 200, true).keeping_shape());
@@ -383,15 +447,15 @@ fn fit_resizes_a_plugin_that_keeps_its_shape_when_it_has_no_zoom() {
     m.show(0, &mut rack).unwrap();
     m.fit(&mut rack).unwrap();
     assert!(
-        rack.log(0).contains(&"set_size 144x96".to_string()),
+        rack.log(0).contains(&"set_size 176x120".to_string()),
         "{:?}",
         rack.log(0)
     );
     assert_eq!(
         m.info(0).unwrap().size,
         EditorSize {
-            width: 144,
-            height: 96
+            width: 176,
+            height: 120
         }
     );
 }
