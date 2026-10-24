@@ -12,6 +12,8 @@ Tick as you go; anything odd, send me what you saw (and the exact text of any er
 
 ## 1. Rack and effects
 - [ ] The **keyboard button** in the header (a little keyboard, next to MIDI MAP) shows and hides the on-screen keys. Hidden, they take no room at all and the editor grows. Playing with the mouse, the zones and the note dots work as before when it is shown.
+- [ ] A plugin's window that can be resized (Surge XT, most JUCE plugins) is fitted to the space automatically: fold the rack, hide the keyboard, drag the effects strip, change the window size, and the plugin's window follows. **FIT TO WINDOW** (next to MIDI LEARN) is lit while this is on; click it to leave the window as it is. A window that cannot be resized (the button is grey) or is bigger than the space gets **scroll bars** in strips beside it: drag the thumb, or click the track.
+- [ ] The browser has a **<** button at its top right that folds it to a narrow strip (click **>** to bring it back), and its right edge can be dragged to make it wider or narrower.
 - [ ] The **RACK** bar above the slots folds the rack down to the slot you are editing (and back). Open the **Effects** drawer and drag the dotted strip at the bottom of the pedals up and down: the pedals' area changes height, the editor below takes what is left.
 - [ ] The framed strip under the header is where the app talks to you: it turns amber and says what to do while you map something (*Turn a knob in the plugin's own window…*, *Now move a control on your device to map “Cutoff”*), green after a capture, red for an error, and shows the last message for a few seconds, then *Ready*. The engine's numbers sit at its right end.
 - [ ] Pedal LEDs are black when the effect is off and red when it is on.

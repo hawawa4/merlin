@@ -123,6 +123,10 @@ pub enum Action {
     TouchStart(usize, Option<usize>),
     /// Open or close the keyboard drawer.
     KeysDrawer(bool),
+    /// Fit plugin editors to the dock automatically (or not).
+    AutoFit(bool),
+    /// Open or fold the browser.
+    BrowserOpen(bool),
     /// Collapse the rack to the slot being edited (true) or show every slot (false).
     RackCollapsed(bool),
     /// Go to one of the app's views (the switch in the header).
@@ -292,6 +296,13 @@ pub struct UiState {
     pub favs_only: bool,
     /// The effects drawer is open.
     pub fx_open: bool,
+    /// Resize a plugin's editor to fill the dock whenever the plugin allows it.
+    pub auto_fit: bool,
+    /// The editor and dock size (pixels) the last automatic fit was asked for, so a plugin that
+    /// answers with another size is not asked again and again.
+    pub last_fit: Option<(usize, u32, u32)>,
+    /// The browser is open (else a narrow strip).
+    pub browser_open: bool,
     /// The rack shows only the slot being edited.
     pub rack_collapsed: bool,
     /// How tall the pedals' area of the effects drawer is, in points.
@@ -364,6 +375,9 @@ impl UiState {
             macro_query: String::new(),
             favs_only: false,
             fx_open: false,
+            auto_fit: true,
+            last_fit: None,
+            browser_open: true,
             rack_collapsed: false,
             fx_height: 370.0,
             notice_count: 0,
@@ -503,7 +517,16 @@ pub fn draw(
     }
     egui::Panel::top("dockbar").show(ui, |ui| dock_bar(ui, s, st, actions));
     egui::CentralPanel::default().show(ui, |ui| {
-        *dock_rect = ui.available_rect_before_wrap();
+        let avail = ui.available_rect_before_wrap();
+        *dock_rect = avail;
+        // A plugin's own window gets the room that is left once its scroll bars are placed.
+        if matches!(st.tab, DockTab::Plugin | DockTab::Insert(_))
+            && let Some(id) = s.view_id
+            && s.editors.shown() == Some(id)
+            && let Some(info) = s.editors.info(id)
+        {
+            *dock_rect = editor_view(ui, s, st, id, info, avail, actions);
+        }
         if st.tab == DockTab::Params
             && let Some(i) = s.viewing
         {
@@ -1360,30 +1383,94 @@ fn dock_bar(ui: &mut egui::Ui, s: &Session, st: &UiState, actions: &mut Vec<Acti
         let Some(info) = s.view_id.and_then(|id| s.editors.info(id)) else {
             return;
         };
-        if ui
-            .add_enabled(info.can_resize, egui::Button::new("Fit to dock"))
-            .clicked()
-        {
-            actions.push(Action::Fit);
-        }
-        let (dw, dh) = s.editors.dock_size();
-        let (ew, eh) = (info.size.width, info.size.height);
-        ui.label(format!("{ew}x{eh} in {dw}x{dh}"));
-        let (mut sx, mut sy) = info.scroll;
-        ui.label("scroll x");
-        let rx = ui.add_enabled(
-            ew > dw,
-            egui::Slider::new(&mut sx, 0..=ew.saturating_sub(dw)),
-        );
-        ui.label("y");
-        let ry = ui.add_enabled(
-            eh > dh,
-            egui::Slider::new(&mut sy, 0..=eh.saturating_sub(dh)),
-        );
-        if rx.changed() || ry.changed() {
-            actions.push(Action::Scroll(sx, sy));
+        // On: the editor is resized to fill the dock, if the plugin lets itself be resized.
+        let fit = hw::Cap::new("FIT TO WINDOW")
+            .lit((st.auto_fit && info.can_resize).then_some(hw::AMBER))
+            .show(ui)
+            .on_hover_text(if info.can_resize {
+                "Resize the plugin's window to fill the space (lit: on)"
+            } else {
+                "This plugin's window cannot be resized: use the scroll bars"
+            });
+        if fit.clicked() && info.can_resize {
+            actions.push(Action::AutoFit(!st.auto_fit));
         }
     });
+}
+
+/// Which scroll bars an editor of `editor` size needs in `room` (width, height): a bar takes
+/// room from the other direction, which can make that one needed too.
+fn scroll_bars_needed(room: (f32, f32), editor: (f32, f32), bar: f32) -> (bool, bool) {
+    let (mut need_x, mut need_y) = (false, false);
+    for _ in 0..2 {
+        let w = room.0 - if need_y { bar } else { 0.0 };
+        let h = room.1 - if need_x { bar } else { 0.0 };
+        need_x = editor.0 > w + 0.5;
+        need_y = editor.1 > h + 0.5;
+    }
+    (need_x, need_y)
+}
+
+/// Places a plugin's editor in `avail`: fits it to the room when it can be resized, and gives
+/// the scroll bars (in strips beside it, since a native window cannot be drawn over) to one
+/// that is bigger than the room. Returns where the dock goes.
+fn editor_view(
+    ui: &mut egui::Ui,
+    s: &Session,
+    st: &mut UiState,
+    id: usize,
+    info: merlin_embed::EditorInfo,
+    avail: egui::Rect,
+    actions: &mut Vec<Action>,
+) -> egui::Rect {
+    const BAR: f32 = 14.0;
+    let ppp = ui.ctx().pixels_per_point();
+    let (ew, eh) = (info.size.width as f32 / ppp, info.size.height as f32 / ppp);
+    let (need_x, need_y) = scroll_bars_needed((avail.width(), avail.height()), (ew, eh), BAR);
+    let view = egui::Rect::from_min_size(
+        avail.min,
+        egui::vec2(
+            avail.width() - if need_y { BAR } else { 0.0 },
+            avail.height() - if need_x { BAR } else { 0.0 },
+        ),
+    );
+    // Asked once for each size of the dock: the plugin may settle on another.
+    let dock = s.editors.dock_size();
+    if st.auto_fit
+        && info.can_resize
+        && (info.size.width, info.size.height) != dock
+        && st.last_fit != Some((id, dock.0, dock.1))
+    {
+        st.last_fit = Some((id, dock.0, dock.1));
+        actions.push(Action::Fit);
+    }
+    let (mut x, mut y) = (info.scroll.0 as f32 / ppp, info.scroll.1 as f32 / ppp);
+    let before = (x, y);
+    if need_x {
+        let strip = egui::Rect::from_min_size(
+            egui::pos2(view.left(), view.bottom()),
+            egui::vec2(view.width(), BAR),
+        );
+        hw::scrollbar(ui, strip, hw::Axis::Horizontal, &mut x, view.width(), ew);
+    } else {
+        x = 0.0;
+    }
+    if need_y {
+        let strip = egui::Rect::from_min_size(
+            egui::pos2(view.right(), view.top()),
+            egui::vec2(BAR, view.height()),
+        );
+        hw::scrollbar(ui, strip, hw::Axis::Vertical, &mut y, view.height(), eh);
+    } else {
+        y = 0.0;
+    }
+    if (x, y) != before {
+        actions.push(Action::Scroll(
+            (x * ppp).round() as u32,
+            (y * ppp).round() as u32,
+        ));
+    }
+    view
 }
 
 /// The knobs of one built-in effect, drawn from the shared table. In map mode each is something a
@@ -1627,6 +1714,31 @@ fn inserts_strip(ui: &mut egui::Ui, s: &Session, i: usize, actions: &mut Vec<Act
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_editor_gets_scroll_bars_only_where_it_does_not_fit() {
+        assert_eq!(
+            scroll_bars_needed((800.0, 600.0), (700.0, 500.0), 14.0),
+            (false, false)
+        );
+        assert_eq!(
+            scroll_bars_needed((800.0, 600.0), (900.0, 500.0), 14.0),
+            (true, false)
+        );
+        assert_eq!(
+            scroll_bars_needed((800.0, 600.0), (700.0, 700.0), 14.0),
+            (false, true)
+        );
+        // Exactly the room it has: no bars. A bar's own thickness can tip the other one over.
+        assert_eq!(
+            scroll_bars_needed((800.0, 600.0), (800.0, 600.0), 14.0),
+            (false, false)
+        );
+        assert_eq!(
+            scroll_bars_needed((800.0, 600.0), (800.0, 700.0), 14.0),
+            (true, true)
+        );
+    }
 
     #[test]
     fn the_view_follows_the_flags_with_the_stage_view_first() {

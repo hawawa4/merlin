@@ -9,11 +9,44 @@ use crate::tags::{self, Filter, Tag};
 use crate::ui::{Action, UiState, found_label};
 
 pub fn panel(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
+    if !st.browser_open {
+        // Folded: just a strip with a way back.
+        egui::Panel::left("browser-folded")
+            .exact_size(34.0)
+            .show(ui, |ui| {
+                ui.add_space(4.0);
+                if crate::hw::Cap::new("")
+                    .icon(crate::hw::Icon::ChevronRight)
+                    .min_width(24.0)
+                    .show(ui)
+                    .on_hover_text("Show the browser")
+                    .clicked()
+                {
+                    st.browser_open = true;
+                }
+            });
+        return;
+    }
     egui::Panel::left("browser")
-        .exact_size(235.0)
+        .resizable(true)
+        .default_size(235.0)
+        .size_range(170.0..=520.0)
         .show(ui, |ui| {
             ui.add_space(4.0);
-            ui.strong("BROWSER");
+            ui.horizontal(|ui| {
+                ui.strong("BROWSER");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if crate::hw::Cap::new("")
+                        .icon(crate::hw::Icon::ChevronLeft)
+                        .min_width(30.0)
+                        .show(ui)
+                        .on_hover_text("Fold the browser away")
+                        .clicked()
+                    {
+                        st.browser_open = false;
+                    }
+                });
+            });
             ui.add(
                 egui::TextEdit::singleline(&mut st.query)
                     .hint_text("search…")

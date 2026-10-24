@@ -158,11 +158,28 @@ impl Cap {
 #[derive(Clone, Copy)]
 pub enum Icon {
     Keyboard,
+    ChevronLeft,
+    ChevronRight,
 }
 
 impl Icon {
     fn paint(self, p: &Painter, c: Pos2, colour: Color32) {
         match self {
+            Self::ChevronLeft | Self::ChevronRight => {
+                let tip = if matches!(self, Self::ChevronLeft) {
+                    -3.5
+                } else {
+                    3.5
+                };
+                p.add(Shape::line(
+                    vec![
+                        c + vec2(-tip, -6.0),
+                        c + vec2(tip, 0.0),
+                        c + vec2(-tip, 6.0),
+                    ],
+                    Stroke::new(2.0, colour),
+                ));
+            }
             Self::Keyboard => {
                 let body = Rect::from_center_size(c, vec2(22.0, 13.0));
                 p.rect_stroke(
@@ -625,4 +642,80 @@ pub fn grip(ui: &mut Ui) -> f32 {
         p.circle_filled(c + vec2(dx, 0.0), 1.6, if lit { TEXT } else { TEXT_DIM });
     }
     r.drag_delta().y
+}
+
+/// Which way a [`scrollbar`] runs.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Axis {
+    Horizontal,
+    Vertical,
+}
+
+/// A scroll bar drawn in `rect`: a recessed track with a raised thumb. `offset`, `view` and
+/// `content` are in the same units; returns whether `offset` changed.
+pub fn scrollbar(
+    ui: &mut Ui,
+    rect: Rect,
+    axis: Axis,
+    offset: &mut f32,
+    view: f32,
+    content: f32,
+) -> bool {
+    let along = |v: Vec2| if axis == Axis::Horizontal { v.x } else { v.y };
+    let length = along(rect.size());
+    let range = (content - view).max(0.0);
+    let thumb = (length * view / content.max(1.0)).clamp(28.0_f32.min(length), length);
+    let travel = (length - thumb).max(1.0);
+    let id = ui.make_persistent_id(("editor-scrollbar", axis == Axis::Horizontal));
+    let r = ui.interact(rect, id, Sense::click_and_drag());
+    let before = *offset;
+    if let Some(pointer) = r.interact_pointer_pos()
+        && range > 0.0
+    {
+        // The thumb's middle follows the pointer.
+        let from_start = along(pointer - rect.min) - thumb / 2.0;
+        *offset = (from_start / travel * range).clamp(0.0, range);
+    }
+    *offset = offset.clamp(0.0, range);
+    let at = if range > 0.0 {
+        *offset / range * travel
+    } else {
+        0.0
+    };
+    let thumb_rect = match axis {
+        Axis::Horizontal => Rect::from_min_size(
+            pos2(rect.left() + at, rect.top()),
+            vec2(thumb, rect.height()),
+        ),
+        Axis::Vertical => Rect::from_min_size(
+            pos2(rect.left(), rect.top() + at),
+            vec2(rect.width(), thumb),
+        ),
+    };
+    let p = ui.painter();
+    p.rect_filled(rect, 4.0, WELL);
+    let lit = r.hovered() || r.dragged();
+    let body = if lit {
+        mix(CAP, Color32::WHITE, 0.10)
+    } else {
+        CAP
+    };
+    let thumb_rect = thumb_rect.shrink(1.5);
+    p.rect_filled(thumb_rect, 4.0, body);
+    p.rect_stroke(
+        thumb_rect,
+        4.0,
+        Stroke::new(1.0, BEVEL_HI.gamma_multiply(0.5)),
+        egui::StrokeKind::Inside,
+    );
+    // Three ridges to grip.
+    let c = thumb_rect.center();
+    for d in [-4.0, 0.0, 4.0] {
+        let (a, b) = match axis {
+            Axis::Horizontal => (c + vec2(d, -3.0), c + vec2(d, 3.0)),
+            Axis::Vertical => (c + vec2(-3.0, d), c + vec2(3.0, d)),
+        };
+        p.line_segment([a, b], Stroke::new(1.0, TEXT_DIM));
+    }
+    *offset != before
 }

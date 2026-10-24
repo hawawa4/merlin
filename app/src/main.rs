@@ -446,6 +446,15 @@ impl Running {
                 }
                 Ok(())
             }
+            Action::BrowserOpen(open) => {
+                self.ui.browser_open = open;
+                Ok(())
+            }
+            Action::AutoFit(on) => {
+                self.ui.auto_fit = on;
+                self.ui.last_fit = None;
+                Ok(())
+            }
             Action::KeysDrawer(open) => {
                 self.ui.keys_open = open;
                 Ok(())
@@ -1379,6 +1388,8 @@ fn parse_script() -> Vec<(Duration, Action)> {
                     ("fx", open) => Action::FxDrawer(open),
                     ("keys", open) => Action::KeysDrawer(open),
                     ("rack", open) => Action::RackCollapsed(!open),
+                    ("autofit", on) => Action::AutoFit(on),
+                    ("browser", open) => Action::BrowserOpen(open),
                     _ => return None,
                 },
                 "tab" => Action::Tab(match words.next()? {
