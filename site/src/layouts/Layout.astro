@@ -1,0 +1,148 @@
+---
+interface Props {
+  title: string
+  description: string
+}
+const { title, description } = Astro.props
+const canonical = new URL(Astro.url.pathname, Astro.site)
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <meta name="color-scheme" content="light dark" />
+    <link rel="canonical" href={canonical} />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Merlin" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <script is:inline>
+      // Apply a saved override before first paint; with none, CSS follows the system.
+      try {
+        const t = localStorage.getItem("theme");
+        if (t === "light" || t === "dark")
+          document.documentElement.dataset.theme = t;
+      } catch {}
+    </script>
+  </head>
+  <body>
+    <div class="wrap theme-bar">
+      <div class="theme-select" role="group" aria-label="Theme">
+        <button type="button" data-theme-choice="system">System</button>
+        <button type="button" data-theme-choice="light">Light</button>
+        <button type="button" data-theme-choice="dark">Dark</button>
+      </div>
+    </div>
+    <slot />
+  </body>
+</html>
+
+<script>
+  const root = document.documentElement;
+  const buttons = document.querySelectorAll<HTMLButtonElement>(
+    "[data-theme-choice]",
+  );
+
+  const current = () => root.dataset.theme ?? "system";
+  const sync = () => {
+    for (const b of buttons)
+      b.setAttribute("aria-pressed", String(b.dataset.themeChoice === current()));
+  };
+
+  for (const b of buttons) {
+    b.addEventListener("click", () => {
+      const choice = b.dataset.themeChoice!;
+      if (choice === "system") delete root.dataset.theme;
+      else root.dataset.theme = choice;
+      try {
+        if (choice === "system") localStorage.removeItem("theme");
+        else localStorage.setItem("theme", choice);
+      } catch {}
+      sync();
+    });
+  }
+  sync();
+</script>
+
+<style is:global>
+  :root {
+    --bg: #ffffff;
+    --surface: #f5f5f5;
+    --ink: #1a1a1a;
+    --muted: #595959;
+    --line: #d9d9d9;
+    --accent: #1a56c4;
+    --accent-ink: #fff;
+    --sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  }
+  :root[data-theme="light"] { color-scheme: light; }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #141414;
+    --surface: #1f1f1f;
+    --ink: #ececec;
+    --muted: #a0a0a0;
+    --line: #333;
+    --accent: #7aa7f0;
+    --accent-ink: #101010;
+  }
+  /* Same values as above: no explicit choice, so follow the system. */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme]) {
+      --bg: #141414;
+      --surface: #1f1f1f;
+      --ink: #ececec;
+      --muted: #a0a0a0;
+      --line: #333;
+      --accent: #7aa7f0;
+      --accent-ink: #101010;
+    }
+  }
+  .theme-bar {
+    display: flex;
+    justify-content: flex-end;
+    padding-top: 1rem;
+  }
+  .theme-select {
+    display: inline-flex;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .theme-select button {
+    font: inherit;
+    font-size: 0.85rem;
+    padding: 0.25rem 0.7rem;
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .theme-select button + button { border-left: 1px solid var(--line); }
+  .theme-select button[aria-pressed="true"] {
+    background: var(--surface);
+    color: var(--ink);
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 17px/1.6 var(--sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .wrap { max-width: 68rem; margin: 0 auto; padding: 0 1.25rem; }
+  h1, h2, h3 { line-height: 1.2; margin: 0; font-weight: 600; }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+  }
+</style>

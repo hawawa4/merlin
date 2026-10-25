@@ -1,0 +1,268 @@
+---
+import Layout from "../layouts/Layout.astro";
+
+const repo = "https://github.com/hawawa4/merlin";
+const releases = `${repo}/releases/latest`;
+
+// Each entry needs a file in public/media/ (a .webm screen recording, or a .webp
+// screenshot with `image` instead of `video`), 16:9.
+const showcase = [
+  {
+    title: "A rack of instruments",
+    body: "Eight slots. Each holds an instrument, and its own editor opens inside the main window, never as a separate one. Play one, layer several, or split the keyboard into zones. Held notes and tails carry over when you switch.",
+    video: "/media/rack.webm",
+  },
+  {
+    title: "Effects as pedals",
+    body: "Every slot has an EQ, a compressor, a delay and a reverb, drawn as pedals with knobs. The master has a limiter.",
+    video: "/media/effects.webm",
+  },
+  {
+    title: "Windows plugins",
+    body: "Windows VST3 and CLAP plugins run through a bundled Wine and yabridge, downloaded from Settings. Your own Wine is never touched.",
+    video: "/media/windows.webm",
+  },
+  {
+    title: "Scenes",
+    body: "Store what is playing as a scene: which instruments, volumes, mutes, zones, effects, SoundFont presets and macros. Recall it with a click, a pad or a foot switch.",
+    video: "/media/scenes.webm",
+  },
+  {
+    title: "MIDI mapping",
+    body: "Press MIDI MAP, click a control, move a knob or press a pad. Any control can be mapped. There is also a driver for the Novation Launchkey MK3 (pad lights and screen).",
+    video: "/media/midimap.webm",
+  },
+  {
+    title: "Setlists and the Perform view",
+    body: "Songs are made of parts, and each part recalls a scene and can change the tempo. Add backing tracks and markers. The Perform view is big scene buttons, one tile per instrument and a PANIC button, and it can be locked so nothing gets changed by accident.",
+    video: "/media/perform.webm",
+  },
+];
+
+const features = [
+  "Instruments: CLAP, VST3, VST2, LV2, SoundFonts (a folder of .sf2 files is one instrument) and Windows plugins.",
+  "Tempo and metronome in the header. The same tempo drives the click, the MIDI clock and plugins that sync to the host.",
+  "The app always keeps the last 30 minutes you played, in memory. One button saves them as a .mid file.",
+  "Plugins are scanned in a separate process. A plugin that crashes or hangs is set aside instead of taking the app down.",
+  "Rigs are saved as .mrig files, with autosave and recovery after a crash.",
+  "A performance check for realtime scheduling and similar, with the exact fix for each problem it finds.",
+];
+
+const limits = [
+  "It isn’t a DAW. There are no tracks, no routing and no recording to arm.",
+  "Linux on x86_64 only, and it needs PipeWire (through its JACK API). The window is an X11 one, which runs through XWayland on Wayland desktops.",
+  "Developed on PikaOS with a handful of plugins and one controller. Other setups are less tested, so expect rough edges.",
+  "Windows plugins: 64-bit only, and copy protection (iLok and the like) may not work. Some u-he plugins go silent about one start in ten under Wine, and Cardinal doesn’t work at all.",
+  "LV2 plugins are not told the tempo.",
+];
+---
+
+<Layout
+  title="Merlin"
+  description="A live instrument host for Linux: a rack of CLAP, VST3, VST2, LV2, SoundFont and Windows plugins, switched from MIDI controllers. Free and open source."
+>
+  <header class="hero">
+    <div class="wrap">
+      <h1>Merlin</h1>
+      <p class="sub">
+        A live instrument host for Linux. A rack of instruments, each with
+        simple effects, that you switch between from your MIDI keyboard or
+        controller while you play. Made for playing, not for recording.
+      </p>
+      <p class="cta">
+        <a class="btn primary" href={releases}>Download</a>
+        <a class="btn" href={repo}>Source</a>
+      </p>
+      <p class="fine">Linux x86_64: .deb and tarball on the releases page.</p>
+    </div>
+  </header>
+
+  <main>
+    <section>
+      <div class="wrap">
+        <h2>Human disclaimer</h2>
+        <p class="sub">
+          Merlin will remain free and open source. This is not a micro-SaaS,
+          this is not a get rich fast scheme. I made this for myself and my own
+          playing. I used Ableton when I was on windows, and it's amazing for
+          recording clips, but of course not (properly) available on Linux
+          <br /><br /> The vast majority of the code is AI generated. Want to fork
+          it and make something better? Please go ahead.
+          <br /><br />
+          <h3>This is not a DAW and it will never be</h3>
+          <p>
+            A DAW is a way more complicated project, and one that is meant to be
+            much more of a "I spend 8 hours a day using this tool" kind of
+            productivity software. I made this to avoid the additional overhead
+            and complications of a DAW. If you're here because you were looking
+            for linux audio production, I can HIGHLY recommend Bitwig Studio
+          </p>
+        </p>
+        <br />
+        <h3>Contact</h3>
+        <p class="sub">
+          If you are actually using this, and have ideas or suggestions that
+          you'd like to see, feel free to <a href={`${repo}/issues/new/choose`}
+            >Open a new issue on Github</a
+          >
+          Also if you're actually using this in livestreams (or busking!? That would
+          be cool), I'd love to know and check it out! I don't have any bullshit tracking
+          or analytics baked in the software.
+        </p>
+      </div>
+    </section>
+    {
+      showcase.map((f) => (
+        <section class="showcase">
+          <div class="wrap">
+            <h2>{f.title}</h2>
+            <p>{f.body}</p>
+            <video
+              src={f.video}
+              width="1920"
+              height="1080"
+              muted
+              loop
+              playsinline
+              preload="none"
+              aria-hidden="true"
+            />
+          </div>
+        </section>
+      ))
+    }
+
+    <section>
+      <div class="wrap narrow">
+        <h2>Also</h2>
+        <ul>
+          {features.map((f) => <li>{f}</li>)}
+        </ul>
+      </div>
+    </section>
+
+    <section>
+      <div class="wrap narrow">
+        <h2>Limitations</h2>
+        <ul>
+          {limits.map((l) => <li>{l}</li>)}
+        </ul>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <p>
+        Merlin is an independent project and is not affiliated with, endorsed by
+        or connected to Wine, yabridge, Novation, Steinberg or any plugin maker.
+        Their names are used only to say what Merlin works with.
+      </p>
+      <p>
+        GPL v3 (<a href={`${repo}/blob/main/LICENSE`}>license</a>) ·
+        <a href={repo}>GitHub</a> · <a href={`${repo}/issues`}
+          >Report a problem</a
+        >
+      </p>
+    </div>
+  </footer>
+</Layout>
+
+<script>
+  // Videos are silent screen recordings: play them only while on screen.
+  const io = new IntersectionObserver(
+    (entries) => {
+      for (const e of entries) {
+        const v = e.target as HTMLVideoElement;
+        if (e.isIntersecting) void v.play().catch(() => {});
+        else v.pause();
+      }
+    },
+    { threshold: 0.4 },
+  );
+  document.querySelectorAll(".showcase video").forEach((v) => io.observe(v));
+</script>
+
+<style>
+  .hero {
+    padding: 2.5rem 0 1rem;
+  }
+  h1 {
+    font-size: clamp(2rem, 5vw, 2.75rem);
+  }
+  .sub {
+    max-width: 38rem;
+    color: var(--muted);
+    margin: 0.75rem 0 0;
+  }
+  .cta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    margin: 1.5rem 0 0.6rem;
+  }
+  .btn {
+    display: inline-block;
+    padding: 0.5rem 1.1rem;
+    border-radius: 4px;
+    text-decoration: none;
+    border: 1px solid var(--line);
+    color: var(--ink);
+  }
+  .btn.primary {
+    background: var(--accent);
+    color: var(--accent-ink);
+    border-color: var(--accent);
+  }
+  .btn:hover {
+    filter: brightness(1.08);
+  }
+  .fine {
+    color: var(--muted);
+    font-size: 0.9rem;
+    margin: 0;
+  }
+
+  section {
+    padding: 2rem 0;
+  }
+  .narrow > * {
+    max-width: 42rem;
+  }
+  h2 {
+    font-size: 1.4rem;
+    margin-bottom: 0.75rem;
+  }
+  ul {
+    padding-left: 1.2rem;
+    margin: 0;
+  }
+  li {
+    margin-bottom: 0.4rem;
+  }
+
+  .showcase p {
+    max-width: 42rem;
+    color: var(--muted);
+    margin: 0 0 1rem;
+  }
+  .showcase video {
+    display: block;
+    width: 100%;
+    height: auto;
+    aspect-ratio: 16 / 9;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--surface);
+  }
+
+  footer {
+    padding: 2rem 0 3rem;
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+  footer p {
+    max-width: 42rem;
+    margin: 0 0 0.5rem;
+  }
+</style>
