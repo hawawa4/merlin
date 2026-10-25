@@ -4,8 +4,8 @@ import Layout from "../layouts/Layout.astro";
 const repo = "https://github.com/hawawa4/merlin";
 const releases = `${repo}/releases/latest`;
 
-// Each entry needs a file in public/media/ (a .webm screen recording, or a .webp
-// screenshot with `image` instead of `video`), 16:9.
+// An entry with a `video` needs a file in public/media/ (a .webm screen recording, 16:9);
+// one without is text only.
 const showcase = [
   {
     title: "A rack of instruments",
@@ -29,8 +29,12 @@ const showcase = [
   },
   {
     title: "MIDI mapping",
-    body: "Press MIDI MAP, click a control, move a knob or press a pad. Any control can be mapped. There is also a driver for the Novation Launchkey MK3 (pad lights and screen).",
+    body: "Press MIDI MAP, click a control, move a knob or press a pad. Any control can be mapped.",
     video: "/media/midimap.webm",
+  },
+  {
+    title: "Control surfaces",
+    body: "Merlin talks to the Novation Launchkey MK3 directly, in its DAW mode, with a layout that needs no setup: the top pads select instruments, the bottom pads recall scenes, the knobs move the playing instrument’s macros or effects, and the faders and the buttons under them set volumes and mutes. Track and Scene buttons step through instruments and song parts, and Play, Click and Quantise start the transport, the click and tap tempo. The pads, button lights and the 16×2 screen show what is selected, and the screen shows the name and value of whatever you touch. Your own mappings sit on top of that layout. Drivers live in their own crates, so more devices can be added.",
   },
   {
     title: "Setlists and the Perform view",
@@ -51,7 +55,7 @@ const features = [
 const limits = [
   "It isn’t a DAW. There are no tracks, no routing and no recording to arm.",
   "Linux on x86_64 only, and it needs PipeWire (through its JACK API). The window is an X11 one, which runs through XWayland on Wayland desktops.",
-  "Developed on PikaOS with a handful of plugins and one controller. Other setups are less tested, so expect rough edges.",
+  "Developed on PikaOS with a handful of plugins and one controller (a Launchkey MK3 49). Other setups are less tested, so expect rough edges.",
   "Windows plugins: 64-bit only, and copy protection (iLok and the like) may not work. Some u-he plugins go silent about one start in ten under Wine, and Cardinal doesn’t work at all.",
   "LV2 plugins are not told the tempo.",
 ];
@@ -123,16 +127,18 @@ const limits = [
           <div class="wrap">
             <h2>{f.title}</h2>
             <p>{f.body}</p>
-            <video
-              src={f.video}
-              width="1920"
-              height="1080"
-              muted
-              loop
-              playsinline
-              preload="none"
-              aria-hidden="true"
-            />
+            {f.video && (
+              <video
+                src={f.video}
+                width="1920"
+                height="1080"
+                muted
+                loop
+                playsinline
+                preload="none"
+                aria-hidden="true"
+              />
+            )}
           </div>
         </section>
       ))
