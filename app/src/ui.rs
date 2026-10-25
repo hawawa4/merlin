@@ -181,6 +181,13 @@ pub enum Action {
     /// Download and install the Wine + yabridge runtime, then restart.
     InstallRuntime,
     ToggleFavorite(usize),
+    /// Take browser entry `k` out of the library for good.
+    HidePlugin(usize),
+    /// Bring a hidden plugin back (its favourite key).
+    UnhidePlugin(String),
+    /// Never load, list or report this plugin file again.
+    IgnoreFile(PathBuf),
+    UnignoreFile(PathBuf),
     /// Add the tag to browser entry `k`, or take it off if it has it.
     ToggleTag(usize, crate::tags::Tag),
     ClearTags(usize),

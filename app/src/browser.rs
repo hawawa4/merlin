@@ -63,6 +63,22 @@ pub fn panel(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec
                     ui.label(RichText::new("scanning…").small().weak());
                 }
             });
+            let failed = s.entries.iter().filter(|e| e.error.is_some()).count();
+            if failed > 0 && !s.scanning() {
+                let text = format!(
+                    "{failed} file{} could not be scanned",
+                    if failed == 1 { "" } else { "s" }
+                );
+                if ui
+                    .small_button(RichText::new(text).small())
+                    .on_hover_text("Open Settings > Plugins to see which, retry or ignore them")
+                    .clicked()
+                {
+                    actions.push(Action::ShowSettingsTab(
+                        crate::settings_ui::SettingsTab::Plugins,
+                    ));
+                }
+            }
             tag_filter(ui, &mut st.tag_filter);
             ui.separator();
 
@@ -431,6 +447,16 @@ fn tag_menu(label: &egui::Response, s: &Session, k: usize, actions: &mut Vec<Act
         .show(|ui| {
             if ui.selectable_label(s.is_favorite(f), "Favourite").clicked() {
                 actions.push(Action::ToggleFavorite(k));
+            }
+            if ui
+                .button("Hide from the library")
+                .on_hover_text(
+                    "Not an instrument, or not wanted: it is never shown again. Settings > Plugins lists what is hidden and brings it back.",
+                )
+                .clicked()
+            {
+                actions.push(Action::HidePlugin(k));
+                ui.close();
             }
             ui.separator();
             ui.label(

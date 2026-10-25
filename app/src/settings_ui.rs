@@ -265,19 +265,64 @@ fn plugins(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<A
     let failed: Vec<_> = s.entries.iter().filter(|e| e.error.is_some()).collect();
     if !failed.is_empty() {
         ui.add_space(8.0);
-        ui.strong("Files that could not be scanned");
+        ui.strong(format!(
+            "Files that could not be scanned ({})",
+            failed.len()
+        ));
         ui.label(
-            RichText::new("They are tried again when the file changes, or with Retry.")
-                .small()
-                .weak(),
+            RichText::new(
+                "They are tried again when the file changes, or with Retry. Ignore a file you know is broken or not a plugin: it is never loaded or listed here again.",
+            )
+            .small()
+            .weak(),
         );
         for e in failed {
             ui.horizontal_wrapped(|ui| {
-                ui.colored_label(status_color(Status::Fail), e.path.display().to_string());
-                ui.label(e.error.as_deref().unwrap_or_default());
                 if ui.small_button("Retry").clicked() {
                     actions.push(Action::RetryFile(e.path.clone()));
                 }
+                if ui
+                    .small_button("Ignore")
+                    .on_hover_text("Never scan this file again, and stop reporting it")
+                    .clicked()
+                {
+                    actions.push(Action::IgnoreFile(e.path.clone()));
+                }
+                ui.colored_label(status_color(Status::Fail), e.path.display().to_string());
+                ui.label(e.error.as_deref().unwrap_or_default());
+            });
+        }
+    }
+
+    if !s.settings.ignored_files.is_empty() {
+        ui.add_space(8.0);
+        ui.strong("Ignored files");
+        for p in &s.settings.ignored_files {
+            ui.horizontal_wrapped(|ui| {
+                if ui.small_button("Stop ignoring").clicked() {
+                    actions.push(Action::UnignoreFile(p.clone()));
+                }
+                ui.label(p.display().to_string());
+            });
+        }
+    }
+
+    if !s.hidden.is_empty() {
+        ui.add_space(8.0);
+        ui.strong("Hidden plugins");
+        ui.label(
+            RichText::new(
+                "Hidden from the library with right-click > Hide. Rigs that use them still load.",
+            )
+            .small()
+            .weak(),
+        );
+        for f in &s.hidden {
+            ui.horizontal_wrapped(|ui| {
+                if ui.small_button("Show again").clicked() {
+                    actions.push(Action::UnhidePlugin(Session::favorite_key(f)));
+                }
+                ui.label(format!("{} ({})", f.info.name, f.info.vendor));
             });
         }
     }

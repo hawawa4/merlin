@@ -81,6 +81,12 @@ pub struct Settings {
     /// the settings load and never written again.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub windows_vst2_dirs: Vec<PathBuf>,
+    /// Plugin files the user told the scanner to leave alone (broken ones): never loaded,
+    /// never listed, never reported as failed.
+    pub ignored_files: Vec<PathBuf>,
+    /// Plugins the user hid from the browser, by the same key as favourites. They are still
+    /// scanned, so a rig that uses one keeps loading.
+    pub hidden_plugins: Vec<String>,
     /// Minutes of MIDI the capture keeps, always (0: off).
     pub capture_minutes: u32,
     /// Where captures are saved; `~/Music/Merlin` when unset.
@@ -106,6 +112,8 @@ impl Default for Settings {
             tags: BTreeMap::new(),
             click_output: None,
             windows_vst2_dirs: Vec::new(),
+            ignored_files: Vec::new(),
+            hidden_plugins: Vec::new(),
             capture_minutes: 30,
             capture_dir: None,
             backing_dir: None,

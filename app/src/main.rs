@@ -878,6 +878,24 @@ impl Running {
                 }
                 Ok(())
             }
+            Action::HidePlugin(k) => {
+                if let Some(f) = s.found.get(k).cloned() {
+                    s.hide_plugin(&f);
+                }
+                Ok(())
+            }
+            Action::UnhidePlugin(key) => {
+                s.unhide_plugin(&key);
+                Ok(())
+            }
+            Action::IgnoreFile(path) => {
+                s.ignore_file(path);
+                Ok(())
+            }
+            Action::UnignoreFile(path) => {
+                s.unignore_file(&path);
+                Ok(())
+            }
             Action::ToggleTag(k, tag) => {
                 if let Some(f) = s.found.get(k).cloned() {
                     s.toggle_tag(&f, tag);

@@ -6,7 +6,7 @@ use std::process::Command;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use merlin_scanner::{Cache, Entry, run_isolated, scan_with};
+use merlin_scanner::{Cache, Entry, run_isolated, scan_ignoring};
 use winit::event_loop::EventLoopProxy;
 
 use crate::session::UserEvent;
@@ -51,9 +51,10 @@ fn probe(
     )
 }
 
-/// Starts a scan of `dirs`. Files in `forget` are probed again even if the cache has them.
+/// Starts a scan of `dirs`, leaving the `ignored` files alone. Files in `forget` are probed again even if the cache has them.
 pub fn spawn(
     dirs: Vec<PathBuf>,
+    ignored: Vec<PathBuf>,
     cache_file: PathBuf,
     forget: Vec<PathBuf>,
     proxy: EventLoopProxy<UserEvent>,
@@ -71,8 +72,9 @@ pub fn spawn(
                 let _ = tx.send(m);
                 let _ = proxy.send_event(UserEvent::Scan);
             };
-            scan_with(
+            scan_ignoring(
                 &dirs,
+                &ignored,
                 &mut cache,
                 &|file, windows| probe(&exe, file, windows),
                 |file| send(ScanMsg::Started(file.to_owned())),

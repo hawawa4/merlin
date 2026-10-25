@@ -294,10 +294,29 @@ pub fn scan_with(
     dirs: &[PathBuf],
     cache: &mut Cache,
     load: &dyn Fn(&Path, bool) -> Result<Vec<PluginInfo>>,
+    progress: impl FnMut(&Path),
+    done: impl FnMut(&Entry),
+) -> Vec<Entry> {
+    scan_ignoring(dirs, &[], cache, load, progress, done)
+}
+
+/// The plugin files in the folders, minus the ones the user asked to ignore.
+fn files_to_scan(dirs: &[PathBuf], ignored: &[PathBuf]) -> Vec<(PathBuf, bool)> {
+    let mut files = find_clap_files(dirs);
+    files.retain(|(p, _)| !ignored.contains(p));
+    files
+}
+
+/// [`scan_with`] that never loads, lists or remembers the `ignored` files.
+pub fn scan_ignoring(
+    dirs: &[PathBuf],
+    ignored: &[PathBuf],
+    cache: &mut Cache,
+    load: &dyn Fn(&Path, bool) -> Result<Vec<PluginInfo>>,
     mut progress: impl FnMut(&Path),
     mut done: impl FnMut(&Entry),
 ) -> Vec<Entry> {
-    let files = find_clap_files(dirs);
+    let files = files_to_scan(dirs, ignored);
     let mut result = Vec::with_capacity(files.len());
     let mut seen = std::collections::HashSet::new();
     for (path, windows) in files {
@@ -340,8 +359,8 @@ pub fn scan_with(
 
 /// What the cache already knows about the plugin files in these folders, without loading
 /// anything (stale or unknown files are left out).
-pub fn cached_entries(dirs: &[PathBuf], cache: &Cache) -> Vec<Entry> {
-    find_clap_files(dirs)
+pub fn cached_entries(dirs: &[PathBuf], ignored: &[PathBuf], cache: &Cache) -> Vec<Entry> {
+    files_to_scan(dirs, ignored)
         .into_iter()
         .filter_map(|(path, windows)| {
             let (mtime, size) = stamp(&path)?;
@@ -630,6 +649,31 @@ mod tests {
         let third = scan_with(&dirs, &mut cache, &loader, |_| {}, |_| {});
         assert_eq!(third.len(), 1);
         assert_eq!(cache.len(), 1);
+    }
+
+    #[test]
+    fn ignored_files_are_neither_loaded_nor_listed_nor_remembered() {
+        let d = tempdir("ignored");
+        std::fs::write(d.join("good.clap"), b"1").unwrap();
+        std::fs::write(d.join("broken.clap"), b"1").unwrap();
+        let calls = RefCell::new(Vec::<String>::new());
+        let loader = |p: &Path, _w: bool| -> Result<Vec<PluginInfo>> {
+            let name = p.file_stem().unwrap().to_string_lossy().into_owned();
+            calls.borrow_mut().push(name.clone());
+            Ok(vec![info(&name)])
+        };
+        let dirs = [d.clone()];
+        let ignored = [d.join("broken.clap")];
+        let mut cache = Cache::default();
+        let entries = scan_ignoring(&dirs, &ignored, &mut cache, &loader, |_| {}, |_| {});
+        assert_eq!(*calls.borrow(), vec!["good".to_string()]);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cached_entries(&dirs, &ignored, &cache).len(), 1);
+        // Un-ignored, it is picked up like any new file.
+        calls.borrow_mut().clear();
+        scan_ignoring(&dirs, &[], &mut cache, &loader, |_| {}, |_| {});
+        assert_eq!(*calls.borrow(), vec!["broken".to_string()]);
     }
 
     #[test]

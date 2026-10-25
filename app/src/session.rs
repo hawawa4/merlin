@@ -198,6 +198,8 @@ pub struct Session {
     /// What to tell the user instead of, or beside, a slot's editor (see `quirks`).
     pub notes: Vec<Option<String>>,
     pub found: Vec<Found>,
+    /// Plugins the user hid from the browser (still known, so saved rigs keep loading them).
+    pub hidden: Vec<Found>,
     /// What the scanner tags each of `found` as (by `favorite_key`); the user's own tags win.
     auto_tags: std::collections::HashMap<String, Vec<Tag>>,
     /// Effect plugins, for the inserts.
@@ -328,6 +330,7 @@ impl Session {
             view_id: None,
             notes: vec![None; UI_SLOTS],
             found: Vec::new(),
+            hidden: Vec::new(),
             auto_tags: Default::default(),
             effects: Vec::new(),
             entries: Vec::new(),
@@ -389,6 +392,7 @@ impl Session {
         // Start from what the cache knows, then let the background scan catch up.
         s.entries = merlin_scanner::cached_entries(
             &s.plugin_dirs,
+            &s.settings.ignored_files,
             &Cache::load(&crate::paths::plugin_cache_file()),
         );
         s.refresh_found();
@@ -688,6 +692,46 @@ impl Session {
         }
     }
 
+    /// Takes a plugin out of the browser for good (it is still scanned, so rigs that use it
+    /// keep working).
+    pub fn hide_plugin(&mut self, f: &Found) {
+        let key = Self::favorite_key(f);
+        if !self.settings.hidden_plugins.contains(&key) {
+            self.settings.hidden_plugins.push(key);
+            self.save_settings();
+            self.refresh_found();
+        }
+    }
+
+    pub fn unhide_plugin(&mut self, key: &str) {
+        let before = self.settings.hidden_plugins.len();
+        self.settings.hidden_plugins.retain(|k| k != key);
+        if self.settings.hidden_plugins.len() != before {
+            self.save_settings();
+            self.refresh_found();
+        }
+    }
+
+    /// "This file is broken, never look at it again": not loaded, not listed, no error.
+    pub fn ignore_file(&mut self, path: PathBuf) {
+        if self.settings.ignored_files.contains(&path) {
+            return;
+        }
+        self.settings.ignored_files.push(path.clone());
+        self.save_settings();
+        self.entries.retain(|e| e.path != path);
+        self.refresh_found();
+    }
+
+    pub fn unignore_file(&mut self, path: &Path) {
+        let before = self.settings.ignored_files.len();
+        self.settings.ignored_files.retain(|p| p != path);
+        if self.settings.ignored_files.len() != before {
+            self.save_settings();
+            self.start_scan(Vec::new());
+        }
+    }
+
     pub fn add_sound_dir(&mut self, dir: PathBuf) {
         if !dir.as_os_str().is_empty() && !self.settings.sound_dirs.contains(&dir) {
             self.settings.sound_dirs.push(dir);
@@ -967,10 +1011,14 @@ impl Session {
 
     fn refresh_found(&mut self) {
         // Folders full of SoundFonts are one instrument each; the system folders keep theirs apart.
-        self.found = merlin_scanner::group_soundfonts(
+        let all = merlin_scanner::group_soundfonts(
             merlin_scanner::with_feature(&self.entries, "instrument"),
             &merlin_scanner::default_sound_dirs(),
         );
+        let hidden = &self.settings.hidden_plugins;
+        (self.hidden, self.found) = all
+            .into_iter()
+            .partition(|f| hidden.contains(&Self::favorite_key(f)));
         let db = crate::autotag::Database::builtin();
         self.auto_tags = self
             .found
@@ -996,6 +1044,7 @@ impl Session {
         }
         self.scan_rx = Some(scan_worker::spawn(
             self.plugin_dirs.clone(),
+            self.settings.ignored_files.clone(),
             crate::paths::plugin_cache_file(),
             forget,
             self.proxy.clone(),
@@ -1100,6 +1149,7 @@ impl Session {
         let name = self
             .found
             .iter()
+            .chain(&self.hidden)
             .chain(&self.effects)
             .find(|f| f.info.id == id)
             .map(|f| f.info.name.clone())
@@ -1908,17 +1958,11 @@ impl Session {
     /// Finds the file for a saved plugin: by id in what was scanned (a path alone can go stale
     /// after a reinstall), else by the saved path. Refuses unsupported and quarantined plugins.
     fn locate(&self, r: &PluginRef) -> Result<(PathBuf, bool)> {
-        let found = self
-            .found
-            .iter()
-            .chain(&self.effects)
+        // Hidden plugins are hidden from the browser only: a saved rig still finds them.
+        let known = || self.found.iter().chain(&self.hidden).chain(&self.effects);
+        let found = known()
             .find(|f| f.info.id == r.id && f.windows == r.windows)
-            .or_else(|| {
-                self.found
-                    .iter()
-                    .chain(&self.effects)
-                    .find(|f| f.info.id == r.id)
-            });
+            .or_else(|| known().find(|f| f.info.id == r.id));
         if let Some(why) = crate::quirks::lookup(&r.id, r.windows).unsupported {
             return Err(anyhow!("not supported: {why}"));
         }
