@@ -131,8 +131,9 @@ pub enum InputRole {
     /// Played: its notes go to the instruments.
     #[default]
     Keyboard,
-    /// A control surface (pads, knobs, faders): its messages never reach the instruments. They
-    /// are counted, so the rack can show activity, and are kept for the control mapping to come.
+    /// A control surface (pads, knobs, faders): its messages never reach the instruments, except
+    /// the notes on channel 10 (drum pads) that nothing is mapped to. They are counted, so the
+    /// rack can show activity, and are kept for the control mapping to come.
     Controller,
 }
 
@@ -394,6 +395,10 @@ struct Callback {
     ftz_set: bool,
 }
 
+/// The MIDI channel (from 0) whose notes a controller plays instead of only controlling with:
+/// channel 10, the General MIDI drums, where the pads of a Launchkey's Drum mode report.
+const CONTROLLER_PLAYED_CHANNEL: u8 = 9;
+
 /// Flush denormals to zero (FTZ + DAZ) on this thread: plugins' decaying tails otherwise cost
 /// 100x per sample.
 fn set_flush_to_zero() {
@@ -444,11 +449,18 @@ impl jack::ProcessHandler for Callback {
                 // are reported to the main thread, and a mapped one does not play anything.
                 let wanted = &self.interest.inputs[i];
                 let learning = self.interest.learning.load(Ordering::Relaxed);
+                // A controller's drum pads send notes on channel 10 (and poly aftertouch for them):
+                // those that nothing is mapped to are played, like a keyboard's.
+                let played = controller && data[0] & 0x0F == CONTROLLER_PLAYED_CHANNEL;
                 let (reported, consumed) = match data[0] & 0xF0 {
                     0x80 | 0x90 => {
                         let mapped = InputInterest::bit(&wanted.notes, data[1]);
-                        (controller || mapped || learning, controller || mapped)
+                        (
+                            controller || mapped || learning,
+                            (controller && !played) || mapped,
+                        )
                     }
+                    0xA0 => (false, controller && !played),
                     0xB0 => {
                         let mapped = InputInterest::bit(&wanted.cc, data[1]);
                         (controller || mapped || learning, controller || mapped)
