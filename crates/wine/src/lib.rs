@@ -210,12 +210,19 @@ impl Runtime {
         out_dir: &Path,
         placement: Placement,
     ) -> Result<SyncReport> {
-        sync_vst3_bridges_with(
-            &self.vst3_dirs(),
-            &self.vst3_chainloader(),
-            out_dir,
-            placement,
-        )
+        self.sync_vst3_bridges_in(&[], out_dir, placement)
+    }
+
+    /// [`Self::sync_vst3_bridges_with`], and the Windows VST3 plugins in `extra_dirs` too.
+    pub fn sync_vst3_bridges_in(
+        &self,
+        extra_dirs: &[PathBuf],
+        out_dir: &Path,
+        placement: Placement,
+    ) -> Result<SyncReport> {
+        let mut dirs = self.vst3_dirs();
+        dirs.extend(extra_dirs.iter().filter(|d| d.is_dir()).cloned());
+        sync_vst3_bridges_with(&dirs, &self.vst3_chainloader(), out_dir, placement)
     }
 
     /// Makes (and tidies) the bridges for this prefix's Windows CLAP plugins in `out_dir`.
@@ -228,7 +235,19 @@ impl Runtime {
         out_dir: &Path,
         placement: Placement,
     ) -> Result<SyncReport> {
-        sync_clap_bridges_with(&self.clap_dirs(), &self.chainloader(), out_dir, placement)
+        self.sync_clap_bridges_in(&[], out_dir, placement)
+    }
+
+    /// [`Self::sync_clap_bridges_with`], and the Windows CLAP plugins in `extra_dirs` too.
+    pub fn sync_clap_bridges_in(
+        &self,
+        extra_dirs: &[PathBuf],
+        out_dir: &Path,
+        placement: Placement,
+    ) -> Result<SyncReport> {
+        let mut dirs = self.clap_dirs();
+        dirs.extend(extra_dirs.iter().filter(|d| d.is_dir()).cloned());
+        sync_clap_bridges_with(&dirs, &self.chainloader(), out_dir, placement)
     }
 }
 
@@ -503,14 +522,20 @@ fn find_windows_vst3(
             let name = p.file_name().map(PathBuf::from).unwrap_or_default();
             let subdir = dir.strip_prefix(root).unwrap_or(Path::new("")).to_owned();
             let (module, resources) = if p.is_dir() {
+                // A Linux plugin, or a bridge that is already made (yabridge's own, or ours):
+                // folders of plugins can hold anything, so these are not Windows plugins to
+                // report on.
+                if p.join("Contents/x86_64-linux").exists() {
+                    continue;
+                }
                 let win64 = p.join("Contents/x86_64-win").join(&name);
                 if !win64.exists() {
-                    let why = if p.join("Contents/x86-win").exists() {
-                        "32-bit only (yabridge here runs 64-bit plugins)"
-                    } else {
-                        "not a Windows VST3 bundle"
-                    };
-                    skipped.push((p.clone(), why.into()));
+                    if p.join("Contents/x86-win").exists() {
+                        skipped.push((
+                            p.clone(),
+                            "32-bit only (yabridge here runs 64-bit plugins)".into(),
+                        ));
+                    }
                     continue;
                 }
                 let res = p.join("Contents/Resources");
@@ -664,6 +689,10 @@ fn find_windows_vst2(
     for p in paths {
         let is_dll = p.extension().is_some_and(|e| e.eq_ignore_ascii_case("dll"));
         if is_dll && p.is_file() {
+            // `X.so` beside `X.dll` is a bridge made already (yabridge's, or ours).
+            if p.with_extension("so").is_file() {
+                continue;
+            }
             match pe_arch(&p) {
                 Some(PeArch::X64) => {
                     if file_contains(&p, b"VSTPluginMain") {
@@ -1041,6 +1070,54 @@ mod tests {
         std::fs::write(d.join("elf"), b"\x7fELF....").unwrap();
         assert_eq!(pe_arch(&d.join("elf")), None);
         assert_eq!(pe_arch(&d.join("missing")), None);
+    }
+
+    #[test]
+    fn one_folder_of_mixed_plugins_is_bridged_in_every_format() {
+        let (rt, out) = vst3_fixture("mixed-formats");
+        std::fs::write(rt.vst2_chainloader(), b"ELF vst2 chainloader").unwrap();
+        let mine = rt.prefix.parent().unwrap().join("my plugins");
+        std::fs::create_dir_all(mine.join("Native.vst3/Contents/x86_64-linux")).unwrap();
+        std::fs::create_dir_all(mine.join("Merged.vst3/Contents/x86_64-linux")).unwrap();
+        std::fs::create_dir_all(mine.join("Merged.vst3/Contents/x86_64-win")).unwrap();
+        std::fs::write(mine.join("Odd.clap"), pe(0x8664)).unwrap();
+        std::fs::write(mine.join("Native.clap"), b"\x7fELF").unwrap();
+        std::fs::write(mine.join("Fresh.vst3"), pe(0x8664)).unwrap();
+        let mut dll = pe(0x8664);
+        dll.extend_from_slice(b"VSTPluginMain");
+        std::fs::write(mine.join("Old.dll"), &dll).unwrap();
+        std::fs::write(mine.join("Bridged.dll"), &dll).unwrap();
+        std::fs::write(mine.join("Bridged.so"), b"ELF").unwrap();
+        let extra = std::slice::from_ref(&mine);
+        let copy = Placement::Copy;
+
+        let claps = rt
+            .sync_clap_bridges_in(extra, &out.join("clap"), copy)
+            .unwrap();
+        assert!(out.join("clap/Odd.clap").exists());
+        assert!(!out.join("clap/Native.clap").exists());
+        assert!(claps.skipped.is_empty(), "{claps:?}");
+
+        let vst3 = rt.sync_vst3_bridges_in(extra, &out, copy).unwrap();
+        assert!(
+            out.join("Fresh.vst3/Contents/x86_64-win/Fresh.vst3")
+                .exists()
+        );
+        assert!(!out.join("Native.vst3").exists() && !out.join("Merged.vst3").exists());
+        let skipped: Vec<_> = vst3
+            .skipped
+            .iter()
+            .map(|(p, _)| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            skipped,
+            ["Fake.vst3", "Old32.vst3"],
+            "native bundles are not reported"
+        );
+
+        let vst2 = rt.sync_vst2_bridges(extra, &out.join("vst2")).unwrap();
+        assert_eq!(vst2.created.len(), 1, "{vst2:?}");
+        assert!(out.join("vst2/my plugins/Old.so").exists());
     }
 
     #[test]

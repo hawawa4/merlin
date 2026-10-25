@@ -134,12 +134,29 @@ pub fn default_sound_dirs() -> Vec<PathBuf> {
     dirs
 }
 
+/// Does this shared library name `VSTPluginMain` among its exports? The names sit in the ELF
+/// header area, so only the start of the file is read: this runs on every start, over files
+/// that may be huge.
+fn exports_vst2_entry(path: &Path) -> bool {
+    use std::io::Read;
+    const NEEDLE: &[u8] = b"VSTPluginMain";
+    let Ok(f) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut head = Vec::new();
+    if f.take(2 << 20).read_to_end(&mut head).is_err() {
+        return false;
+    }
+    head.windows(NEEDLE.len()).any(|w| w == NEEDLE)
+}
+
 /// `.clap` files and `.vst3` bundles in the folders (and a few levels below), with whether each
 /// is a yabridge bridge. Bundle directories are plugins, not folders to search.
 pub fn find_clap_files(dirs: &[PathBuf]) -> Vec<(PathBuf, bool)> {
     /// `.so` files are only taken as VST2 plugins in a folder that is a VST2 folder (`vst`,
-    /// `lxvst`, ...), or when a Windows DLL sits beside them (a yabridge bridge): other `.so`
-    /// files (libraries, LV2 and VST3 internals) must never be loaded as plugins.
+    /// `lxvst`, ...), when a Windows DLL sits beside them (a yabridge bridge), or when they
+    /// export `VSTPluginMain`: other `.so` files (libraries, LV2 and VST3 internals) must never
+    /// be loaded as plugins.
     fn walk(dir: &Path, depth: usize, vst2: bool, out: &mut Vec<(PathBuf, bool)>) {
         let Ok(rd) = std::fs::read_dir(dir) else {
             return;
@@ -148,10 +165,24 @@ pub fn find_clap_files(dirs: &[PathBuf]) -> Vec<(PathBuf, bool)> {
         paths.sort();
         for p in paths {
             if p.extension().is_some_and(|e| e == "clap") {
+                // A Windows plugin in a folder of the user's is bridged elsewhere; loading the
+                // file itself here would only fail.
+                if p.is_file() && merlin_wine::pe_arch(&p).is_some() {
+                    continue;
+                }
                 // A chainloader named like the plugin, with a `.clap-win` link beside it.
                 let windows = p.with_extension("clap-win").exists();
                 out.push((p, windows));
             } else if p.extension().is_some_and(|e| e == "vst3") {
+                // The same for a VST3 that is a bare Windows module, or a bundle with only
+                // Windows code in it.
+                if p.is_file() && merlin_wine::pe_arch(&p).is_some()
+                    || p.is_dir()
+                        && p.join("Contents/x86_64-win").is_dir()
+                        && !p.join("Contents/x86_64-linux").is_dir()
+                {
+                    continue;
+                }
                 // A bridge to a Windows plugin is a merged bundle with the Windows module inside.
                 let windows = p.join("Contents/x86_64-win").is_dir();
                 out.push((p, windows));
@@ -162,7 +193,9 @@ pub fn find_clap_files(dirs: &[PathBuf]) -> Vec<(PathBuf, bool)> {
                 out.push((p, false));
             } else if p.extension().is_some_and(|e| e == "so") && p.is_file() {
                 let windows = p.with_extension("dll").exists();
-                if windows || vst2 {
+                // Outside the usual VST folders, a `.so` is a VST2 plugin when it says it
+                // exports the entry point.
+                if windows || vst2 || exports_vst2_entry(&p) {
                     out.push((p, windows));
                 }
             } else if p.is_dir()
@@ -465,6 +498,32 @@ mod tests {
     }
 
     #[test]
+    fn a_mixed_folder_gives_each_file_to_the_right_loader() {
+        let d = tempdir("mixed");
+        let touch = |p: &str, bytes: &[u8]| {
+            let path = d.join(p);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, bytes).unwrap();
+        };
+        let mut pe = vec![0u8; 0x100];
+        pe[..2].copy_from_slice(b"MZ");
+        pe[60..64].copy_from_slice(&0x80u32.to_le_bytes());
+        pe[0x80..0x84].copy_from_slice(b"PE\0\0");
+        pe[0x84..0x86].copy_from_slice(&0x8664u16.to_le_bytes());
+        touch("Win.clap", &pe); // a Windows plugin: bridged by the Windows sync
+        touch("Win.dll", &pe); // a Windows VST2: the same
+        touch("WinOnly.vst3/Contents/x86_64-win/WinOnly.vst3", &pe);
+        touch("Native.clap", b"\x7fELF");
+        touch("Vst2Native.so", b"\x7fELF..VSTPluginMain..");
+        touch("libhelper.so", b"\x7fELF..nothing here..");
+        let names: Vec<_> = find_clap_files(std::slice::from_ref(&d))
+            .into_iter()
+            .map(|(p, _)| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["Native.clap", "Vst2Native.so"]);
+    }
+
+    #[test]
     fn the_folder_of_bridges_for_other_hosts_is_not_scanned() {
         let d = tempdir("daw-bridges");
         std::fs::create_dir_all(d.join(DAW_BRIDGES_DIR)).unwrap();
@@ -497,6 +556,7 @@ mod tests {
         std::fs::write(d.join("bundle.clap/inner/e.clap"), b"x").unwrap();
         std::fs::create_dir_all(d.join("Synth.vst3/Contents/x86_64-linux")).unwrap();
         std::fs::create_dir_all(d.join("Bridged.vst3/Contents/x86_64-win")).unwrap();
+        std::fs::create_dir_all(d.join("Bridged.vst3/Contents/x86_64-linux")).unwrap();
         std::fs::write(d.join("Synth.vst3/Contents/x86_64-linux/inner.clap"), b"x").unwrap();
 
         let files: Vec<(String, bool)> = find_clap_files(std::slice::from_ref(&d))

@@ -208,14 +208,12 @@ pub fn show(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<
 fn plugins(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
     ui.strong("Plugin folders");
     ui.label(
-        RichText::new("The standard folders are always searched:")
-            .small()
-            .weak(),
+        RichText::new(
+            "Add any folder with plugins: CLAP, VST3, VST2, LV2, Linux or Windows, mixed or not, with subfolders. Merlin works out what each file is. Windows plugins need Windows plugin support (the Windows plugins tab).",
+        )
+        .small()
+        .weak(),
     );
-    for d in merlin_scanner::default_plugin_dirs() {
-        ui.label(RichText::new(d.display().to_string()).small().weak());
-    }
-    ui.add_space(4.0);
     for (i, d) in s.settings.plugin_dirs.iter().enumerate() {
         ui.horizontal(|ui| {
             ui.label(d.display().to_string());
@@ -225,6 +223,16 @@ fn plugins(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<A
         });
     }
     crate::ui::pick_button(ui, &mut st.picking, "Add folder…", Want::PluginDir, None);
+    egui::CollapsingHeader::new("Standard folders, always searched")
+        .default_open(false)
+        .show(ui, |ui| {
+            for d in merlin_scanner::default_plugin_dirs() {
+                ui.label(RichText::new(d.display().to_string()).small().weak());
+            }
+        });
+    if !s.windows_status.is_empty() {
+        ui.label(RichText::new(&s.windows_status).small().weak());
+    }
     ui.add_space(12.0);
     sound_folders(ui, s, st, actions);
     ui.add_space(8.0);
@@ -1045,33 +1053,13 @@ fn windows_plugins(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &m
                 }
             });
         });
-    egui::CollapsingHeader::new("Folders with Windows VST2 plugins (.dll)")
-        .default_open(!s.settings.windows_vst2_dirs.is_empty())
-        .show(ui, |ui| {
-            ui.label(
-                RichText::new("VST2 plugins are often kept in one folder (for example a shared VstPlugins folder on another disk). Add it here and the 64-bit plugins in it are bridged; the originals are never touched.")
-                    .small()
-                    .weak(),
-            );
-            for (i, d) in s.settings.windows_vst2_dirs.iter().enumerate() {
-                ui.horizontal(|ui| {
-                    ui.label(d.display().to_string());
-                    if ui.small_button("remove").clicked() {
-                        actions.push(Action::RemoveWindowsVst2Dir(i));
-                    }
-                });
-            }
-            ui.add_enabled_ui(!s.windows_busy(), |ui| {
-                crate::ui::pick_button(ui, &mut st.picking, "Add folder…", Want::Vst2Dir, None);
-            });
-        });
     if !s.windows_status.is_empty() {
         ui.label(&s.windows_status);
     }
     ui.add_space(4.0);
     ui.label(
         RichText::new(
-            "Only 64-bit CLAP, VST3 and VST2 plugins are picked up. Plugins with copy protection (iLok and the like) may not run. Prefer a native Linux version when there is one.",
+            "Windows plugins in your folders (Plugins tab) are found and bridged by themselves. Only 64-bit CLAP, VST3 and VST2 plugins are picked up. Plugins with copy protection (iLok and the like) may not run. Prefer a native Linux version when there is one.",
         )
         .small()
         .weak(),

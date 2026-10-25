@@ -148,8 +148,6 @@ pub enum Action {
     AddDir(String),
     RemoveDir(usize),
     AddSoundDir(String),
-    AddWindowsVst2Dir(String),
-    RemoveWindowsVst2Dir(usize),
     RemoveSoundDir(usize),
     Rescan(bool),
     RetryFile(PathBuf),
@@ -616,7 +614,6 @@ fn poll_dialog(ui: &egui::Ui, s: &mut Session, st: &mut UiState, actions: &mut V
             match want {
                 Want::PluginDir => actions.push(Action::AddDir(text)),
                 Want::SoundDir => actions.push(Action::AddSoundDir(text)),
-                Want::Vst2Dir => actions.push(Action::AddWindowsVst2Dir(text)),
                 Want::CaptureDir => actions.push(Action::SetCaptureDir(Some(path))),
                 Want::WineProgram => st.wine_text = text,
                 Want::YabridgeDir => st.yab_text = text,

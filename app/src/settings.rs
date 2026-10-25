@@ -49,7 +49,8 @@ pub use merlin_wine::layout::DEFAULT_RUNTIME_URL;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    /// Extra folders to look for `.clap` plugins (the standard ones are always searched).
+    /// Extra folders of plugins of any kind (CLAP, VST3, VST2, LV2, Linux or Windows); the
+    /// standard ones are always searched.
     pub plugin_dirs: Vec<PathBuf>,
     /// Extra folders to look for SoundFonts (`.sf2`, `.sf3`); the standard ones are always searched.
     pub sound_dirs: Vec<PathBuf>,
@@ -76,7 +77,9 @@ pub struct Settings {
     pub tags: BTreeMap<String, Vec<Tag>>,
     /// The two audio outputs of the interface the click goes to; the main outputs when unset.
     pub click_output: Option<[String; 2]>,
-    /// Folders of Windows VST2 plugins (`.dll`) outside the Windows prefix, to bridge.
+    /// Older versions kept Windows VST2 folders apart; they are folded into `plugin_dirs` when
+    /// the settings load and never written again.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub windows_vst2_dirs: Vec<PathBuf>,
     /// Minutes of MIDI the capture keeps, always (0: off).
     pub capture_minutes: u32,
@@ -115,7 +118,15 @@ impl Settings {
     /// because silently ignoring it would hide the user's own configuration.
     pub fn load(path: &Path) -> Result<Self> {
         match std::fs::read_to_string(path) {
-            Ok(text) => Ok(toml::from_str(&text)?),
+            Ok(text) => {
+                let mut s: Self = toml::from_str(&text)?;
+                for d in std::mem::take(&mut s.windows_vst2_dirs) {
+                    if !s.plugin_dirs.contains(&d) {
+                        s.plugin_dirs.push(d);
+                    }
+                }
+                Ok(s)
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(e.into()),
         }
@@ -148,6 +159,18 @@ mod tests {
         assert_eq!(s.frames, 64);
         assert_eq!(s.plugin_dirs, vec![PathBuf::from("/x")]);
         assert_eq!(s.editor_cache, 8);
+
+        std::fs::write(
+            d.join("old.toml"),
+            "plugin_dirs = [\"/x\"]\nwindows_vst2_dirs = [\"/x\", \"/y\"]\n",
+        )
+        .unwrap();
+        let old = Settings::load(&d.join("old.toml")).unwrap();
+        assert_eq!(
+            old.plugin_dirs,
+            vec![PathBuf::from("/x"), PathBuf::from("/y")]
+        );
+        assert!(old.windows_vst2_dirs.is_empty());
 
         std::fs::write(d.join("bad.toml"), "frames = [").unwrap();
         assert!(Settings::load(&d.join("bad.toml")).is_err());

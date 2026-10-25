@@ -11,7 +11,6 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 pub enum Want {
     PluginDir,
     SoundDir,
-    Vst2Dir,
     CaptureDir,
     WineProgram,
     YabridgeDir,
@@ -48,9 +47,8 @@ impl Want {
 
     fn title(self) -> &'static str {
         match self {
-            Self::PluginDir => "Choose a folder with plugins",
+            Self::PluginDir => "Choose a folder with plugins (any kind)",
             Self::SoundDir => "Choose a folder with SoundFonts",
-            Self::Vst2Dir => "Choose a folder with Windows VST2 plugins",
             Self::CaptureDir => "Choose where MIDI captures are saved",
             Self::WineProgram => "Choose the wine program",
             Self::YabridgeDir => "Choose the yabridge folder",

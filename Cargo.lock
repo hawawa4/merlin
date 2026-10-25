@@ -1329,6 +1329,7 @@ dependencies = [
  "libc",
  "merlin-hosting",
  "merlin-model",
+ "merlin-wine",
  "serde",
  "serde_json",
 ]

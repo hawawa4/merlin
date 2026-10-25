@@ -488,8 +488,6 @@ impl Running {
                 s.remove_plugin_dir(i);
                 Ok(())
             }
-            Action::AddWindowsVst2Dir(text) => s.add_windows_vst2_dir(PathBuf::from(text.trim())),
-            Action::RemoveWindowsVst2Dir(i) => s.remove_windows_vst2_dir(i),
             Action::AddSoundDir(text) => {
                 s.add_sound_dir(PathBuf::from(text.trim()));
                 Ok(())

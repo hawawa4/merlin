@@ -266,6 +266,8 @@ pub struct Session {
     pub restart_requested: bool,
     /// What the Windows job is doing, or how the last one ended (for the Settings tab).
     pub windows_status: String,
+    /// The folders changed while a Windows job ran: sync again when it is done.
+    windows_sync_again: bool,
     font_tx: mpsc::Sender<FontMsg>,
     font_rx: mpsc::Receiver<FontMsg>,
     /// Per slot: the SoundFont being decoded for it (path and name).
@@ -364,6 +366,7 @@ impl Session {
             runtime_changed: Arc::default(),
             restart_requested: false,
             windows_status: String::new(),
+            windows_sync_again: false,
             font_tx,
             font_rx,
             loading: vec![None; UI_SLOTS],
@@ -570,7 +573,7 @@ impl Session {
             .context("set the Wine program and the yabridge folder first")?;
         self.windows_status = "looking for Windows plugins...".into();
         let prefixes = self.windows_prefixes();
-        let extra = self.settings.windows_vst2_dirs.clone();
+        let extra = self.settings.plugin_dirs.clone();
         self.start_windows_job(move |_| sync_report(&rt, &prefixes, &extra))
     }
 
@@ -586,7 +589,7 @@ impl Session {
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
         self.windows_status = format!("preparing to install {name}...");
         let prefixes = self.windows_prefixes();
-        let extra = self.settings.windows_vst2_dirs.clone();
+        let extra = self.settings.plugin_dirs.clone();
         self.start_windows_job(move |tx| {
             if !rt.prefix_ready() {
                 let _ = tx.send(WindowsMsg::Status(
@@ -644,6 +647,10 @@ impl Session {
                 self.say(format!("Windows plugins failed: {e}"));
             }
         }
+        // A folder was added or removed while that job ran.
+        if std::mem::take(&mut self.windows_sync_again) && !self.restart_requested {
+            self.request_windows_sync();
+        }
     }
 
     pub fn save_settings(&mut self) {
@@ -656,6 +663,7 @@ impl Session {
         if !dir.as_os_str().is_empty() && !self.settings.plugin_dirs.contains(&dir) {
             self.settings.plugin_dirs.push(dir);
             self.dirs_changed(true);
+            self.request_windows_sync();
         }
     }
 
@@ -663,26 +671,21 @@ impl Session {
         if index < self.settings.plugin_dirs.len() {
             self.settings.plugin_dirs.remove(index);
             self.dirs_changed(false);
+            self.request_windows_sync();
         }
     }
 
-    /// A folder of Windows VST2 plugins to bridge.
-    pub fn add_windows_vst2_dir(&mut self, dir: PathBuf) -> Result<()> {
-        if dir.as_os_str().is_empty() || self.settings.windows_vst2_dirs.contains(&dir) {
-            return Ok(());
+    /// Bridges the Windows plugins in the user's folders, when Windows plugin support is set
+    /// up (without it they are just not found), or as soon as the job running now is done.
+    fn request_windows_sync(&mut self) {
+        if self.windows_runtime().is_none() {
+            return;
         }
-        self.settings.windows_vst2_dirs.push(dir);
-        self.save_settings();
-        self.sync_windows_plugins()
-    }
-
-    pub fn remove_windows_vst2_dir(&mut self, index: usize) -> Result<()> {
-        if index < self.settings.windows_vst2_dirs.len() {
-            self.settings.windows_vst2_dirs.remove(index);
-            self.save_settings();
-            return self.sync_windows_plugins();
+        if self.windows_busy() {
+            self.windows_sync_again = true;
+        } else if let Err(e) = self.sync_windows_plugins() {
+            self.say(format!("Windows plugins: {e:#}"));
         }
-        Ok(())
     }
 
     pub fn add_sound_dir(&mut self, dir: PathBuf) {
@@ -722,6 +725,8 @@ impl Session {
             Vec::new()
         };
         self.start_scan(forget);
+        // New Windows plugins in the folders are bridged first, then scanned.
+        self.request_windows_sync();
     }
 
     /// Probes one file again (the "retry" for a file that failed to scan).
@@ -2247,7 +2252,7 @@ pub fn read_rig(path: &Path) -> Result<Rig> {
 fn sync_report(
     rt: &merlin_wine::Runtime,
     prefixes: &[PathBuf],
-    extra_vst2: &[PathBuf],
+    extra_dirs: &[PathBuf],
 ) -> Result<String> {
     let (mut ready, mut new, mut removed) = (0, 0, 0);
     let (mut skipped, mut problems) = (Vec::new(), Vec::new());
@@ -2257,15 +2262,14 @@ fn sync_report(
             prefix: prefix.clone(),
             ..rt.clone()
         };
-        let (clap, vst3) = (
-            rt.sync_clap_bridges(&crate::paths::bridges_dir()),
-            rt.sync_vst3_bridges(&crate::paths::bridges_vst3_dir()),
-        );
         // The folders the user named are bridged once, with the first prefix.
-        let vst2 = rt.sync_vst2_bridges(
-            if n == 0 { extra_vst2 } else { &[] },
-            &crate::paths::bridges_vst2_dir(),
+        let extra = if n == 0 { extra_dirs } else { &[] };
+        let copy = merlin_wine::Placement::Copy;
+        let (clap, vst3) = (
+            rt.sync_clap_bridges_in(extra, &crate::paths::bridges_dir(), copy),
+            rt.sync_vst3_bridges_in(extra, &crate::paths::bridges_vst3_dir(), copy),
         );
+        let vst2 = rt.sync_vst2_bridges(extra, &crate::paths::bridges_vst2_dir());
         if n == 0 {
             // A broken yabridge shows on the first prefix; say so instead of "0 plugins".
             if let (Err(a), Err(b)) = (&clap, &vst3) {
