@@ -205,6 +205,8 @@ pub enum Action {
     RenameMacro(usize, usize, String),
     AddMacroParam(usize, usize, Option<usize>, merlin_hosting::ParamInfo),
     AddMacroSampler(usize, usize, merlin_model::SamplerField),
+    /// Macro `k` of a slot drives the built-in effect knob with this id.
+    AddMacroFx(usize, usize, u32),
     RemoveMacroTarget(usize, usize, usize),
     SetMacroRange(usize, usize, usize, f32, f32),
     /// Script-only: make macro `k` of a slot drive the first parameter whose name contains the

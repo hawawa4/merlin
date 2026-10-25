@@ -2,7 +2,10 @@
 
 use egui::{Color32, RichText};
 use merlin_hosting::ParamInfo;
-use merlin_model::{ControlAction, MACROS_PER_SLOT, MacroTarget, SamplerField};
+use merlin_model::{
+    COMP_KNOBS, ControlAction, DELAY_KNOBS, EQ_KNOBS, MACROS_PER_SLOT, MacroTarget, REVERB_KNOBS,
+    SamplerField,
+};
 
 use crate::keyboard::COLORS;
 use crate::session::{Session, UI_SLOTS};
@@ -132,6 +135,10 @@ fn target_name(t: &MacroTarget) -> String {
             None => name.clone(),
         },
         MacroTarget::Sampler { field, .. } => format!("{}  (sound shaping)", field.name()),
+        MacroTarget::Fx { id, .. } => match merlin_model::fx_knob(*id) {
+            Some(k) => format!("{} {}  (effect)", k.group, k.name),
+            None => format!("Effect knob #{id}"),
+        },
     }
 }
 
@@ -168,6 +175,33 @@ fn picker(
                             }
                             shown += 1;
                         }
+                    }
+                }
+                let effects = EQ_KNOBS
+                    .iter()
+                    .chain(&COMP_KNOBS)
+                    .chain(&DELAY_KNOBS)
+                    .chain(&REVERB_KNOBS)
+                    .filter(|k| {
+                        q.is_empty()
+                            || format!("{} {}", k.group, k.name)
+                                .to_lowercase()
+                                .contains(&q)
+                    });
+                let mut group = "";
+                for knob in effects {
+                    if knob.group != group {
+                        group = knob.group;
+                        ui.label(
+                            RichText::new(format!("{group} (built-in effect)"))
+                                .small()
+                                .color(Color32::GRAY),
+                        );
+                    }
+                    shown += 1;
+                    if ui.button(knob.name).clicked() {
+                        actions.push(Action::AddMacroFx(slot, k, knob.id));
+                        ui.close();
                     }
                 }
                 let mut sources: Vec<(Option<usize>, String)> =

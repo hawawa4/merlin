@@ -158,6 +158,15 @@ impl Session {
                 };
                 self.set_sampler_field(slot, field, v);
             }
+            MacroTarget::Fx { .. } => {
+                let Some((id, p)) = target.fx_position(value) else {
+                    return;
+                };
+                let mut fx = self.rig.slots[slot].fx;
+                if fx.set_knob_position(id, p) {
+                    self.set_fx(slot, fx);
+                }
+            }
         }
     }
 
@@ -252,6 +261,24 @@ impl Session {
                 to: 1.0,
             },
             at,
+        );
+    }
+
+    /// Makes macro `k` drive a knob of the slot's built-in effects over its whole travel.
+    pub fn add_macro_fx(&mut self, slot: usize, k: usize, id: u32) {
+        let Some(knob) = merlin_model::fx_knob(id) else {
+            return;
+        };
+        let now = self.rig.slots[slot].fx.knob_value(id).unwrap_or(knob.min);
+        self.add_macro_target(
+            slot,
+            k,
+            MacroTarget::Fx {
+                id,
+                from: 0.0,
+                to: 1.0,
+            },
+            knob.position(now),
         );
     }
 

@@ -23,6 +23,9 @@ BUTTON = {102: "track > (next)", 103: "track < (previous)", 104: "scene up", 105
           115: "play", 116: "stop", 117: "record", 118: "loop", 108: "shift?", 51: "up?", 52: "down?"}
 CC = {**POT, **FADER, **FADER_BUTTON, **BUTTON}
 MODES = {3: "pad mode", 9: "knob mode", 10: "fader mode"}
+# Drum pad mode: sixteen notes on channel 10, rows of eight (top row, then bottom row).
+DRUM_TOP = [40, 41, 42, 43, 48, 49, 50, 51]
+DRUM_BOTTOM = [36, 37, 38, 39, 44, 45, 46, 47]
 
 
 def ports():
@@ -45,7 +48,11 @@ def describe(kind, data):
     if t in (0x90, 0x80):
         on = t == 0x90 and d2 > 0
         pad = ""
-        if 96 <= d1 <= 103:
+        if ch == 10 and d1 in DRUM_TOP:
+            pad = f" = drum pad {DRUM_TOP.index(d1) + 1}, top row"
+        elif ch == 10 and d1 in DRUM_BOTTOM:
+            pad = f" = drum pad {DRUM_BOTTOM.index(d1) + 1}, bottom row"
+        elif 96 <= d1 <= 103:
             pad = f" = pad {d1 - 95}, top row"
         elif 112 <= d1 <= 119:
             pad = f" = pad {d1 - 111}, bottom row"

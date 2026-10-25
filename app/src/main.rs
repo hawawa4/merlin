@@ -584,6 +584,10 @@ impl Running {
                 s.add_macro_sampler(i, k, field);
                 Ok(())
             }
+            Action::AddMacroFx(i, k, id) => {
+                s.add_macro_fx(i, k, id);
+                Ok(())
+            }
             Action::RemoveMacroTarget(i, k, t) => {
                 s.remove_macro_target(i, k, t);
                 Ok(())

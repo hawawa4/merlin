@@ -1,7 +1,8 @@
 //! Slot macros (plan §4.10): up to eight named knobs per slot, each driving any number of
 //! parameters (of the instrument, its inserts, or a SoundFont's sound shaping) over a range.
 //! A macro is what a controller knob or a snapshot moves, so a player can reach "filter and
-//! reverb and brightness" with one control.
+//! reverb and brightness" with one control. The built-in effects (EQ, compressor, delay, reverb)
+//! can be driven too, so one macro can open the reverb and lift the EQ together.
 
 use serde::{Deserialize, Serialize};
 
@@ -86,6 +87,9 @@ pub enum MacroTarget {
         from: f32,
         to: f32,
     },
+    /// A knob of the slot's built-in effects, by its id (see [`crate::fx_knob`]). The macro moves
+    /// the knob over `from..to` of its travel; the effect's on/off switch is left alone.
+    Fx { id: u32, from: f32, to: f32 },
 }
 
 fn mix(from: f32, to: f32, v: f32) -> f32 {
@@ -100,13 +104,17 @@ fn mix(from: f32, to: f32, v: f32) -> f32 {
 impl MacroTarget {
     pub fn range_fractions(&self) -> (f32, f32) {
         match *self {
-            Self::Param { from, to, .. } | Self::Sampler { from, to, .. } => (from, to),
+            Self::Param { from, to, .. }
+            | Self::Sampler { from, to, .. }
+            | Self::Fx { from, to, .. } => (from, to),
         }
     }
 
     pub fn set_range_fractions(&mut self, lo: f32, hi: f32) {
         match self {
-            Self::Param { from, to, .. } | Self::Sampler { from, to, .. } => {
+            Self::Param { from, to, .. }
+            | Self::Sampler { from, to, .. }
+            | Self::Fx { from, to, .. } => {
                 (*from, *to) = (lo.clamp(0.0, 1.0), hi.clamp(0.0, 1.0));
             }
         }
@@ -126,7 +134,15 @@ impl MacroTarget {
                 let value = min + (max - min) * f64::from(mix(from, to, v));
                 Some(if stepped { value.round() } else { value })
             }
-            Self::Sampler { .. } => None,
+            Self::Sampler { .. } | Self::Fx { .. } => None,
+        }
+    }
+
+    /// The effect knob and its position on the knob (0..=1) when the macro is at `v`.
+    pub fn fx_position(&self, v: f32) -> Option<(u32, f32)> {
+        match *self {
+            Self::Fx { id, from, to } => Some((id, mix(from, to, v))),
+            _ => None,
         }
     }
 
@@ -137,7 +153,7 @@ impl MacroTarget {
                 let (lo, hi) = field.range();
                 Some((field, lo + (hi - lo) * mix(from, to, v)))
             }
-            Self::Param { .. } => None,
+            Self::Param { .. } | Self::Fx { .. } => None,
         }
     }
 
@@ -154,6 +170,7 @@ impl MacroTarget {
                         && max.is_finite()
                 }
                 Self::Sampler { .. } => true,
+                Self::Fx { id, .. } => crate::fx_knob(*id).is_some(),
             }
     }
 }
@@ -237,6 +254,40 @@ mod tests {
         };
         assert_eq!(t.sampler_value(0.5), Some((SamplerField::Tuning, 0.0)));
         assert_eq!(t.sampler_value(1.0), Some((SamplerField::Tuning, 100.0)));
+    }
+
+    #[test]
+    fn an_effect_knob_follows_the_macro_and_checks_its_id() {
+        let t = MacroTarget::Fx {
+            id: 34,
+            from: 0.0,
+            to: 0.5,
+        };
+        assert_eq!(t.fx_position(1.0), Some((34, 0.5)));
+        assert_eq!(t.fx_position(f32::NAN), Some((34, 0.0)));
+        assert_eq!(param(0.0, 1.0, false).fx_position(1.0), None);
+        assert!(
+            Macro {
+                targets: vec![t.clone()],
+                ..Macro::default()
+            }
+            .is_valid()
+        );
+        let json = serde_json::to_string(&t).unwrap();
+        assert!(json.contains("\"type\":\"fx\""));
+        assert_eq!(serde_json::from_str::<MacroTarget>(&json).unwrap(), t);
+        let gone = MacroTarget::Fx {
+            id: 999,
+            from: 0.0,
+            to: 1.0,
+        };
+        assert!(
+            !Macro {
+                targets: vec![gone],
+                ..Macro::default()
+            }
+            .is_valid()
+        );
     }
 
     #[test]

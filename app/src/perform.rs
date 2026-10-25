@@ -74,7 +74,13 @@ pub fn lock_cap(ui: &mut egui::Ui, st: &mut UiState, actions: &mut Vec<Action>) 
         );
         ui.painter().rect_filled(bar, 1.0, Color32::WHITE);
     }
-    if r.is_pointer_button_down_on() {
+    // egui stops calling a press a click after 0.8 s, which is before the hold is over, so once
+    // the press has started it counts for as long as the button stays down on the cap.
+    let pressed = r.is_pointer_button_down_on()
+        || (st.unlock_since.is_some()
+            && r.contains_pointer()
+            && ui.input(|i| i.pointer.primary_down()));
+    if pressed {
         let since = *st.unlock_since.get_or_insert_with(Instant::now);
         if since.elapsed() >= UNLOCK_HOLD {
             st.unlock_since = None;
@@ -399,112 +405,120 @@ fn tile(ui: &mut egui::Ui, s: &Session, st: &UiState, i: usize, actions: &mut Ve
     let loaded = s.plugins[i].is_some();
     let playing = s.targets.contains(&i) && !slot.mute;
     let name = slot.instrument.as_ref().map_or("", |r| r.name.as_str());
-    egui::Frame::new()
-        .fill(color.gamma_multiply(if playing { 0.28 } else { 0.10 }))
-        .stroke(egui::Stroke::new(
-            if playing { 3.0 } else { 1.0 },
-            color.gamma_multiply(if playing { 1.0 } else { 0.5 }),
-        ))
-        .inner_margin(egui::Margin::same(12))
-        .corner_radius(6)
-        .show(ui, |ui| {
-            ui.set_width(width - 24.0);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(format!("{}", i + 1)).size(22.0).color(color));
-                let title = RichText::new(name).size(22.0).strong();
-                let title = if loaded {
-                    title
-                } else {
-                    title.color(Color32::from_rgb(0xe0, 0x6c, 0x5a))
-                };
-                let r = ui.add(
-                    egui::Button::new(title)
-                        .frame(false)
-                        .min_size(egui::vec2(0.0, 40.0)),
+    // The whole tile selects the instrument; the buttons and sliders on it keep their own clicks.
+    let tile = ui.scope_builder(egui::UiBuilder::new().sense(egui::Sense::click()), |ui| {
+        egui::Frame::new()
+            .fill(color.gamma_multiply(if playing { 0.28 } else { 0.10 }))
+            .stroke(egui::Stroke::new(
+                if playing { 3.0 } else { 1.0 },
+                color.gamma_multiply(if playing { 1.0 } else { 0.5 }),
+            ))
+            .inner_margin(egui::Margin::same(12))
+            .corner_radius(6)
+            .show(ui, |ui| {
+                ui.set_width(width - 24.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(format!("{}", i + 1)).size(22.0).color(color));
+                    let title = RichText::new(name).size(22.0).strong();
+                    let title = if loaded {
+                        title
+                    } else {
+                        title.color(Color32::from_rgb(0xe0, 0x6c, 0x5a))
+                    };
+                    let r = ui.add(
+                        egui::Button::new(title)
+                            .frame(false)
+                            .min_size(egui::vec2(0.0, 40.0)),
+                    );
+                    if loaded {
+                        let a = ControlAction::SelectSlot { slot: i as u8 };
+                        crate::map_mode::target(ui, s, &r, a, None, actions);
+                    }
+                    if loaded && r.clicked() && !s.map_mode {
+                        actions.push(Action::Select(i, false));
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let mute = egui::Button::new(RichText::new("MUTE").size(16.0).strong())
+                            .selected(slot.mute)
+                            .min_size(egui::vec2(80.0, 40.0));
+                        let mute = ui.add_enabled(loaded, mute);
+                        let a = ControlAction::ToggleMute { slot: i as u8 };
+                        crate::map_mode::target(ui, s, &mute, a, None, actions);
+                        if mute.clicked() && !s.map_mode {
+                            actions.push(Action::Mute(i));
+                        }
+                        let layer = egui::Button::new(RichText::new("+").size(18.0).strong())
+                            .selected(playing)
+                            .min_size(egui::vec2(48.0, 40.0));
+                        if ui
+                            .add_enabled(loaded, layer)
+                            .on_hover_text("Play together with the others (layer)")
+                            .clicked()
+                        {
+                            actions.push(Action::Select(i, true));
+                        }
+                    });
+                });
+                if !loaded {
+                    ui.label(RichText::new("not loaded").weak());
+                    return;
+                }
+                // Level meter and volume.
+                let (meter, _) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), 10.0),
+                    egui::Sense::hover(),
                 );
-                if loaded {
-                    let a = ControlAction::SelectSlot { slot: i as u8 };
+                ui.painter().rect_filled(meter, 2.0, Color32::from_gray(35));
+                let fill = st.peaks_shown[i].clamp(0.0, 1.0).sqrt();
+                if fill > 0.01 {
+                    let mut bar = meter;
+                    bar.set_width(meter.width() * fill);
+                    ui.painter().rect_filled(bar, 2.0, color);
+                }
+                ui.add_space(6.0);
+                let mut vol = slot.volume;
+                ui.spacing_mut().slider_width = ui.available_width() - 80.0;
+                let v = ui.add(
+                    egui::Slider::new(&mut vol, 0.0..=1.5)
+                        .fixed_decimals(2)
+                        .text("vol"),
+                );
+                if v.changed() {
+                    actions.push(Action::Volume(i, vol));
+                }
+                crate::map_mode::target(
+                    ui,
+                    s,
+                    &v,
+                    ControlAction::SlotVolume { slot: i as u8 },
+                    None,
+                    actions,
+                );
+                // The slot's macros that do something.
+                for (k, m) in s.macros(i).iter().enumerate() {
+                    if m.targets.is_empty() {
+                        continue;
+                    }
+                    let mut v = m.value;
+                    let r = ui.add(
+                        egui::Slider::new(&mut v, 0.0..=1.0)
+                            .fixed_decimals(2)
+                            .text(m.label(k)),
+                    );
+                    if r.changed() {
+                        actions.push(Action::SetMacro(i, k, v));
+                    }
+                    let a = ControlAction::SlotMacro {
+                        slot: i as u8,
+                        index: k as u8,
+                    };
                     crate::map_mode::target(ui, s, &r, a, None, actions);
                 }
-                if loaded && r.clicked() && !s.map_mode {
-                    actions.push(Action::Select(i, false));
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let mute = egui::Button::new(RichText::new("MUTE").size(16.0).strong())
-                        .selected(slot.mute)
-                        .min_size(egui::vec2(80.0, 40.0));
-                    let mute = ui.add_enabled(loaded, mute);
-                    let a = ControlAction::ToggleMute { slot: i as u8 };
-                    crate::map_mode::target(ui, s, &mute, a, None, actions);
-                    if mute.clicked() && !s.map_mode {
-                        actions.push(Action::Mute(i));
-                    }
-                    let layer = egui::Button::new(RichText::new("+").size(18.0).strong())
-                        .selected(playing)
-                        .min_size(egui::vec2(48.0, 40.0));
-                    if ui
-                        .add_enabled(loaded, layer)
-                        .on_hover_text("Play together with the others (layer)")
-                        .clicked()
-                    {
-                        actions.push(Action::Select(i, true));
-                    }
-                });
             });
-            if !loaded {
-                ui.label(RichText::new("not loaded").weak());
-                return;
-            }
-            // Level meter and volume.
-            let (meter, _) = ui
-                .allocate_exact_size(egui::vec2(ui.available_width(), 10.0), egui::Sense::hover());
-            ui.painter().rect_filled(meter, 2.0, Color32::from_gray(35));
-            let fill = st.peaks_shown[i].clamp(0.0, 1.0).sqrt();
-            if fill > 0.01 {
-                let mut bar = meter;
-                bar.set_width(meter.width() * fill);
-                ui.painter().rect_filled(bar, 2.0, color);
-            }
-            ui.add_space(6.0);
-            let mut vol = slot.volume;
-            ui.spacing_mut().slider_width = ui.available_width() - 80.0;
-            let v = ui.add(
-                egui::Slider::new(&mut vol, 0.0..=1.5)
-                    .fixed_decimals(2)
-                    .text("vol"),
-            );
-            if v.changed() {
-                actions.push(Action::Volume(i, vol));
-            }
-            crate::map_mode::target(
-                ui,
-                s,
-                &v,
-                ControlAction::SlotVolume { slot: i as u8 },
-                None,
-                actions,
-            );
-            // The slot's macros that do something.
-            for (k, m) in s.macros(i).iter().enumerate() {
-                if m.targets.is_empty() {
-                    continue;
-                }
-                let mut v = m.value;
-                let r = ui.add(
-                    egui::Slider::new(&mut v, 0.0..=1.0)
-                        .fixed_decimals(2)
-                        .text(m.label(k)),
-                );
-                if r.changed() {
-                    actions.push(Action::SetMacro(i, k, v));
-                }
-                let a = ControlAction::SlotMacro {
-                    slot: i as u8,
-                    index: k as u8,
-                };
-                crate::map_mode::target(ui, s, &r, a, None, actions);
-            }
-        });
+    });
+    if loaded && !s.map_mode && tile.response.clicked() {
+        actions.push(Action::Select(i, false));
+    }
 }
 
 fn master(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
