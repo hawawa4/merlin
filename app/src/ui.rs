@@ -458,7 +458,7 @@ pub fn draw(
         .show(ui, |ui| header(ui, s, st, actions));
     egui::Panel::top("notice")
         .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(10, 4)))
-        .show(ui, |ui| notice_bar(ui, s, st));
+        .show(ui, |ui| notice_bar(ui, s, st, actions));
     if st.perform {
         *dock_rect = egui::Rect::NOTHING;
         crate::perform::show(ui, s, st, actions);
@@ -1198,7 +1198,7 @@ fn notice_text(s: &Session, st: &mut UiState, ctx: &egui::Context) -> (String, N
 
 /// The strip under the header where the app talks back: prompts, progress, results and errors,
 /// in a frame of their own, with the engine's numbers at the far end.
-fn notice_bar(ui: &mut egui::Ui, s: &Session, st: &mut UiState) {
+fn notice_bar(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
     let (text, kind) = notice_text(s, st, ui.ctx());
     let (tint, colour) = match kind {
         Notice::Idle => (hw::WELL, hw::TEXT_DIM),
@@ -1223,12 +1223,37 @@ fn notice_bar(ui: &mut egui::Ui, s: &Session, st: &mut UiState) {
         .show(ui, |ui| {
             ui.set_min_height(22.0);
             ui.horizontal(|ui| {
+                // Plugin files that failed to scan stay one click away: beside the scan's own
+                // message, and beside "Ready" once that has gone.
+                let failed = s.entries.iter().filter(|e| e.error.is_some()).count();
+                let about_failures = failed > 0
+                    && !s.scanning()
+                    && (kind == Notice::Idle || text.contains("files failed"));
                 let message = RichText::new(text).size(14.5).color(colour);
                 ui.label(if kind == Notice::Prompt {
                     message.strong()
                 } else {
                     message
                 });
+                if about_failures {
+                    if kind == Notice::Idle {
+                        ui.label(
+                            RichText::new(format!(
+                                "\u{b7} {failed} plugin file{} failed to scan",
+                                if failed == 1 { "" } else { "s" }
+                            ))
+                            .size(14.5)
+                            .color(hw::AMBER),
+                        );
+                    }
+                    if ui
+                        .link(RichText::new("VIEW").size(14.5).strong())
+                        .on_hover_text("Settings > Plugins: see which files, retry or ignore them")
+                        .clicked()
+                    {
+                        actions.push(Action::ShowSettingsTab(SettingsTab::Plugins));
+                    }
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let (xruns, dsp, buf) = s
                         .backend()
