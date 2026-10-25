@@ -34,6 +34,9 @@ pub fn panel(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec
         .size_range(170.0..=520.0)
         .show(ui, |ui| {
             ui.add_space(4.0);
+            // Names are dragged, not selected: no text cursor, and a drag never sweeps up the
+            // rows it passes over.
+            ui.style_mut().interaction.selectable_labels = false;
             ui.horizontal(|ui| {
                 ui.strong("BROWSER");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
