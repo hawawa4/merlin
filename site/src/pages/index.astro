@@ -9,18 +9,18 @@ const releases = `${repo}/releases/latest`;
 const showcase = [
   {
     title: "A rack of instruments",
-    body: "Eight slots. Each holds an instrument, and its own editor opens inside the main window, never as a separate one. Play one, layer several, or split the keyboard into zones. Held notes and tails carry over when you switch.",
+    body: "Eight slots. Each holds an instrument, and its own editor opens inside the main window, never as a separate one. Play one, layer several, or split the keyboard into zones. Held notes and tails carry over when you switch. Windows plugins sit in the rack like any other: they run through a bundled Wine and yabridge, downloaded from Settings, and your own Wine is never touched.",
     video: "/media/rack.webm",
+  },
+  {
+    title: "SoundFonts, built in",
+    body: "Merlin plays .sf2 and .sf3 files itself, with no plugin needed. Drop one on the window or add a sound folder, pick a preset from a searchable list, and shape it with knobs for attack, release, brightness, resonance, tuning and voices. A folder of .sf2 files shows up as one instrument. Program Change messages switch presets.",
+    video: "/media/soundfont.webm",
   },
   {
     title: "Effects as pedals",
     body: "Every slot has an EQ, a compressor, a delay and a reverb, drawn as pedals with knobs. The master has a limiter.",
     video: "/media/effects.webm",
-  },
-  {
-    title: "Windows plugins",
-    body: "Windows VST3 and CLAP plugins run through a bundled Wine and yabridge, downloaded from Settings. Your own Wine is never touched.",
-    video: "/media/windows.webm",
   },
   {
     title: "Scenes",
@@ -68,6 +68,12 @@ const limits = [
         A live instrument host for Linux. A rack of instruments, each with
         simple effects, that you switch between from your MIDI keyboard or
         controller while you play. Made for playing, not for recording.
+      </p>
+      <p class="sub">
+        The main goal is that Windows plugins just work. Plenty of good
+        instruments only exist as Windows VST3 or CLAP plugins, and you
+        shouldn't have to set up Wine or yabridge yourself to use them on
+        stage.
       </p>
       <p class="cta">
         <a class="btn primary" href={releases}>Download</a>
