@@ -53,6 +53,11 @@ impl Session {
         shared.set_beats_per_bar(beats_per_bar);
     }
 
+    /// The beats per bar in force now: a running song's, else the rig's.
+    pub fn beats_per_bar(&self) -> u8 {
+        self.engine.shared.transport.beats_per_bar()
+    }
+
     pub fn set_beats_per_bar(&mut self, beats: u8) {
         self.rig.transport.beats_per_bar = beats.clamp(1, 16);
         self.engine

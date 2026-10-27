@@ -1748,7 +1748,7 @@ impl Session {
         let transport = &self.engine.shared.transport;
         merlin_hosting::host_time::set_tempo(transport.tempo());
         merlin_hosting::host_time::set_playing(transport.running());
-        merlin_hosting::host_time::set_beats_per_bar(u32::from(self.rig.transport.beats_per_bar));
+        merlin_hosting::host_time::set_beats_per_bar(u32::from(transport.beats_per_bar()));
         // While backing tracks are being re-armed or waited for, look again soon.
         let backing = (self.needs_rearm || self.pending_start.is_some())
             .then(|| now + Duration::from_millis(50));

@@ -101,6 +101,10 @@ impl TransportShared {
             .store(beats.clamp(1, 16), Ordering::Relaxed);
     }
 
+    pub fn beats_per_bar(&self) -> u8 {
+        self.beats_per_bar.load(Ordering::Relaxed)
+    }
+
     pub fn set_click(&self, on: bool, volume: f32) {
         self.click_on.store(on, Ordering::Relaxed);
         self.click_volume

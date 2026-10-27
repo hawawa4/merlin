@@ -1128,6 +1128,23 @@ fn tempo_plate(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
             }
         }
         crate::map_mode::target(ui, s, &number, ControlAction::Tempo, None, actions);
+        // The time signature: the beat is a quarter note, so 6/8 is felt as 6 beats at the
+        // eighth-note tempo.
+        let mut beats = s.beats_per_bar();
+        let signature = ui
+            .add(
+                egui::DragValue::new(&mut beats)
+                    .range(1..=16)
+                    .suffix("/4")
+                    .speed(0.1),
+            )
+            .on_hover_text(
+                "Time signature: beats per bar (over a quarter-note beat). The click accents \
+                 the first beat of each bar. A song's own setting wins while it runs.",
+            );
+        if signature.changed() {
+            actions.push(Action::SetBeatsPerBar(beats));
+        }
     });
 }
 
