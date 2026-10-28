@@ -1201,6 +1201,7 @@ dependencies = [
  "merlin-hosting",
  "merlin-model",
  "merlin-recorder",
+ "merlin-sandbox",
  "merlin-scanner",
  "merlin-wine",
  "pollster",
@@ -1319,6 +1320,18 @@ name = "merlin-recorder"
 version = "0.0.0"
 dependencies = [
  "rtrb",
+]
+
+[[package]]
+name = "merlin-sandbox"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "merlin-hosting",
+ "merlin-model",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -1,4 +1,8 @@
-//! Survives crashing Windows plugins (plan: crash marker, quarantine).
+//! Survives crashing Windows plugins when they run inside the app (plan: crash marker, quarantine).
+//!
+//! Plugins normally run in processes of their own (see `merlin_sandbox`): a crash there silences
+//! one slot and the app carries on, so none of this is needed. It is what remains for
+//! `MERLIN_NO_SANDBOX=1`, where plugins load in the app's own process.
 //!
 //! A bridged plugin runs in its own `yabridge-host` process under Wine. When that process
 //! dies (a Wine stack overflow, a plugin bug) the next call across the bridge either blocks
@@ -94,6 +98,20 @@ pub fn cpu_ticks(pid: u32) -> Option<u64> {
     let rest: Vec<&str> = stat[stat.rfind(')')? + 2..].split(' ').collect();
     // After the command name: state is field 0, utime 11, stime 12.
     Some(rest.get(11)?.parse::<u64>().ok()? + rest.get(12)?.parse::<u64>().ok()?)
+}
+
+/// CPU ticks of a process and everything it started (a plugin host and its Wine host).
+pub fn tree_cpu_ticks(root: u32) -> Option<u64> {
+    let all = processes();
+    let mut family = vec![root];
+    let mut i = 0;
+    while i < family.len() {
+        let parent = family[i];
+        family.extend(all.iter().filter(|p| p.1 == parent).map(|p| p.0));
+        i += 1;
+    }
+    let ticks: Vec<u64> = family.into_iter().filter_map(cpu_ticks).collect();
+    (!ticks.is_empty()).then(|| ticks.iter().sum())
 }
 
 pub fn host_children() -> HashSet<u32> {

@@ -14,7 +14,9 @@ the last 30 minutes of what you played, in memory, and one button saves them as 
   controller, and a Novation Launchkey MK3 driver (DAW mode, pad lights, screen).
 - **Songs:** setlists, songs and parts, backing tracks, a click, MIDI clock and timeline markers.
 - **Plugins:** a searchable browser, a plugin scanner with a cache, and a performance check
-  (realtime scheduling and more, with the exact fix). Rigs are saved as `.mrig` files, with autosave.
+  (realtime scheduling and more, with the exact fix). Every plugin runs in a process of its own,
+  so one that crashes or hangs silences its slot (with a *Retry* button) and nothing else.
+  Rigs are saved as `.mrig` files, with autosave.
 
 Status: Phase 1 (the MVP) is built and the later phases of the plan are being filled in.
 [docs/qa-checklist.md](docs/qa-checklist.md) lists what has to be checked by hand.
@@ -42,6 +44,7 @@ Windows plugins need the patched Wine and yabridge, which are built in Docker
   `model` (rig, slots, filters), `hosting` (plugin API, CLAP, VST3, VST2 and LV2 hosts, built-in instruments),
   `dsp` (built-in effects), `engine` (router, note ownership, slot mixer, queues),
   `audio-io` (JACK and offline backends), `embed` (editor dock), `scanner` (plugin discovery and cache),
+  `sandbox` (plugins in processes of their own: `merlin-plugin-host`, shared-memory audio, crash detection),
   `control` (MIDI messages to actions), `backing` (backing tracks streamed from disk),
   `recorder` (the rolling MIDI capture), `wine` (Windows plugin support),
   `bridge` (`merlin-bridge`, Windows plugins for other hosts such as REAPER, Bitwig and Ardour)

@@ -1447,13 +1447,10 @@ fn unit(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, i: usize, actions:
         (Some(r), false) => format!(
             "{}  ({})",
             r.name,
-            if missing
-                .as_deref()
-                .is_some_and(|m| m.starts_with("quarantined"))
-            {
-                "quarantined"
-            } else {
-                "missing"
+            match missing.as_deref() {
+                Some(m) if m.starts_with("quarantined") => "quarantined",
+                Some(m) if m.starts_with("crashed") => "crashed",
+                _ => "missing",
             }
         ),
         (None, _) => match &s.loading[i] {
@@ -1485,6 +1482,10 @@ fn unit(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, i: usize, actions:
                     .sense(egui::Sense::click()),
             );
             let r = match &missing {
+                Some(why) if why.starts_with("crashed: ") => r.on_hover_text(format!(
+                    "The plugin {}.\nThe rest of the rig is unaffected. Retry loads it again from its saved state.",
+                    &why["crashed: ".len()..]
+                )),
                 Some(why) => r.on_hover_text(format!(
                     "Could not load: {why}\nThe saved plugin and state are kept."
                 )),

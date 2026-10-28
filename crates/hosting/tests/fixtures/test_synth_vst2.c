@@ -1,5 +1,7 @@
 /* A minimal VST2 instrument for the host's tests: a sine voice per note, two parameters
-   (gain, and a read-out of the tempo the host reported), chunk state, and an "editor". */
+   (gain, and a read-out of the tempo the host reported), chunk state, and an "editor".
+   It can also misbehave on purpose, for the isolation tests: note 0 crashes the audio thread,
+   note 1 hangs it, and a saved state starting with 666.0 crashes the main thread. */
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -60,11 +62,13 @@ static intptr_t dispatch(AEffect *e, int32_t op, int32_t index, intptr_t value, 
     case 15: s->editor_open = 0; return 1;
     case 19: return 0;
     case 23: { static float chunk[2]; chunk[0] = s->gain; chunk[1] = 42.0f; *(void **)ptr = chunk; return sizeof(chunk); }
-    case 24: { float *c = (float *)ptr; if (value >= 8) { s->gain = c[0]; } return 0; }
+    case 24: { float *c = (float *)ptr; if (value >= 8) { if (c[0] == 666.0f) { *(volatile int *)0 = 1; } s->gain = c[0]; } return 0; }
     case 25: {
         Events *ev = (Events *)ptr;
         for (int i = 0; i < ev->numEvents; i++) {
             MidiEvent *m = ev->events[i];
+            if ((m->midi[0] & 0xF0) == 0x90 && m->midi[2] > 0 && m->midi[1] == 0) { *(volatile int *)0 = 1; }
+            if ((m->midi[0] & 0xF0) == 0x90 && m->midi[2] > 0 && m->midi[1] == 1) { for (volatile int spin = 1; spin; ) {} }
             if ((m->midi[0] & 0xF0) == 0x90 && m->midi[2] > 0) { s->key = m->midi[1]; s->vel = m->midi[2] / 127.0f; }
             else if ((m->midi[0] & 0xF0) == 0x80 || (m->midi[0] & 0xF0) == 0x90) { if (s->key == m->midi[1]) s->key = -1; }
         }

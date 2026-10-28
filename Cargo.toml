@@ -29,6 +29,7 @@ merlin-dsp = { path = "crates/dsp" }
 merlin-audio-io = { path = "crates/audio-io" }
 merlin-embed = { path = "crates/embed" }
 merlin-scanner = { path = "crates/scanner" }
+merlin-sandbox = { path = "crates/sandbox" }
 merlin-wine = { path = "crates/wine" }
 merlin-control = { path = "crates/control" }
 merlin-backing = { path = "crates/backing" }

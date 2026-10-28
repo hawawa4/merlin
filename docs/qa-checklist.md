@@ -52,7 +52,10 @@ The app always listens to your keyboards and the on-screen keys. Nothing is writ
 - [ ] A long session: leave it running for an hour of normal playing and check memory (Settings > Performance, or `ps`): the capture should stay a few MB at most.
 
 ## 6. Stability
-- [ ] Kill a Windows plugin's Wine process while the app runs: `pgrep -af yabridge-host`, then `kill -9 <pid>` of one. The app should restart itself from the autosave and name the plugin it quarantined (it comes back with *Retry*).
+- [ ] Every plugin runs in its own `merlin-plugin-host` process (`pgrep -af merlin-plugin-host`: one per plugin and insert). Kill one with `kill -9 <pid>`: that slot says *crashed* with *Retry* next to it, a message names the plugin and the signal, the other slots keep sounding, and the app does not restart. *Retry* loads it again with the state of the last autosave. The same for a Windows plugin: `kill -9` its `yabridge-host` (a child of the plugin's `merlin-plugin-host`).
+- [ ] `kill -STOP <pid>` of a plugin host (a hung plugin): after a few seconds (a second while it is playing, up to about ten when idle) the slot goes *crashed* the same way, and the audio of the other slots does not stop meanwhile.
+- [ ] Plugin editors still sit in the dock, resize, pop out and scale like before (they are windows of the host process, embedded in the app's), and a plugin's own window grabs keyboard focus when clicked.
+- [ ] `MERLIN_NO_SANDBOX=1 just dev` loads plugins inside the app again (for debugging a plugin with a debugger; a crash then ends the app, as it used to).
 - [ ] The 2-hour rehearsal: 6–8 instruments including a Windows one, switching and playing for 2 hours. For an unattended version: `just soak 7200 3 --windows "Six Sines"`, then read the `state:` lines (xruns, held keys, RSS, threads). Expect 0 xruns, 0 held keys at the end, memory flat.
 - [ ] Song soak: `just soak-song` (100 passes, about 8 minutes, nothing else using the audio): prints `ok: 100 passes...`. With your real stems and a real song, play it 20 times in a row from the Perform view with the foot switches and tell me about any drift, gap or stuck state.
 - [ ] Close the app normally a few times: no crash dialog, no leftover `yabridge-host` processes (`pgrep -af yabridge-host`).

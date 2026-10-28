@@ -6,8 +6,8 @@ name: release
 #   2. Push a tag yourself (git tag v0.2.0 && git push origin v0.2.0).
 # The tag must match the version, and CI has to pass before anything is built or published.
 #
-# A release holds the .deb, a tarball with the amd64 Linux binaries (merlin, merlin-scan and
-# merlin-bridge; the app looks for merlin-scan next to itself, so they go together) and SHA256SUMS.txt.
+# A release holds the .deb, a tarball with the amd64 Linux binaries (merlin, merlin-scan, merlin-plugin-host and
+# merlin-bridge; the app looks for merlin-scan and merlin-plugin-host next to itself, so they go together) and SHA256SUMS.txt.
 # The release called `runtime` (the Wine + yabridge archive the app downloads) is separate and
 # published by hand with `just package-runtime`; see docs/wine.md.
 on:
@@ -84,7 +84,7 @@ jobs:
 
           name="merlin-${VERSION}-linux-amd64"
           mkdir "$name"
-          for b in merlin merlin-scan merlin-bridge; do
+          for b in merlin merlin-scan merlin-plugin-host merlin-bridge; do
             strip -o "$name/$b" "target/release/$b"
           done
           cp LICENSE README.md "$name/"

@@ -8,12 +8,14 @@ pub mod clap;
 pub mod host_time;
 pub mod lv2;
 mod midi;
+mod open;
 mod plugin;
 pub mod soundfont;
 pub mod vst2;
 pub mod vst3;
 
 pub use midi::{MidiEvent, MidiKind};
+pub use open::open_plugin;
 pub use plugin::{
     EditorSize, HostEvent, ParamInfo, PluginEditor, PluginHandle, PluginInfo, PresetInfo,
     SamplerTone, Waker,

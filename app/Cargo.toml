@@ -16,6 +16,11 @@ path = "src/main.rs"
 name = "merlin-scan"
 path = "src/bin/scan.rs"
 
+# Runs one plugin in a process of its own (see the sandbox crate); the app starts one per plugin.
+[[bin]]
+name = "merlin-plugin-host"
+path = "src/bin/plugin_host.rs"
+
 # Device drivers (devices/): each can be left out of a build.
 [features]
 default = ["launchkey-mk3"]
@@ -28,6 +33,7 @@ merlin-engine.workspace = true
 merlin-audio-io.workspace = true
 merlin-embed.workspace = true
 merlin-scanner.workspace = true
+merlin-sandbox.workspace = true
 merlin-wine.workspace = true
 merlin-control.workspace = true
 merlin-backing.workspace = true
@@ -48,7 +54,7 @@ wgpu = { version = "*", default-features = false, features = ["vulkan", "wgsl"] 
 pollster = "0.4"
 
 # `cargo deb -p merlin` (after `cargo build --release -p merlin -p merlin-bridge`): the .deb of the release workflow.
-# merlin-scan has to sit next to merlin (the app looks for it there). JACK, X11 and Vulkan are loaded at runtime,
+# merlin-scan and merlin-plugin-host have to sit next to merlin (the app looks for them there). JACK, X11 and Vulkan are loaded at runtime,
 # so they are recommended rather than linked dependencies.
 [package.metadata.deb]
 name = "merlin"
@@ -63,6 +69,7 @@ extended-description = "Merlin is a Linux-first live instrument host: a rack of 
 assets = [
     ["target/release/merlin", "usr/bin/", "755"],
     ["target/release/merlin-scan", "usr/bin/", "755"],
+    ["target/release/merlin-plugin-host", "usr/bin/", "755"],
     ["target/release/merlin-bridge", "usr/bin/", "755"],
     ["../packaging/merlin.desktop", "usr/share/applications/", "644"],
     ["../README.md", "usr/share/doc/merlin/README.md", "644"],

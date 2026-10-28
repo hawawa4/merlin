@@ -10,15 +10,12 @@ use anyhow::{Context, Result, anyhow};
 use merlin_audio_io::{InputRole, JackBackend, JackClient, MidiSource, friendly_name};
 use merlin_embed::{EditorManager, PluginLookup};
 use merlin_engine::{Command, EngineHandle, Filter};
-use merlin_hosting::clap::ClapLibrary;
-use merlin_hosting::lv2::Lv2Library;
-use merlin_hosting::vst2::Vst2Library;
-use merlin_hosting::vst3::Vst3Library;
 use merlin_hosting::{EditorSize, HostEvent, MidiEvent, PluginHandle, Waker};
 use merlin_model::{
     Format, FxSettings, Insert, MAX_INSERTS, MAX_SLOTS, PluginRef, Rig, SelectMode, Slot,
 };
-use merlin_scanner::{Cache, Entry, Found, Quarantine};
+use merlin_sandbox::{PluginFailed, RemotePlugin};
+use merlin_scanner::{Cache, Entry, Found, Quarantine, Quarantined};
 use std::sync::mpsc;
 
 mod backing;
@@ -1158,11 +1155,12 @@ impl Session {
             slot: i,
             path: path.to_owned(),
             id: id.to_owned(),
-            name,
+            name: name.clone(),
         });
-        // A bridged plugin starts a Wine host process: remember which one is ours, so the
-        // watchdog can tell a crash from a normal unload.
-        let before = if windows {
+        // Without isolation a bridged plugin starts a Wine host process of ours: remember which
+        // one, so the watchdog can tell a crash from a normal unload.
+        let in_process = crate::sandbox::disabled();
+        let before = if windows && in_process {
             guard::host_children()
         } else {
             Default::default()
@@ -1172,16 +1170,20 @@ impl Session {
         let guard = self.guard.clone();
         let loaded = {
             let _call = guard.call(i, "loading", limit);
-            self.create_plugin_inner(i, path, id)?
+            self.create_plugin_inner(i, path, id, windows)
         };
-        if windows {
+        let loaded = match loaded {
+            Ok(l) => l,
+            Err(e) => {
+                // A plugin that crashes or hangs while it loads would do it at every start.
+                if e.downcast_ref::<PluginFailed>().is_some() {
+                    self.quarantine_plugin(path, id, &name, &format!("{e}"));
+                }
+                return Err(e);
+            }
+        };
+        if windows && in_process {
             guard::install_socket_hook();
-            let name = self
-                .found
-                .iter()
-                .find(|f| f.info.id == id)
-                .map(|f| f.info.name.clone())
-                .unwrap_or_else(|| id.to_owned());
             for pid in guard::host_children().difference(&before) {
                 self.guard.register(
                     *pid,
@@ -1197,26 +1199,53 @@ impl Session {
         Ok(loaded)
     }
 
-    fn create_plugin_inner(&mut self, i: usize, path: &Path, id: &str) -> Result<Loaded> {
+    fn quarantine_plugin(&mut self, path: &Path, id: &str, name: &str, reason: &str) {
+        self.quarantine.add(Quarantined {
+            path: path.to_owned(),
+            id: id.to_owned(),
+            name: name.to_owned(),
+            reason: reason.to_owned(),
+            when: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs()),
+        });
+        if let Err(e) = self.quarantine.save(&crate::paths::quarantine_file()) {
+            eprintln!("cannot save the quarantine list: {e:#}");
+        }
+    }
+
+    /// Creates the plugin: in a process of its own, except SoundFonts (our own code) and when
+    /// isolation is switched off.
+    fn create_plugin_inner(
+        &mut self,
+        i: usize,
+        path: &Path,
+        id: &str,
+        windows: bool,
+    ) -> Result<Loaded> {
         let waker = Arc::new(SlotWaker {
             proxy: Mutex::new(self.proxy.clone()),
             slot: i,
         });
-        let plugin: Box<dyn PluginHandle> = if merlin_hosting::soundfont::is_source(path) {
-            Box::new(merlin_hosting::soundfont::SoundFontPlugin::open(path)?)
-        } else if path.extension().is_some_and(|e| e == "vst3") {
-            Box::new(Vst3Library::load(path)?.create(id, waker)?)
-        } else if path.extension().is_some_and(|e| e == "so") {
-            Box::new(Vst2Library::load(path)?.create(id, waker)?)
-        } else if path.extension().is_some_and(|e| e == "lv2") {
-            Box::new(Lv2Library::open(path)?.create(
-                id,
-                waker,
-                f64::from(self.sample_rate),
-                MAX_BLOCK as u32,
-            )?)
+        let sample_rate = f64::from(self.sample_rate);
+        let plugin: Box<dyn PluginHandle> = if merlin_hosting::soundfont::is_source(path)
+            || crate::sandbox::disabled()
+        {
+            merlin_hosting::open_plugin(path, id, waker, sample_rate, MAX_BLOCK as u32)?
         } else {
-            Box::new(ClapLibrary::load(path)?.create(id, waker)?)
+            // Shorter than the watchdog's limits, so a stuck load ends here first.
+            let limit = Duration::from_secs(if windows { 100 } else { 30 });
+            let host = crate::sandbox::plugin_host_exe();
+            Box::new(
+                    RemotePlugin::spawn(&host, path, id, waker, sample_rate, MAX_BLOCK as u32, limit)
+                        .map_err(|e| match host.exists() {
+                            true => e,
+                            false => e.context(format!(
+                                "{} is missing (it belongs next to the app; `cargo build -p merlin` makes it)",
+                                host.display()
+                            )),
+                        })?,
+                )
         };
         Ok(Loaded { plugin })
     }
@@ -1708,8 +1737,48 @@ impl Session {
                 self.say(format!("editor {}: plugin closed its editor", i + 1))
             }
             HostEvent::StateDirty => self.dirty = true,
+            HostEvent::Crashed => self.plugin_crashed(i),
         }
         self.service();
+    }
+
+    /// A plugin's process died or stopped answering. Its slot goes quiet and shows "crashed" with
+    /// a Retry button; the saved plugin and state stay in the rig, and everything else plays on.
+    fn plugin_crashed(&mut self, id: usize) {
+        // The event can outlive the plugin it was about (the slot was reloaded meanwhile).
+        let Some(reason) = self.plugin_by_id(id).and_then(|l| l.plugin.failure()) else {
+            return;
+        };
+        if id < UI_SLOTS {
+            let name = self.rig.slots[id]
+                .instrument
+                .as_ref()
+                .map_or_else(|| "plugin".to_owned(), |r| r.name.clone());
+            self.remove_runtime(id);
+            if self.viewing == Some(id) {
+                self.viewing = None;
+                self.view_id = None;
+            }
+            self.say(format!(
+                "slot {}: {name} {reason}. The rest of the rig keeps playing; Retry loads it again.",
+                id + 1
+            ));
+            self.missing[id] = Some(format!("crashed: {reason}"));
+        } else {
+            let k = id - UI_SLOTS;
+            let (slot, index) = (k / MAX_INSERTS, k % MAX_INSERTS);
+            let name = self.rig.slots[slot]
+                .inserts
+                .get(index)
+                .and_then(Option::as_ref)
+                .map_or_else(|| "insert".to_owned(), |i| i.plugin.name.clone());
+            self.remove_insert_runtime(slot, index);
+            self.say(format!(
+                "slot {} insert {}: {name} {reason}. It stays out of the signal path until it is loaded again.",
+                slot + 1,
+                index + 1
+            ));
+        }
     }
 
     /// Plugin timers, editor eviction, retired processors. Returns when to run again.
@@ -2215,13 +2284,40 @@ impl Session {
         let ticks_per_s = unsafe { libc::sysconf(libc::_SC_CLK_TCK) } as f32;
         let mut wine: [Option<f32>; UI_SLOTS] = [None; UI_SLOTS];
         let mut seen = std::collections::HashSet::new();
-        for (id, pid) in self.guard.host_pids() {
+        // The Wine hosts of in-process plugins, and the host processes of sandboxed Windows ones.
+        let mut hosts: Vec<(usize, u32)> = self.guard.host_pids();
+        for (i, l) in self.plugins.iter().enumerate() {
+            let windows = self.rig.slots[i]
+                .instrument
+                .as_ref()
+                .is_some_and(|r| r.windows);
+            hosts.extend(
+                l.iter()
+                    .filter(|_| windows)
+                    .filter_map(|l| Some((i, l.plugin.process_id()?))),
+            );
+        }
+        for (i, row) in self.inserts.iter().enumerate() {
+            for (k, l) in row.iter().enumerate() {
+                let windows = self.rig.slots[i]
+                    .inserts
+                    .get(k)
+                    .and_then(Option::as_ref)
+                    .is_some_and(|ins| ins.plugin.windows);
+                hosts.extend(
+                    l.iter()
+                        .filter(|_| windows)
+                        .filter_map(|l| Some((i, l.plugin.process_id()?))),
+                );
+            }
+        }
+        for (id, pid) in hosts {
             let slot = if id < UI_SLOTS {
                 id
             } else {
                 (id - UI_SLOTS) / MAX_INSERTS
             };
-            let Some(ticks) = guard::cpu_ticks(pid) else {
+            let Some(ticks) = guard::tree_cpu_ticks(pid) else {
                 continue;
             };
             seen.insert(pid);

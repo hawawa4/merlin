@@ -24,6 +24,7 @@ mod paths;
 mod perf;
 mod perform;
 mod quirks;
+mod sandbox;
 mod scan_worker;
 mod session;
 mod setlist_ui;
@@ -1409,6 +1410,7 @@ fn parse_script() -> Vec<(Duration, Action)> {
                     Action::LoadNamed(i, words.collect::<Vec<_>>().join(" "))
                 }
                 "unload" => Action::Unload(slot(words.next())?),
+                "retry" => Action::Retry(slot(words.next())?),
                 "select" => Action::Select(slot(words.next())?, false),
                 "layer" => Action::Select(slot(words.next())?, true),
                 "mute" => Action::Mute(slot(words.next())?),

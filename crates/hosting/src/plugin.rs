@@ -26,7 +26,7 @@ impl PluginInfo {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ParamInfo {
     pub id: u32,
     pub name: String,
@@ -102,7 +102,7 @@ impl Default for SamplerTone {
 }
 
 /// Something a plugin asked of the main thread. The app turns these into its own wakeups.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum HostEvent {
     /// Call [`PluginHandle::on_main_thread`].
     MainThreadCallback,
@@ -114,6 +114,9 @@ pub enum HostEvent {
     FdReady,
     /// The plugin's state changed (mark the rig dirty).
     StateDirty,
+    /// The plugin's process died or stopped answering (see [`PluginHandle::failure`]). Only
+    /// plugins that run in a process of their own send this.
+    Crashed,
 }
 
 /// How a plugin reaches the main thread. Called from any thread, so keep it cheap and
@@ -122,7 +125,7 @@ pub trait Waker: Send + Sync {
     fn wake(&self, event: HostEvent);
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct EditorSize {
     pub width: u32,
     pub height: u32,
@@ -157,6 +160,18 @@ pub trait PluginEditor {
 /// Main-thread side of a plugin instance.
 pub trait PluginHandle {
     fn info(&self) -> &PluginInfo;
+
+    /// What happened to the plugin ("crashed (SIGSEGV)", "stopped responding while playing"), if
+    /// it crashed or hung. A plugin that failed does nothing any more: its processor is silent
+    /// and every call returns at once.
+    fn failure(&self) -> Option<String> {
+        None
+    }
+
+    /// The process the plugin runs in, when it is not ours.
+    fn process_id(&self) -> Option<u32> {
+        None
+    }
 
     /// Activates the plugin and returns the audio-thread half. Drop that (after the engine
     /// hands it back) and then call [`deactivate`](Self::deactivate).
