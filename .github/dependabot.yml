@@ -1,0 +1,20 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule: { interval: monthly }
+  - package-ecosystem: npm
+    directory: /site
+    schedule: { interval: monthly }
+  - package-ecosystem: docker
+    directory: /site
+    schedule: { interval: monthly }
+  - package-ecosystem: docker
+    directory: /build-support/wine
+    schedule: { interval: monthly }
+  - package-ecosystem: docker
+    directory: /build-support/yabridge
+    schedule: { interval: monthly }
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: monthly }

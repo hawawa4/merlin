@@ -58,7 +58,7 @@ pollster = "0.4"
 # so they are recommended rather than linked dependencies.
 [package.metadata.deb]
 name = "merlin"
-maintainer = "Merlin contributors <noreply@github.com>"
+maintainer = "Hawawa <me@hawawa.org>"
 copyright = "Merlin contributors"
 license-file = ["../LICENSE", "0"]
 section = "sound"
