@@ -18,8 +18,11 @@ use crate::ui::{Action, UiState};
 pub const FIRST: u8 = 21;
 pub const LAST: u8 = 108;
 
-const LANE_H: f32 = 32.0;
-const KEY_H: f32 = 132.0;
+const LANE_H: f32 = 30.0;
+const LANE_GAP: f32 = 5.0;
+/// Room under the lanes for the octave names and the dots of held notes.
+const KEY_FOOT: f32 = 42.0;
+const MIN_KEY_H: f32 = 120.0;
 /// The column on the left of the lanes: the instrument's name and its transpose.
 const GUTTER: f32 = 244.0;
 const TAG_W: f32 = 42.0;
@@ -172,8 +175,9 @@ pub fn summary(f: &merlin_model::MidiFilter) -> String {
 
 // ---- the view ---------------------------------------------------------------------------
 
-/// Draws the view. Returns the key under a pressed pointer on the keyboard, if any.
-pub fn show(ui: &mut Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) -> Option<u8> {
+/// Draws the view: the piano, long enough to hold a lane for each instrument across its keys.
+/// It sets zones and channels; it does not play, so a drag never sounds a note.
+pub fn show(ui: &mut Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
     let slots: Vec<usize> = (0..UI_SLOTS)
         .filter(|&i| s.rig.slots[i].instrument.is_some())
         .collect();
@@ -187,30 +191,43 @@ pub fn show(ui: &mut Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action
     let (bar, _) = ui.allocate_exact_size(vec2(width, 28.0), Sense::hover());
     ui.add_space(4.0);
 
-    let mut hover = None;
-    ui.spacing_mut().item_spacing.y = 4.0;
-    for &i in &slots {
-        lane(ui, s, st, i, &geo, &mut hover, actions);
+    // The keys are as tall as the lanes laid across them need, plus a strip below for the octave
+    // names and the dots of notes being played.
+    let lanes_h = slots.len() as f32 * (LANE_H + LANE_GAP);
+    let key_h = (lanes_h + LANE_GAP + KEY_FOOT).max(MIN_KEY_H);
+    let (rect, _) = ui.allocate_exact_size(vec2(width, key_h + 12.0), Sense::hover());
+    let top = rect.top() + 6.0;
+    paint_keys(ui, &geo, rect, top, key_h);
+
+    for (n, &i) in slots.iter().enumerate() {
+        let row = Rect::from_min_size(
+            pos2(rect.left(), top + LANE_GAP + n as f32 * (LANE_H + LANE_GAP)),
+            vec2(width, LANE_H),
+        );
+        lane(ui, s, st, i, &geo, row, actions);
     }
     if slots.is_empty() {
-        ui.add_space(8.0);
-        ui.label(
-            egui::RichText::new("Load an instrument into the rack to give it keys to play.")
-                .color(hw::TEXT_DIM),
+        ui.painter().text(
+            pos2(geo.x0 + 20.0, top + 24.0),
+            Align2::LEFT_CENTER,
+            "Load an instrument into the rack to give it keys to play.",
+            FontId::proportional(14.0),
+            Color32::from_gray(90),
         );
-        ui.add_space(8.0);
     }
-    ui.add_space(6.0);
-    let (pressed, key_hover) = keyboard(ui, s, &geo);
-    hover = key_hover.or(hover);
+    paint_held(ui, s, &geo, top, key_h);
 
+    let keys = Rect::from_min_max(pos2(geo.x0, top), pos2(geo.span(LAST).1, top + key_h));
+    let hover = ui
+        .input(|i| i.pointer.hover_pos())
+        .filter(|p| keys.contains(*p))
+        .map(|p| geo.key_at(p.x));
     ui.scope_builder(
         UiBuilder::new()
             .max_rect(bar)
             .layout(Layout::left_to_right(Align::Center)),
         |ui| toolbar(ui, s, &slots, hover, actions),
     );
-    pressed
 }
 
 fn toolbar(
@@ -245,7 +262,7 @@ fn toolbar(
             let text = match hover {
                 Some(k) => format!("{} \u{b7} MIDI {k}", note_name(k)),
                 None if s.map_mode => "MIDI map mode is on".to_owned(),
-                None => "Drag in a lane to paint the keys it plays \u{b7} drag a band to move it, its ends to resize it \u{b7} click the tag for the MIDI channel".to_owned(),
+                None => "Drag across a row to paint the keys it plays \u{b7} drag a band to move it, its ends to resize it \u{b7} click the tag for the MIDI channel".to_owned(),
             };
             ui.add(
                 egui::Label::new(egui::RichText::new(text).size(12.5).color(hw::TEXT_DIM))
@@ -262,7 +279,7 @@ fn lane(
     st: &mut UiState,
     i: usize,
     geo: &Geometry,
-    hover: &mut Option<u8>,
+    row: Rect,
     actions: &mut Vec<Action>,
 ) {
     let slot = &s.rig.slots[i];
@@ -271,7 +288,6 @@ fn lane(
     let zone = (slot.filter.key_lo, slot.filter.key_hi);
     let channel = slot.filter.channel;
 
-    let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), LANE_H), Sense::hover());
     let track = Rect::from_min_max(
         pos2(geo.x0, row.top()),
         pos2(geo.span(LAST).1, row.bottom()),
@@ -292,13 +308,8 @@ fn lane(
     if let Some(at) = changed {
         actions.push(Action::Zone(i, at.0, at.1));
     }
-    if let Some(p) = r.hover_pos() {
-        *hover = Some(geo.key_at(p.x));
-    }
-
     paint_lane(
         ui,
-        geo,
         track,
         band,
         tag,
@@ -473,7 +484,6 @@ fn tag_rect(band: Rect, track: Rect) -> Rect {
 #[allow(clippy::too_many_arguments)]
 fn paint_lane(
     ui: &Ui,
-    geo: &Geometry,
     track: Rect,
     band: Rect,
     tag: Rect,
@@ -484,18 +494,27 @@ fn paint_lane(
     hovered: bool,
 ) {
     let p = ui.painter();
-    p.rect_filled(track, 4.0, if hovered { mix_well(0.06) } else { hw::WELL });
-    // A line at each C, to count octaves by.
-    for k in (FIRST..=LAST).filter(|k| k % 12 == 0) {
-        let x = geo.span(k).0;
-        p.line_segment(
-            [pos2(x, track.top() + 3.0), pos2(x, track.bottom() - 3.0)],
-            Stroke::new(1.0, Color32::from_white_alpha(14)),
-        );
-    }
+    // The lane is a smoked strip across the keys; the band is lit glass over them.
+    p.rect_filled(
+        track,
+        4.0,
+        Color32::from_black_alpha(if hovered { 105 } else { 80 }),
+    );
+    p.rect_stroke(
+        track,
+        4.0,
+        Stroke::new(1.0, Color32::from_black_alpha(150)),
+        StrokeKind::Inside,
+    );
     // The band lights up like a lamp while its instrument takes the keyboard, and sits dull
     // when it is not selected or muted.
-    let body = hw::mix(hw::WELL, colour, if live { 0.80 } else { 0.30 });
+    let (r, g, b) = if live {
+        (colour.r(), colour.g(), colour.b())
+    } else {
+        let d = hw::mix(Color32::BLACK, colour, 0.45);
+        (d.r(), d.g(), d.b())
+    };
+    let body = Color32::from_rgba_unmultiplied(r, g, b, if live { 215 } else { 195 });
     p.rect_filled(band, 5.0, body);
     p.rect_filled(
         Rect::from_min_size(band.min, vec2(band.width(), band.height() * 0.45))
@@ -506,14 +525,14 @@ fn paint_lane(
             sw: 0,
             se: 0,
         },
-        hw::mix(body, Color32::WHITE, 0.14),
+        Color32::from_white_alpha(if live { 38 } else { 16 }),
     );
     p.rect_stroke(
         band,
         5.0,
         Stroke::new(
             1.0,
-            hw::mix(colour, Color32::WHITE, if live { 0.45 } else { 0.1 }),
+            hw::mix(colour, Color32::WHITE, if live { 0.55 } else { 0.15 }),
         ),
         StrokeKind::Inside,
     );
@@ -545,7 +564,7 @@ fn paint_lane(
             Align2::RIGHT_CENTER,
             text,
             FontId::proportional(12.0),
-            hw::mix(colour, Color32::WHITE, if live { 0.9 } else { 0.5 }),
+            Color32::WHITE,
         );
     }
     // The tag: an engraved plate.
@@ -568,10 +587,6 @@ fn paint_lane(
         FontId::proportional(11.5),
         Color32::WHITE,
     );
-}
-
-fn mix_well(t: f32) -> Color32 {
-    hw::mix(hw::WELL, Color32::WHITE, t)
 }
 
 /// The left of a lane: the slot's light, number and name, and its transpose.
@@ -653,20 +668,13 @@ fn gutter(ui: &mut Ui, s: &Session, i: usize, rect: Rect, live: bool, actions: &
     );
 }
 
-/// The piano: long keys, tinted by the instruments that play them, with a dot where a note is
-/// held. Returns the key under a pressed pointer, and the key under the pointer.
-fn keyboard(ui: &mut Ui, s: &Session, geo: &Geometry) -> (Option<u8>, Option<u8>) {
+/// The piano: long keys on a bed under a red rail. The lanes are drawn over them.
+fn paint_keys(ui: &Ui, geo: &Geometry, rect: Rect, top: f32, key_h: f32) {
     let width = geo.span(LAST).1 - geo.x0;
-    let (rect, resp) = ui.allocate_exact_size(
-        vec2(ui.available_width(), KEY_H + 8.0),
-        Sense::click_and_drag(),
-    );
-    let top = rect.top() + 6.0;
     let p = ui.painter();
-    // The key bed, and the rail the keys sit under.
     let bed = Rect::from_min_size(
         pos2(geo.x0 - 3.0, rect.top()),
-        vec2(width + 6.0, KEY_H + 8.0),
+        vec2(width + 6.0, key_h + 12.0),
     );
     p.rect_filled(bed, 3.0, Color32::from_rgb(0x0b, 0x0b, 0x0d));
     p.rect_filled(
@@ -680,49 +688,10 @@ fn keyboard(ui: &mut Ui, s: &Session, geo: &Geometry) -> (Option<u8>, Option<u8>
         Color32::from_rgb(0x4a, 0x1c, 0x22),
     );
 
-    // The zones of the slots that take the keyboard.
-    let live: Vec<(Color32, u8, u8)> = COLORS
-        .iter()
-        .enumerate()
-        .filter(|&(i, _)| s.plugins[i].is_some() && s.targets.contains(&i) && !s.rig.slots[i].mute)
-        .map(|(i, c)| {
-            (
-                *c,
-                s.rig.slots[i].filter.key_lo,
-                s.rig.slots[i].filter.key_hi,
-            )
-        })
-        .collect();
-    let tint = |key: u8, base: Color32| {
-        let (mut r, mut g, mut b, mut n) = (0u32, 0u32, 0u32, 0u32);
-        for (c, lo, hi) in &live {
-            if (*lo..=*hi).contains(&key) {
-                r += u32::from(c.r());
-                g += u32::from(c.g());
-                b += u32::from(c.b());
-                n += 1;
-            }
-        }
-        if n == 0 {
-            return base;
-        }
-        let mix = |base: u8, sum: u32| ((u32::from(base) * 45 + sum / n * 55) / 100) as u8;
-        Color32::from_rgb(mix(base.r(), r), mix(base.g(), g), mix(base.b(), b))
-    };
-    let held_dot = |k: u8, at: Pos2| {
-        let owners = s.engine.shared.held[usize::from(k)].load(Ordering::Relaxed);
-        if owners != 0 {
-            let slot = (owners.trailing_zeros() as usize).min(UI_SLOTS - 1);
-            p.circle_filled(at, 5.0, COLORS[slot]);
-            p.circle_stroke(at, 5.0, Stroke::new(1.5, Color32::WHITE));
-        }
-    };
-
-    let mut hit: Vec<(u8, Rect)> = Vec::new();
     for &k in geo.whites.iter() {
         let (l, r) = geo.span(k);
-        let key = Rect::from_min_max(pos2(l + 0.5, top), pos2(r - 0.5, top + KEY_H));
-        let face = tint(k, Color32::from_gray(236));
+        let key = Rect::from_min_max(pos2(l + 0.5, top), pos2(r - 0.5, top + key_h));
+        let face = Color32::from_gray(236);
         let round = CornerRadius {
             nw: 0,
             ne: 0,
@@ -738,19 +707,18 @@ fn keyboard(ui: &mut Ui, s: &Session, geo: &Geometry) -> (Option<u8>, Option<u8>
         );
         if k % 12 == 0 {
             p.text(
-                pos2(key.center().x, key.bottom() - 14.0),
+                pos2(key.center().x, key.bottom() - 12.0),
                 Align2::CENTER_CENTER,
                 note_name(k),
                 FontId::proportional(10.5),
                 Color32::from_gray(90),
             );
         }
-        hit.push((k, key));
     }
     for k in (FIRST..=LAST).filter(|k| is_black(*k)) {
         let (l, r) = geo.span(k);
-        let key = Rect::from_min_max(pos2(l, top), pos2(r, top + KEY_H * 0.62));
-        let face = tint(k, Color32::from_gray(28));
+        let key = Rect::from_min_max(pos2(l, top), pos2(r, top + key_h * 0.62));
+        let face = Color32::from_gray(28);
         p.rect_filled(
             key.translate(vec2(0.0, 1.5)),
             2.0,
@@ -765,33 +733,23 @@ fn keyboard(ui: &mut Ui, s: &Session, geo: &Geometry) -> (Option<u8>, Option<u8>
             2.0,
             hw::mix(face, Color32::WHITE, 0.10),
         );
-        hit.push((k, key));
     }
-    for &(k, key) in &hit {
-        held_dot(
-            k,
-            pos2(
-                key.center().x,
-                key.bottom() - if is_black(k) { 14.0 } else { 30.0 },
-            ),
-        );
-    }
+}
 
-    // Black keys sit on top, so they are tested first.
-    let key_at = |pos: Pos2| {
-        hit.iter()
-            .filter(|(k, _)| is_black(*k))
-            .chain(hit.iter().filter(|(k, _)| !is_black(*k)))
-            .find(|(_, r)| r.contains(pos))
-            .map(|(k, _)| *k)
-    };
-    let hover = resp.hover_pos().and_then(key_at);
-    let pressed = if resp.is_pointer_button_down_on() {
-        resp.interact_pointer_pos().and_then(key_at)
-    } else {
-        None
-    };
-    (pressed, hover)
+/// A dot in the strip under the keys for each note being played (from a MIDI keyboard), in the
+/// colour of the instrument that has it.
+fn paint_held(ui: &Ui, s: &Session, geo: &Geometry, top: f32, key_h: f32) {
+    let p = ui.painter();
+    for k in FIRST..=LAST {
+        let owners = s.engine.shared.held[usize::from(k)].load(Ordering::Relaxed);
+        if owners != 0 {
+            let (l, r) = geo.span(k);
+            let slot = (owners.trailing_zeros() as usize).min(UI_SLOTS - 1);
+            let at = pos2((l + r) / 2.0, top + key_h - 28.0);
+            p.circle_filled(at, 5.0, COLORS[slot]);
+            p.circle_stroke(at, 5.0, Stroke::new(1.5, Color32::WHITE));
+        }
+    }
 }
 
 #[cfg(test)]

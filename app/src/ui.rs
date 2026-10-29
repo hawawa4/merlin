@@ -575,8 +575,7 @@ pub fn draw(
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    let pressed = crate::zone_view::show(ui, s, st, actions);
-                    play_key(st, pressed, actions);
+                    crate::zone_view::show(ui, s, st, actions);
                 });
             return;
         }
