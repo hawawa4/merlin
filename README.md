@@ -1,5 +1,12 @@
 # Merlin
 
+[![CI](https://img.shields.io/github/actions/workflow/status/hawawa4/merlin/ci.yml?branch=main&label=CI&logo=githubactions&logoColor=white)](https://github.com/hawawa4/merlin/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/hawawa4/merlin?include_prereleases&logo=github)](https://github.com/hawawa4/merlin/releases)
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
+[![Rust edition 2024](https://img.shields.io/badge/rust-edition%202024-orange?logo=rust&logoColor=white)](https://www.rust-lang.org)
+[![Platform: Linux](https://img.shields.io/badge/platform-Linux-informational?logo=linux&logoColor=white)](https://merlin.hawawa.org)
+[![Website](https://img.shields.io/badge/website-merlin.hawawa.org-8A2BE2)](https://merlin.hawawa.org)
+
 A Linux-first live instrument host for playing in real time: a rack of instruments
 (CLAP, VST3, VST2, LV2, SoundFonts, and Windows plugins through a bundled Wine + yabridge),
 each with simple built-in effects, switched from MIDI controllers. Not a DAW: no tracks, no
