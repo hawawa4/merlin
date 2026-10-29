@@ -87,6 +87,8 @@ pub enum Action {
     Select(usize, bool),
     Mute(usize),
     Zone(usize, u8, u8),
+    /// The MIDI channel (0-15) a slot listens to; `None`: all.
+    Channel(usize, Option<u8>),
     Volume(usize, f32),
     /// Pick a SoundFont slot's preset (bank, program).
     SetPreset(usize, u16, u8),
@@ -287,6 +289,8 @@ pub enum DockTab {
     Macros,
     /// Every parameter of the instrument and its inserts, to map to MIDI controls.
     Params,
+    /// The keyboard with the keys and channel each slot plays, to paint them.
+    Zones,
 }
 
 /// UI state that is not part of the session.
@@ -346,6 +350,8 @@ pub struct UiState {
     pub perf: Option<(std::time::Instant, Vec<perf::Check>)>,
     pub peaks_shown: [f32; UI_SLOTS],
     pub held_key: Option<u8>,
+    /// The drag going on in a lane of the zones view: whose lane and what it is doing.
+    pub zone_drag: Option<(usize, crate::zone_view::Grab)>,
     /// Test hook: open this slot's load menu on the next frame.
     pub force_menu: Option<usize>,
     pub popup_open: bool,
@@ -419,6 +425,7 @@ impl UiState {
             perf: None,
             peaks_shown: [0.0; UI_SLOTS],
             held_key: None,
+            zone_drag: None,
             force_menu: None,
             popup_open: false,
             scene_edit: None,
@@ -562,6 +569,15 @@ pub fn draw(
             && let Some(i) = s.viewing
         {
             crate::param_panel::show(ui, s, st, i, actions);
+            return;
+        }
+        if st.tab == DockTab::Zones {
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    let pressed = crate::zone_view::show(ui, s, st, actions);
+                    play_key(st, pressed, actions);
+                });
             return;
         }
         if st.tab == DockTab::Macros
@@ -1418,6 +1434,26 @@ fn slot_cpu_label(ui: &mut egui::Ui, c: crate::session::SlotCpu) {
         ));
 }
 
+/// A small recessed plate that says what a slot plays: `C2–B4 · CH 3 · +12`. Clickable.
+fn mapping_plate(
+    ui: &mut egui::Ui,
+    f: &merlin_model::MidiFilter,
+    colour: Color32,
+) -> egui::Response {
+    let text = crate::zone_view::summary(f);
+    let narrowed = (f.key_lo, f.key_hi) != (0, 127) || f.channel.is_some() || f.transpose != 0;
+    hw::display(
+        ui,
+        &text,
+        150.0,
+        if narrowed {
+            hw::mix(colour, Color32::WHITE, 0.5)
+        } else {
+            hw::TEXT_DIM
+        },
+    )
+}
+
 fn unit(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, i: usize, actions: &mut Vec<Action>) {
     let selected = s.viewing == Some(i);
     let color = COLORS[i];
@@ -1425,12 +1461,7 @@ fn unit(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, i: usize, actions:
     let saved = &s.rig.slots[i];
     let missing = s.missing[i].clone();
     let (active, mute) = (s.targets.contains(&i), saved.mute);
-    let (mut lo, mut hi, mut vol, mut tr) = (
-        saved.filter.key_lo,
-        saved.filter.key_hi,
-        saved.volume,
-        saved.filter.transpose,
-    );
+    let vol = saved.volume;
     let label = match (&saved.instrument, loaded) {
         (Some(r), true) => format!(
             "{}  {}{}",
@@ -1460,9 +1491,10 @@ fn unit(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, i: usize, actions:
     };
     let frame = egui::Frame::new()
         .fill(color.gamma_multiply(if selected { 0.30 } else { 0.12 }))
+        // The same width either way: a thicker border would push the controls sideways.
         .stroke(egui::Stroke::new(
-            if selected { 1.5 } else { 0.5 },
-            color.gamma_multiply(if selected { 1.0 } else { 0.5 }),
+            1.0,
+            color.gamma_multiply(if selected { 1.0 } else { 0.4 }),
         ))
         .inner_margin(egui::Margin::symmetric(6, 2))
         .corner_radius(3);
@@ -1498,13 +1530,12 @@ fn unit(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, i: usize, actions:
                 let a = ControlAction::SelectSlot { slot: i as u8 };
                 crate::map_mode::target(ui, s, &r, a, None, actions);
             }
-            let led = if active && !mute {
-                color
+            // Red when the slot takes the keyboard, dark when it is not selected or is muted.
+            hw::led(ui, active && !mute, hw::RED).on_hover_text(if active && !mute {
+                "Playing: this slot receives the keyboard"
             } else {
-                Color32::from_gray(60)
-            };
-            let (rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
-            ui.painter().circle_filled(rect.center(), 5.0, led);
+                "Not playing: select it to play it from the keyboard, or unmute it"
+            });
             // Level meter (not a switch): a flat bar that stays empty when there is no signal.
             let (meter, level) = ui.allocate_exact_size(egui::vec2(60.0, 8.0), egui::Sense::hover());
             ui.painter().rect_filled(meter, 1.0, Color32::from_gray(35));
@@ -1515,13 +1546,23 @@ fn unit(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, i: usize, actions:
                 ui.painter().rect_filled(bar, 1.0, color);
             }
             level.on_hover_text("Output level of this slot");
+            // A column of its own, as wide as the longest reading ("100.0% wine 100%"), so the
+            // controls after it stay put whatever the plugin is.
+            ui.allocate_ui_with_layout(
+                egui::vec2(112.0, 20.0),
+                egui::Layout::right_to_left(egui::Align::Center),
+                |ui| {
+                    if loaded {
+                        slot_cpu_label(ui, s.slot_cpu[i]);
+                    }
+                },
+            );
             if loaded {
-                slot_cpu_label(ui, s.slot_cpu[i]);
-            }
-            if loaded {
-                let m = ui
-                    .selectable_label(mute, "M")
-                    .on_hover_text("Mute this slot");
+                let m = hw::Cap::new("MUTE")
+                    .lit(mute.then_some(hw::RED))
+                    .min_width(48.0)
+                    .show(ui)
+                    .on_hover_text("Silence this slot (lit: muted)");
                 if m.clicked() && !s.map_mode {
                     actions.push(Action::Mute(i));
                 }
@@ -1533,17 +1574,13 @@ fn unit(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, i: usize, actions:
                     None,
                     actions,
                 );
-                ui.label("vol");
-                let v = ui
-                    .add(
-                        egui::DragValue::new(&mut vol)
-                            .range(0.0..=2.0)
-                            .speed(0.01)
-                            .fixed_decimals(2),
-                    )
-                    .on_hover_text("Slot volume (1.00 = unchanged). Drag to change.");
+                // The slot's volume: a knob that rests at unity, and its level in dB.
+                let mut position = vol / 2.0;
+                let v = hw::mini_knob(ui, &mut position, 0.5, color).on_hover_text(
+                    "Slot volume. Drag up and down (Shift: fine), scroll, double-click for 0 dB",
+                );
                 if v.changed() {
-                    actions.push(Action::Volume(i, vol));
+                    actions.push(Action::Volume(i, position * 2.0));
                 }
                 crate::map_mode::target(
                     ui,
@@ -1553,21 +1590,13 @@ fn unit(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, i: usize, actions:
                     None,
                     actions,
                 );
-                ui.label("zone")
-                    .on_hover_text("Key range this slot plays, as MIDI notes (0-127; 60 = middle C). Notes outside it are ignored, so two slots can split the keyboard.");
-                let a = ui.add(egui::DragValue::new(&mut lo).range(0..=127));
-                ui.label("–");
-                let b = ui.add(egui::DragValue::new(&mut hi).range(0..=127));
-                if a.changed() || b.changed() {
-                    actions.push(Action::Zone(i, lo, hi));
-                }
-                ui.label("tr")
-                    .on_hover_text("Transpose in semitones (-48 to +48)");
-                if ui
-                    .add(egui::DragValue::new(&mut tr).range(-48..=48))
-                    .changed()
+                ui.label(RichText::new(format!("{:>8}", hw::gain_text(position * 2.0))).monospace().size(11.5).color(hw::TEXT_DIM));
+                // Where on the keyboard, and on which MIDI channel: edited in the zones view.
+                if mapping_plate(ui, &saved.filter, color)
+                    .on_hover_text("The keys and MIDI channel this slot plays (and its transpose). Click to edit them on the keyboard")
+                    .clicked()
                 {
-                    actions.push(Action::Transpose(i, tr));
+                    actions.push(Action::Tab(DockTab::Zones));
                 }
             }
             let menu = egui::ComboBox::from_id_salt(("load", i))
@@ -1636,6 +1665,11 @@ fn keys(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Acti
         }
     });
     let pressed = keyboard::show(ui, &zones, &s.engine.shared);
+    play_key(st, pressed, actions);
+}
+
+/// Plays the on-screen key under the pointer, and lets go of it when the pointer does.
+fn play_key(st: &mut UiState, pressed: Option<u8>, actions: &mut Vec<Action>) {
     match (pressed, st.held_key) {
         (Some(k), None) => {
             st.held_key = Some(k);
@@ -1697,6 +1731,9 @@ fn dock_bar(ui: &mut egui::Ui, s: &Session, st: &UiState, actions: &mut Vec<Acti
     ui.horizontal(|ui| {
         let Some(i) = s.viewing else {
             ui.label("EDITOR · nothing selected");
+            if ui.selectable_label(st.tab == DockTab::Zones, "Key zones").clicked() {
+                actions.push(Action::Tab(DockTab::Zones));
+            }
             return;
         };
         let mut tabs = vec![(DockTab::Plugin, "Plugin".to_owned())];
@@ -1710,6 +1747,7 @@ fn dock_bar(ui: &mut egui::Ui, s: &Session, st: &UiState, actions: &mut Vec<Acti
         }
         tabs.push((DockTab::Macros, "Macros".to_owned()));
         tabs.push((DockTab::Params, "Parameter list".to_owned()));
+        tabs.push((DockTab::Zones, "Key zones".to_owned()));
         for (tab, label) in tabs {
             if ui.selectable_label(st.tab == tab, label).clicked() {
                 actions.push(Action::Tab(tab));
@@ -1721,6 +1759,10 @@ fn dock_bar(ui: &mut egui::Ui, s: &Session, st: &UiState, actions: &mut Vec<Acti
         }
         if st.tab == DockTab::Params {
             ui.colored_label(COLORS[i], format!("PARAMETERS · {}", i + 1));
+            return;
+        }
+        if st.tab == DockTab::Zones {
+            hw::engraved(ui, "Key zones and MIDI channels");
             return;
         }
         if st.tab == DockTab::Macros {

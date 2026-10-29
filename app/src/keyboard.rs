@@ -31,7 +31,7 @@ pub struct ZoneView {
     pub hi: u8,
 }
 
-fn is_black(key: u8) -> bool {
+pub fn is_black(key: u8) -> bool {
     matches!(key % 12, 1 | 3 | 6 | 8 | 10)
 }
 

@@ -33,6 +33,7 @@ mod settings_ui;
 mod tags;
 mod touch;
 mod ui;
+mod zone_view;
 
 use std::num::NonZeroU32;
 use std::path::PathBuf;
@@ -326,7 +327,8 @@ impl Running {
             || self.ui.settings_open
             || self.ui.perform
             || self.ui.tab == ui::DockTab::Macros
-            || self.ui.tab == ui::DockTab::Params;
+            || self.ui.tab == ui::DockTab::Params
+            || self.ui.tab == ui::DockTab::Zones;
         let _ = self.session.editors.set_popup_open(covered);
 
         let prims = ctx.tessellate(out.shapes, ppp);
@@ -392,6 +394,10 @@ impl Running {
             }
             Action::Zone(i, lo, hi) => {
                 s.set_zone(i, lo, hi);
+                Ok(())
+            }
+            Action::Channel(i, channel) => {
+                s.set_channel(i, channel);
                 Ok(())
             }
             Action::Volume(i, v) => {
@@ -954,7 +960,7 @@ impl Running {
                     match tab {
                         ui::DockTab::Plugin => s.show_editor(i),
                         ui::DockTab::Insert(k) => s.show_insert_editor(i, k),
-                        ui::DockTab::Macros | ui::DockTab::Params => {}
+                        ui::DockTab::Macros | ui::DockTab::Params | ui::DockTab::Zones => {}
                     }
                 }
                 Ok(())
@@ -1419,6 +1425,14 @@ fn parse_script() -> Vec<(Duration, Action)> {
                     words.next()?.parse().ok()?,
                     words.next()?.parse().ok()?,
                 ),
+                // channel <slot> <1-16|omni>
+                "channel" => Action::Channel(
+                    slot(words.next())?,
+                    match words.next()? {
+                        "omni" => None,
+                        n => Some(n.parse::<u8>().ok()?.checked_sub(1)?),
+                    },
+                ),
                 "volume" => Action::Volume(slot(words.next())?, words.next()?.parse().ok()?),
                 "transpose" => Action::Transpose(slot(words.next())?, words.next()?.parse().ok()?),
                 "preset" => Action::SetPreset(
@@ -1459,6 +1473,7 @@ fn parse_script() -> Vec<(Duration, Action)> {
                 "tab" => Action::Tab(match words.next()? {
                     "macros" => ui::DockTab::Macros,
                     "params" => ui::DockTab::Params,
+                    "zones" => ui::DockTab::Zones,
                     t if t.starts_with("insert") => ui::DockTab::Insert(
                         t["insert".len()..].parse::<usize>().ok()?.checked_sub(1)?,
                     ),

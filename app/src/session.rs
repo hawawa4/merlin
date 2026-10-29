@@ -1645,6 +1645,13 @@ impl Session {
         self.push_slot_settings(i);
     }
 
+    /// The MIDI channel (0-15) a slot listens to; `None` is every channel.
+    pub fn set_channel(&mut self, i: usize, channel: Option<u8>) {
+        self.rig.slots[i].filter.channel = channel.map(|c| c.min(15));
+        self.dirty = true;
+        self.push_slot_settings(i);
+    }
+
     pub fn set_volume(&mut self, i: usize, volume: f32) {
         self.rig.slots[i].volume = volume;
         self.dirty = true;

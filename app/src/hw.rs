@@ -765,20 +765,9 @@ fn arc(p: &Painter, c: Pos2, radius: f32, from: f32, to: f32, stroke: Stroke) {
     p.add(Shape::line(points, stroke));
 }
 
-/// A rotary knob. `position` is where it points, 0..=1; the caller turns that into a value.
-/// Drag it up and down (Shift for fine), use the scroll wheel, double-click to go back to
-/// `default`. `origin` is where the lit ring starts: 0 for most knobs, the middle for ones that
-/// go both ways. `readout` writes the value under the knob.
-pub fn knob(
-    ui: &mut Ui,
-    position: &mut f32,
-    label: &str,
-    readout: &dyn Fn(f32) -> String,
-    default: f32,
-    origin: f32,
-    accent: Color32,
-) -> Response {
-    let (rect, mut r) = ui.allocate_exact_size(vec2(64.0, 78.0), Sense::click_and_drag());
+/// What a knob does with the mouse: drag up and down (Shift for fine), the wheel, double-click
+/// for `default`. Marks the response changed when the position moved.
+fn turn(ui: &mut Ui, r: &mut Response, position: &mut f32, default: f32) {
     let before = *position;
     if r.dragged() {
         let fine = ui.input(|i| i.modifiers.shift);
@@ -798,6 +787,23 @@ pub fn knob(
     if *position != before {
         r.mark_changed();
     }
+}
+
+/// A rotary knob. `position` is where it points, 0..=1; the caller turns that into a value.
+/// Drag it up and down (Shift for fine), use the scroll wheel, double-click to go back to
+/// `default`. `origin` is where the lit ring starts: 0 for most knobs, the middle for ones that
+/// go both ways. `readout` writes the value under the knob.
+pub fn knob(
+    ui: &mut Ui,
+    position: &mut f32,
+    label: &str,
+    readout: &dyn Fn(f32) -> String,
+    default: f32,
+    origin: f32,
+    accent: Color32,
+) -> Response {
+    let (rect, mut r) = ui.allocate_exact_size(vec2(64.0, 78.0), Sense::click_and_drag());
+    turn(ui, &mut r, position, default);
     if !ui.is_rect_visible(rect) {
         return r;
     }
@@ -842,6 +848,65 @@ pub fn knob(
             TEXT
         },
     );
+    r
+}
+
+/// A knob small enough for a row of the rack, without a label: the same moves as [`knob`], and a
+/// notch where `default` is.
+pub fn mini_knob(ui: &mut Ui, position: &mut f32, default: f32, accent: Color32) -> Response {
+    let (rect, mut r) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::click_and_drag());
+    turn(ui, &mut r, position, default);
+    if !ui.is_rect_visible(rect) {
+        return r;
+    }
+    let accent = if ui.is_enabled() { accent } else { TEXT_DIM };
+    let c = rect.center();
+    let p = ui.painter();
+    let angle = |q: f32| KNOB_START + KNOB_SWEEP * q;
+    arc(p, c, 12.5, angle(0.0), angle(1.0), Stroke::new(2.5, WELL));
+    // Lit from the notch (a gain of 1.0) to where the knob points, so "louder" and "quieter"
+    // read apart.
+    let (lo, hi) = (default.min(*position), default.max(*position));
+    if hi - lo > 0.002 {
+        arc(p, c, 12.5, angle(lo), angle(hi), Stroke::new(2.5, accent));
+    }
+    p.circle_filled(c + vec2(0.0, 1.5), 10.0, BEVEL_LO);
+    p.circle_filled(c, 9.5, Color32::from_rgb(0x55, 0x58, 0x60));
+    p.circle_filled(c, 8.3, Color32::from_rgb(0x2b, 0x2d, 0x32));
+    p.circle_filled(c - vec2(1.0, 1.5), 6.0, Color32::from_white_alpha(10));
+    let a = angle(*position);
+    let d = vec2(a.cos(), a.sin());
+    p.line_segment(
+        [c + d * 2.5, c + d * 8.0],
+        Stroke::new(2.0, mix(accent, Color32::WHITE, 0.55)),
+    );
+    r
+}
+
+/// A recessed display with a short text, for a number or name beside a control. Clickable.
+pub fn display(ui: &mut Ui, text: &str, width: f32, colour: Color32) -> Response {
+    let (rect, r) = ui.allocate_exact_size(vec2(width, 20.0), Sense::click());
+    if ui.is_rect_visible(rect) {
+        let p = ui.painter();
+        p.rect_filled(rect, 4.0, WELL);
+        p.rect_stroke(
+            rect,
+            4.0,
+            Stroke::new(1.0, BEVEL_LO),
+            egui::StrokeKind::Inside,
+        );
+        p.text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            text,
+            FontId::monospace(12.0),
+            if r.hovered() {
+                mix(colour, Color32::WHITE, 0.4)
+            } else {
+                colour
+            },
+        );
+    }
     r
 }
 

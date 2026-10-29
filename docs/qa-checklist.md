@@ -51,6 +51,13 @@ Works with any device that sends CC, notes or Program Change (this is the "every
 The app always listens to your keyboards and the on-screen keys. Nothing is written until you press **Capture MIDI** (header, or **CAPTURE** in the Perform view). Files go to `~/Music/Merlin`.
 - [ ] A long session: leave it running for an hour of normal playing and check memory (Settings > Performance, or `ps`): the capture should stay a few MB at most.
 
+## 5o. Key zones and MIDI channels
+- [ ] Rack: each slot has a red lamp (lit while it takes the keyboard: selected and not muted), a **MUTE** key (lit red when muted), a volume knob with its dB value (double-click: 0 dB) and a plate such as `C2-B4 · CH 3 · +12` (`ALL KEYS · OMNI` when nothing is narrowed). Click the plate: the dock shows the **Key zones** tab.
+- [ ] Key zones: the whole piano (A0-C8) with one lane per loaded slot above it. Drag across a lane: the band follows the pointer and the plate in the rack changes; you hear only those keys. Drag the middle of a band to move it, its ends to resize it. A single click on empty track gives a one-key zone. Painting out to the very end of the piano reaches the end of the MIDI range (0 / 127).
+- [ ] Click a band's tag: pick OMNI or channel 1-16. Play from a keyboard (or `just fake-keyboard`) on that channel: only that slot answers. The on-screen keys play on channel 1, so a slot set to another channel is silent from them.
+- [ ] **ALL KEYS** (top left) and **OMNI** (top right) put every slot back. Right-click a lane for the same on one slot. **-** / **+** transpose (Shift: octaves), the number resets it.
+- [ ] The tab keeps the rack in view: selecting slots in the rack, the red lamps and the keys' tint follow. Save, reopen the rig: zones, channels and transpose are back; a scene stores them too.
+
 ## 6. Stability
 - [ ] Every plugin runs in its own `merlin-plugin-host` process (`pgrep -af merlin-plugin-host`: one per plugin and insert). Kill one with `kill -9 <pid>`: that slot says *crashed* with *Retry* next to it, a message names the plugin and the signal, the other slots keep sounding, and the app does not restart. *Retry* loads it again with the state of the last autosave. The same for a Windows plugin: `kill -9` its `yabridge-host` (a child of the plugin's `merlin-plugin-host`).
 - [ ] `kill -STOP <pid>` of a plugin host (a hung plugin): after a few seconds (a second while it is playing, up to about ten when idle) the slot goes *crashed* the same way, and the audio of the other slots does not stop meanwhile.
