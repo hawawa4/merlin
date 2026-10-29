@@ -4,8 +4,8 @@ import Layout from "../layouts/Layout.astro";
 const repo = "https://github.com/hawawa4/merlin";
 const releases = `${repo}/releases/latest`;
 
-// An entry with a `video` needs a file in public/media/ (a .webm screen recording, 16:9);
-// one without is text only.
+// An entry with a `video` needs a file in public/media/ (a .webm screen recording, 16:9); one
+// with an `image` needs a still there (a .webp screenshot); one without either is text only.
 const showcase = [
   {
     title: "A rack of instruments",
@@ -40,6 +40,12 @@ const showcase = [
     title: "Setlists and the Perform view",
     body: "Songs are made of parts, and each part recalls a scene and can change the tempo. Add backing tracks and markers. The Perform view is big scene buttons, one tile per instrument and a PANIC button, and it can be locked so nothing gets changed by accident.",
     video: "/media/perform.webm",
+  },
+  {
+    title: "Key zones and MIDI channels",
+    body: "See and set which keys each instrument plays on a full 88-key keyboard. Every instrument in the rack gets a row laid across the keys, in its own colour: paint the keys it plays, drag the band to move it, pull its ends to resize it. The tag on the band is the MIDI channel it listens to (or all of them), and each row transposes on its own. Split the keyboard into a bass, a pad and a lead, or stack layers on top of each other, and see it all at once. The view only sets zones: it never plays a note. The rack shows the same thing as a short summary on every instrument.",
+    image: "/media/zones.webp",
+    alt: "The Key zones view: four instruments in the rack, each with a coloured band across a piano keyboard showing the keys it plays and a tag with its MIDI channel.",
   },
 ];
 
@@ -127,6 +133,15 @@ const limits = [
           <div class="wrap">
             <h2>{f.title}</h2>
             <p>{f.body}</p>
+            {f.image && (
+              <img
+                src={f.image}
+                width="1920"
+                height="960"
+                alt={f.alt}
+                loading="lazy"
+              />
+            )}
             {f.video && (
               <video
                 src={f.video}
@@ -258,14 +273,17 @@ const limits = [
     color: var(--muted);
     margin: 0 0 1rem;
   }
-  .showcase video {
+  .showcase video,
+  .showcase img {
     display: block;
     width: 100%;
     height: auto;
-    aspect-ratio: 16 / 9;
     border: 1px solid var(--line);
     border-radius: 6px;
     background: var(--surface);
+  }
+  .showcase video {
+    aspect-ratio: 16 / 9;
   }
 
   footer {

@@ -6,9 +6,12 @@ each with simple built-in effects, switched from MIDI controllers. Not a DAW: no
 routing matrix, no recording to arm. The one exception is a MIDI capture that is always on: the app keeps
 the last 30 minutes of what you played, in memory, and one button saves them as a `.mid` file.
 
+Website, downloads and screenshots: **[merlin.hawawa.org](https://merlin.hawawa.org)**.
+
 ## What it does
 
-- **Rack:** 8 instrument slots with embedded plugin editors, a keyboard map, zones and layers.
+- **Rack:** 8 instrument slots with embedded plugin editors, a keyboard where you paint the keys and MIDI channel each
+  instrument plays (zones), and layers.
   Each slot has an EQ, compressor, delay and reverb; the master has a limiter.
 - **Playing live:** scenes, macros, a Perform view, MIDI mapping of any control on any
   controller, and a Novation Launchkey MK3 driver (DAW mode, pad lights, screen).
