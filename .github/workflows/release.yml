@@ -93,7 +93,7 @@ jobs:
           (cd dist && sha256sum ./* > SHA256SUMS.txt && cat SHA256SUMS.txt)
           dpkg-deb -I "dist/merlin_${VERSION}_amd64.deb"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: bundles
           path: dist/*
