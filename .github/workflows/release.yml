@@ -148,7 +148,7 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.licenses=GPL-3.0-or-later
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           context: site
           push: true
