@@ -69,7 +69,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: System libraries
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libxcb1-dev
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libxcb1-dev desktop-file-utils
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-deb
