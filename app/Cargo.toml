@@ -72,5 +72,7 @@ assets = [
     ["target/release/merlin-plugin-host", "usr/bin/", "755"],
     ["target/release/merlin-bridge", "usr/bin/", "755"],
     ["../packaging/merlin.desktop", "usr/share/applications/", "644"],
+    ["../packaging/icons/merlin.png", "usr/share/icons/hicolor/128x128/apps/merlin.png", "644"],
+    ["../packaging/icons/merlin-256.png", "usr/share/icons/hicolor/256x256/apps/merlin.png", "644"],
     ["../README.md", "usr/share/doc/merlin/README.md", "644"],
 ]

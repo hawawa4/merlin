@@ -50,7 +50,7 @@ use ui::{Action, UiState};
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
-use winit::platform::x11::EventLoopBuilderExtX11;
+use winit::platform::x11::{EventLoopBuilderExtX11, WindowAttributesExtX11};
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::{Window, WindowId};
 
@@ -150,12 +150,20 @@ fn ticks_per_second() -> f64 {
     unsafe { libc::sysconf(libc::_SC_CLK_TCK) as f64 }
 }
 
+/// The window icon (the pixel-art hat, `packaging/icons/merlin.png`; `tools/make-icon.py` produces the raw pixels).
+fn window_icon() -> Option<winit::window::Icon> {
+    winit::window::Icon::from_rgba(include_bytes!("../data/icon-128.rgba").to_vec(), 128, 128).ok()
+}
+
 impl App {
     fn start(&mut self, event_loop: &ActiveEventLoop) -> Result<Running> {
         let window = Arc::new(
             event_loop.create_window(
                 Window::default_attributes()
                     .with_title("Merlin")
+                    .with_window_icon(window_icon())
+                    // The class the desktop entry's StartupWMClass names, so the shell pairs the window with its icon.
+                    .with_name("merlin", "merlin")
                     .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 900.0))
                     // Shown below, once the window manager has been told not to focus it.
                     .with_visible(false)

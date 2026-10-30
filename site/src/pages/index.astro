@@ -73,7 +73,10 @@ const limits = [
 >
   <header class="hero">
     <div class="wrap">
-      <h1>Merlin</h1>
+      <div class="brand">
+        <img src="/logo.png" width="128" height="128" alt="" />
+        <h1>Merlin</h1>
+      </div>
       <p class="sub">
         A live instrument host for Linux. A rack of instruments, each with
         simple effects, that you switch between from your MIDI keyboard or
@@ -213,6 +216,22 @@ const limits = [
 <style>
   .hero {
     padding: 2.5rem 0 1rem;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+  .brand img {
+    flex: none;
+    height: auto;
+    image-rendering: pixelated;
+  }
+  /* Whole-number scales only (128 → 64), so the pixels stay even. */
+  @media (max-width: 30rem) {
+    .brand img {
+      width: 64px;
+    }
   }
   h1 {
     font-size: clamp(2rem, 5vw, 2.75rem);

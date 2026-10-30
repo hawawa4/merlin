@@ -3,5 +3,7 @@ Type=Application
 Name=Merlin
 Comment=Live instrument host
 Exec=merlin
+Icon=merlin
+StartupWMClass=merlin
 Terminal=false
 Categories=AudioVideo;Audio;Midi;Music;
