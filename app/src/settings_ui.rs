@@ -1046,7 +1046,7 @@ fn windows_plugins(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &m
             if ready {
                 ""
             } else {
-                " (made when you install the first plugin)"
+                " (made when you install the first plugin, or open it here)"
             }
         ));
     });
@@ -1075,6 +1075,15 @@ fn windows_plugins(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &m
             .clicked()
         {
             actions.push(Action::SyncWindows);
+        }
+        if ui
+            .add_enabled(!s.windows_busy(), egui::Button::new("Open Wine prefix"))
+            .on_hover_text(
+                "Show the Windows environment's folder in your file manager. It is made first when it does not exist yet.",
+            )
+            .clicked()
+        {
+            actions.push(Action::OpenWinePrefix);
         }
     });
     egui::CollapsingHeader::new("Install from a path instead")

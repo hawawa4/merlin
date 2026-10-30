@@ -836,6 +836,7 @@ impl Running {
                 s.install_windows_plugin(path)
             }
             Action::SyncWindows => s.sync_windows_plugins(),
+            Action::OpenWinePrefix => s.open_wine_prefix(),
             Action::DropFile(path) => {
                 self.ui.drag_hint = None;
                 if self.ui.locked {

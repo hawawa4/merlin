@@ -148,6 +148,25 @@ fn command(tool: &str, want: Want, start: &Path) -> (String, Vec<String>) {
     (tool.to_owned(), args)
 }
 
+/// Opens a folder in the desktop's default file manager. The manager runs on its own; we only
+/// wait for it in a thread so it does not linger as a zombie.
+pub fn open_folder(dir: &Path) -> Result<(), String> {
+    let mut child = Command::new("xdg-open")
+        .arg(dir)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => "xdg-open is not installed".to_owned(),
+            _ => format!("cannot run xdg-open: {e}"),
+        })?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
+
 fn run(want: Want, start: &Path) -> Result<Vec<PathBuf>, String> {
     for tool in tools() {
         let (program, args) = command(tool, want, start);

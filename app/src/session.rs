@@ -578,6 +578,27 @@ impl Session {
         self.start_windows_job(move |_| sync_report(&rt, &prefixes, &extra))
     }
 
+    /// Shows the Wine prefix in the file manager. When it is not there yet it is made first (in
+    /// the background, about a minute), so users can prepare it before installing anything.
+    pub fn open_wine_prefix(&mut self) -> Result<()> {
+        let rt = self
+            .windows_runtime()
+            .context("set the Wine program and the yabridge folder first")?;
+        if rt.prefix_ready() {
+            return crate::dialog::open_folder(&rt.prefix).map_err(|e| anyhow!(e));
+        }
+        self.windows_status =
+            "creating the Windows environment (first time only, about a minute)...".into();
+        self.start_windows_job(move |_| {
+            rt.ensure_prefix(Duration::from_secs(300))?;
+            crate::dialog::open_folder(&rt.prefix).map_err(|e| anyhow!(e))?;
+            Ok(format!(
+                "the Windows environment is ready: {}",
+                rt.prefix.display()
+            ))
+        })
+    }
+
     /// Runs a plugin installer (`.exe` or `.msi`) in the Windows prefix, then syncs. The
     /// installer's own window opens as usual; this returns at once.
     pub fn install_windows_plugin(&mut self, file: PathBuf) -> Result<()> {

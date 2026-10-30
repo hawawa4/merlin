@@ -180,6 +180,8 @@ pub enum Action {
     InstallWindows(String),
     /// Make bridges for the Windows plugins already in the prefix.
     SyncWindows,
+    /// Show the Wine prefix in the file manager, making it first if it is not there yet.
+    OpenWinePrefix,
     /// Download and install the Wine + yabridge runtime, then restart.
     InstallRuntime,
     ToggleFavorite(usize),
