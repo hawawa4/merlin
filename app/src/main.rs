@@ -892,6 +892,14 @@ impl Running {
                 }
             }
             Action::InstallRuntime => s.install_runtime(),
+            Action::CheckUpdate => s.check_for_update(),
+            Action::InstallUpdate => s.install_update(),
+            Action::RestartForUpdate => s.restart_for_update(),
+            Action::OpenReleasePage => match s.update.info.as_ref().map(|i| i.page_url.clone()) {
+                Some(url) => crate::dialog::open_folder(std::path::Path::new(&url))
+                    .map_err(|e| anyhow::anyhow!(e)),
+                None => Err(anyhow::anyhow!("no release page to open")),
+            },
             Action::ToggleFavorite(k) => {
                 if let Some(f) = s.found.get(k).cloned() {
                     s.toggle_favorite(&f);
@@ -1456,6 +1464,7 @@ fn parse_script() -> Vec<(Duration, Action)> {
                         "midi" => settings_ui::SettingsTab::Midi,
                         "controls" => settings_ui::SettingsTab::Controls,
                         "windows" => settings_ui::SettingsTab::Windows,
+                        "updates" => settings_ui::SettingsTab::Updates,
                         "perf" => settings_ui::SettingsTab::Performance,
                         _ => settings_ui::SettingsTab::Plugins,
                     }),
@@ -1597,6 +1606,7 @@ fn parse_script() -> Vec<(Duration, Action)> {
                 }
                 "drop" => Action::DropFile(PathBuf::from(words.collect::<Vec<_>>().join(" "))),
                 "runtime" => Action::InstallRuntime,
+                "checkupdate" => Action::CheckUpdate,
                 // macro <slot> <n> <0..1>; macrotarget <slot> <n> <param name part | sampler:level>
                 "macro" => Action::SetMacro(
                     slot(words.next())?,

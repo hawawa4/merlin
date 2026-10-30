@@ -184,6 +184,14 @@ pub enum Action {
     OpenWinePrefix,
     /// Download and install the Wine + yabridge runtime, then restart.
     InstallRuntime,
+    /// Settings → Updates: look for a newer release (only ever on request).
+    CheckUpdate,
+    /// Download and install the release the check found.
+    InstallUpdate,
+    /// Restart into the installed update.
+    RestartForUpdate,
+    /// Open the release page from the last check in the browser.
+    OpenReleasePage,
     ToggleFavorite(usize),
     /// Take browser entry `k` out of the library for good.
     HidePlugin(usize),

@@ -6,8 +6,10 @@ name: release
 #   2. Push a tag yourself (git tag v0.2.0 && git push origin v0.2.0).
 # The tag must match the version, and CI has to pass before anything is built or published.
 #
-# A release holds the .deb, a tarball with the amd64 Linux binaries (merlin, merlin-scan, merlin-plugin-host and
+# A release holds the .deb, an AppImage, a tarball with the amd64 Linux binaries (merlin, merlin-scan, merlin-plugin-host and
 # merlin-bridge; the app looks for merlin-scan and merlin-plugin-host next to itself, so they go together) and SHA256SUMS.txt.
+# The in-app updater (crates/updater, Settings > Updates) looks for exactly these file names
+# (merlin_VERSION_amd64.deb, merlin-VERSION-linux-amd64.{AppImage,tar.gz}, SHA256SUMS.txt): keep them in sync.
 # The release called `runtime` (the Wine + yabridge archive the app downloads) is separate and
 # published by hand with `just package-runtime`; see docs/wine.md.
 on:
@@ -72,7 +74,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-deb
         run: cargo install cargo-deb --locked
-      - run: cargo build --release -p merlin -p merlin-bridge
+      # The in-app updater compares this with the latest release tag. Builds without it
+      # (cargo run, local builds) report "dev" and never offer or apply an update.
+      - name: Build
+        run: cargo build --release -p merlin -p merlin-bridge
+        env:
+          MERLIN_RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
 
       - name: Package
         env:
@@ -89,6 +96,22 @@ jobs:
           done
           cp LICENSE README.md "$name/"
           tar -czf "dist/$name.tar.gz" "$name"
+
+          # AppImage: the same four programs in one file. GPU, JACK and X11 libraries are not
+          # bundled (the app loads the machine's own at runtime). The in-app updater replaces
+          # this file, so the name has to stay merlin-VERSION-linux-amd64.AppImage.
+          appdir=Merlin.AppDir
+          mkdir -p "$appdir/usr/bin"
+          cp "$name"/merlin "$name"/merlin-scan "$name"/merlin-plugin-host "$name"/merlin-bridge "$appdir/usr/bin/"
+          cp packaging/merlin.desktop "$appdir/merlin.desktop"
+          cp packaging/icons/merlin-256.png "$appdir/merlin.png"
+          ln -s merlin.png "$appdir/.DirIcon"
+          ln -s usr/bin/merlin "$appdir/AppRun"
+          curl -fsSL -o /tmp/appimagetool \
+            https://github.com/AppImage/appimagetool/releases/download/1.9.0/appimagetool-x86_64.AppImage
+          chmod +x /tmp/appimagetool
+          ARCH=x86_64 /tmp/appimagetool --appimage-extract-and-run --no-appstream \
+            "$appdir" "dist/$name.AppImage"
 
           (cd dist && sha256sum ./* > SHA256SUMS.txt && cat SHA256SUMS.txt)
           dpkg-deb -I "dist/merlin_${VERSION}_amd64.deb"

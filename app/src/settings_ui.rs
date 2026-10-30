@@ -17,6 +17,7 @@ pub enum SettingsTab {
     Midi,
     Controls,
     Windows,
+    Updates,
     Performance,
 }
 
@@ -187,6 +188,7 @@ pub fn show(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<
             (SettingsTab::Midi, "MIDI devices"),
             (SettingsTab::Controls, "Controls"),
             (SettingsTab::Windows, "Windows plugins"),
+            (SettingsTab::Updates, "Updates"),
             (SettingsTab::Performance, "Performance check"),
         ] {
             ui.selectable_value(&mut st.settings_tab, tab, name);
@@ -201,6 +203,7 @@ pub fn show(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<
             SettingsTab::Midi => midi(ui, s, st, actions),
             SettingsTab::Controls => controls(ui, s, st, actions),
             SettingsTab::Windows => windows(ui, s, st, actions),
+            SettingsTab::Updates => updates(ui, s, actions),
             SettingsTab::Performance => performance(ui, s, st),
         });
 }
@@ -1118,6 +1121,118 @@ fn windows_plugins(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &m
         .small()
         .weak(),
     );
+}
+
+/// Looking for a newer release and installing it. Nothing here runs unless the user presses a
+/// button: there is no check at startup and no popup.
+fn updates(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
+    use crate::session::{APP_VERSION, UpdateBusy};
+    use merlin_updater::Kind;
+
+    let u = &s.update;
+    ui.strong("Updates");
+    ui.label(
+        RichText::new(
+            "Merlin only looks for a new version when you ask here. It never checks in the background or at startup.",
+        )
+        .small()
+        .weak(),
+    );
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        ui.label(format!("Version {APP_VERSION}"));
+        let checking = u.busy == UpdateBusy::Checking;
+        if ui
+            .add_enabled(
+                u.busy == UpdateBusy::No,
+                egui::Button::new(if checking {
+                    "Checking..."
+                } else {
+                    "Check for updates"
+                }),
+            )
+            .clicked()
+        {
+            actions.push(Action::CheckUpdate);
+        }
+    });
+    if !u.error.is_empty() {
+        ui.colored_label(status_color(Status::Fail), &u.error);
+    }
+    let Some(info) = &u.info else { return };
+    ui.add_space(6.0);
+
+    if u.installed {
+        ui.colored_label(
+            status_color(Status::Ok),
+            format!(
+                "Version {} is installed. Restart Merlin to start using it.",
+                info.latest
+            ),
+        );
+        ui.label(
+            RichText::new("Your rig is saved and comes back as it was.")
+                .small()
+                .weak(),
+        );
+        if ui.button("Restart now").clicked() {
+            actions.push(Action::RestartForUpdate);
+        }
+        return;
+    }
+    if !info.available {
+        ui.colored_label(status_color(Status::Ok), "You're up to date.");
+        return;
+    }
+
+    ui.colored_label(
+        status_color(Status::Warn),
+        format!("A new version is available: {}", info.latest),
+    );
+    if u.busy == UpdateBusy::Installing {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label(&u.status);
+        });
+        if info.kind == Kind::Deb {
+            ui.label(
+                RichText::new("A password prompt from your desktop asks to install the package.")
+                    .small()
+                    .weak(),
+            );
+        }
+    } else if info.can_install {
+        ui.label(
+            RichText::new(match info.kind {
+                Kind::Deb => "Installs the package; your desktop asks for your password.",
+                Kind::AppImage => "Replaces this AppImage file; the running app keeps going until you restart.",
+                _ => "Replaces the Merlin programs in this folder; the running app keeps going until you restart.",
+            })
+            .small()
+            .weak(),
+        );
+        if ui.button("Download and install").clicked() {
+            actions.push(Action::InstallUpdate);
+        }
+    } else if !info.reason.is_empty() {
+        ui.label(&info.reason);
+    }
+    if ui
+        .add_enabled(
+            u.busy == UpdateBusy::No,
+            egui::Button::new("Open release page"),
+        )
+        .clicked()
+    {
+        actions.push(Action::OpenReleasePage);
+    }
+    if !info.notes.trim().is_empty() {
+        egui::CollapsingHeader::new("What's new")
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.label(RichText::new(info.notes.trim()).small());
+            });
+    }
 }
 
 fn performance(ui: &mut egui::Ui, s: &Session, st: &mut UiState) {

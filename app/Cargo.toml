@@ -35,6 +35,7 @@ merlin-embed.workspace = true
 merlin-scanner.workspace = true
 merlin-sandbox.workspace = true
 merlin-wine.workspace = true
+merlin-updater.workspace = true
 merlin-control.workspace = true
 merlin-backing.workspace = true
 merlin-recorder.workspace = true

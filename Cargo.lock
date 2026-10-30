@@ -1199,6 +1199,7 @@ dependencies = [
  "merlin-recorder",
  "merlin-sandbox",
  "merlin-scanner",
+ "merlin-updater",
  "merlin-wine",
  "pollster",
  "rtrb",
@@ -1341,6 +1342,16 @@ dependencies = [
  "merlin-wine",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "merlin-updater"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

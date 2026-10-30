@@ -27,6 +27,7 @@ mod snapshots;
 mod surface;
 mod timeline;
 mod transport;
+mod update;
 
 use crate::scan_worker::{self, ScanMsg};
 use winit::event_loop::EventLoopProxy;
@@ -51,6 +52,8 @@ pub enum UserEvent {
     Windows,
     /// A control message arrived from a MIDI device.
     Control,
+    /// The update check or install has news.
+    Update,
 }
 
 /// Progress of the Windows plugin job (installer, sync) running on a worker thread.
@@ -137,6 +140,7 @@ impl Waker for SlotWaker {
 
 pub use backing::{TrackEdit, TrackState};
 pub use capture::{MAX_CAPTURE_MINUTES, clock};
+pub use update::{Busy as UpdateBusy, CURRENT as APP_VERSION};
 
 pub struct Loaded {
     pub plugin: Box<dyn PluginHandle>,
@@ -267,6 +271,8 @@ pub struct Session {
     pub windows_status: String,
     /// The folders changed while a Windows job ran: sync again when it is done.
     windows_sync_again: bool,
+    /// The Updates tab: what a check found and how an install is going.
+    pub update: update::UpdateState,
     font_tx: mpsc::Sender<FontMsg>,
     font_rx: mpsc::Receiver<FontMsg>,
     /// Per slot: the SoundFont being decoded for it (path and name).
@@ -367,6 +373,7 @@ impl Session {
             restart_requested: false,
             windows_status: String::new(),
             windows_sync_again: false,
+            update: Default::default(),
             font_tx,
             font_rx,
             loading: vec![None; UI_SLOTS],
@@ -1740,6 +1747,10 @@ impl Session {
             }
             UserEvent::Control => {
                 self.poll_control();
+                return;
+            }
+            UserEvent::Update => {
+                self.poll_update();
                 return;
             }
         };

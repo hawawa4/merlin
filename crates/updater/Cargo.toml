@@ -1,0 +1,12 @@
+[package]
+name = "merlin-updater"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+sha2 = "0.11"
+serde.workspace = true
+serde_json.workspace = true

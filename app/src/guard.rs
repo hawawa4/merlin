@@ -308,6 +308,18 @@ pub fn restart_from_autosave(recovered: Option<&str>) -> std::io::Error {
         Ok(e) => e,
         Err(e) => return e,
     };
+    // From an AppImage the thing to start is the AppImage file itself, not the program inside
+    // the mount: after an update that mount still holds the old version.
+    let exe = match std::env::var_os("APPIMAGE").filter(|a| !a.is_empty()) {
+        Some(a) if std::path::Path::new(&a).is_file() => std::path::PathBuf::from(a),
+        _ => exe,
+    };
+    // An update replaced the file under this process: Linux then names it "<path> (deleted)",
+    // and what we want to start is the new file at <path>.
+    let exe = match exe.to_str().and_then(|p| p.strip_suffix(" (deleted)")) {
+        Some(p) => std::path::PathBuf::from(p),
+        None => exe,
+    };
     // The saved rig named on the command line is older than the autosave: drop it.
     let mut args: Vec<String> = Vec::new();
     let mut it = std::env::args().skip(1);
