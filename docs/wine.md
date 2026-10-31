@@ -10,12 +10,23 @@ Windows plugins run in **our own patched Wine 11.20 (Staging)**, bridged by a **
 
 | Piece | Version | Where it comes from | Our changes |
 |---|---|---|---|
-| Wine | 11.20 + Wine Staging 11.20, 64-bit only (`--enable-archs=x86_64`) | `tools/build-wine.sh` (Docker, Ubuntu 24.04, `build-support/wine/Dockerfile`) → `runtime/wine-11.20-vblank/` | 3 patches, [build-support/wine-patches/](../build-support/wine-patches/) |
-| yabridge | master `b580a9f7` (2026-08-02), vendored in [vendor/yabridge/](../vendor/yabridge/), `-Dbitbridge=false` | `tools/build-yabridge.sh` (Docker, Ubuntu 24.04, `build-support/yabridge/Dockerfile`, compiled with our own Wine's `winegcc`) → `runtime/yabridge-b580a9f7-wine-11.20-vblank/` | 1 patch, listed in [vendor/yabridge/PATCHES.md](../vendor/yabridge/PATCHES.md) |
+| Wine | 11.20 + Wine Staging 11.20, WoW64 build (`--enable-archs=i386,x86_64`: 64-bit plugins, and 32-bit programs for installers) | `tools/build-wine.sh` (Docker, Ubuntu 24.04, `build-support/wine/Dockerfile`) → `runtime/wine-11.20-wow64/` | 3 patches, [build-support/wine-patches/](../build-support/wine-patches/) |
+| yabridge | master `b580a9f7` (2026-08-02), vendored in [vendor/yabridge/](../vendor/yabridge/), `-Dbitbridge=false` | `tools/build-yabridge.sh` (Docker, Ubuntu 24.04, `build-support/yabridge/Dockerfile`, compiled with our own Wine's `winegcc`) → `runtime/yabridge-b580a9f7-wine-11.20-wow64/` | 1 patch, listed in [vendor/yabridge/PATCHES.md](../vendor/yabridge/PATCHES.md) |
 | Prefix | created by `wineboot -u`, `WINEDLLOVERRIDES=mscoree,mshtml=d` (no Mono/Gecko dialogs) | `crates/wine` | none |
-| Package | `wine-11.20-vblank_yabridge-b580a9f7.tar.zst`, about 40 MB, with a SHA-256 manifest | `tools/package-runtime.sh`, fetched by `crates/wine/src/runtime.rs` | none |
+| Package | `wine-11.20-wow64_yabridge-b580a9f7.tar.zst`, about 70 MB, with a SHA-256 manifest | `tools/package-runtime.sh`, fetched by `crates/wine/src/runtime.rs` | none |
 
 How the app uses it: `crates/wine` writes yabridge *chainloaders* (`Name.clap` + a `Name.clap-win` link to the real DLL) and runs the installer and `wineboot` in our prefix. The app sets `WINELOADER` and puts the yabridge folder first on `PATH` when it starts, so only our process uses this Wine. We do not use `yabridgectl` at all; `crates/wine` reimplements its sync.
+
+## Installers and manager apps
+
+Settings → Windows plugins runs a plugin installer (`.exe` or `.msi`) in the app's own prefix, or any program installed there, and when it ends makes bridges for the plugins that appeared (`Session::run_windows_program`). Two things about this that are easy to get wrong:
+
+- **Installers are 32-bit.** Inno Setup and NSIS stubs are `PE32`, whatever they install. That is why the Wine build is WoW64 (`i386,x86_64`); the plugins themselves still have to be 64-bit. A prefix made by the old 64-bit-only Wine is upgraded by the new Wine on its first start (checked: `syswow64` goes from empty to about 850 files, installers then run), so nothing has to be recreated. A user with an old *download* is shown "This version cannot run most plugin installers" and an Update button (`Installed::runs_32_bit`).
+- **Many vendors ship a manager app instead of plugins** (Native Access, Arturia Software Center, ...). Settings lists the programs in the prefix that have a Start Menu or Desktop shortcut after "Installed:" and opens one on a click; the plugins it installs are bridged when it is closed. They are found by reading the `.lnk` files (`crates/wine/src/apps.rs`; Wine writes the full target path into each). Uninstallers, documents, Wine's own programs and linked folders (a prefix's `Desktop` is a link into the user's home) are skipped. A program with no shortcut is not listed ("Open Wine prefix" still reaches it).
+
+Updating the runtime restarts the app, and a restart keeps the environment: the app marks the `WINELOADER` and `PATH` it set for the downloaded runtime (`MERLIN_MANAGED_RUNTIME`) and takes them back at startup, otherwise the old runtime passes for the user's own Wine and the app restarts into it forever.
+
+Wine's `winemenubuilder` is still active in the prefix: an installer that makes a Start Menu or Desktop shortcut also writes `.desktop` files and menu entries into the user's `~/.local/share/applications` and `~/.config/menus`, and the prefix's first start registers file associations (`.reg`, `.chm`, ...) with `WINEPREFIX=<our prefix>`. Tests that make throwaway prefixes must set `XDG_DATA_HOME` and `XDG_CONFIG_HOME` (the compat and soak scripts do).
 
 ## Why yabridge is pinned to master
 
@@ -63,7 +74,7 @@ Not covered: nothing watches the folders, so a new plugin needs a `sync`; the to
 
 ## Known limits
 
-- **64-bit plugins only.** The bitbridge is off, and Wine 11's default WoW64 mode is incompatible with it.
+- **64-bit plugins only.** The bitbridge is off, and Wine 11's default WoW64 mode is incompatible with it. Wine itself is a WoW64 build, though, so 32-bit *programs* run: installers and vendors' manager apps are mostly 32-bit. (Until 2026-10-31 it was built 64-bit only, and every 32-bit installer failed with `wine: failed to load \??\C:\windows\syswow64\ntdll.dll error c0000135`. The app tells a user with such a download to update: `Installed::runs_32_bit`.)
 - **Cardinal (Windows build) is refused**: it overflows the stack when it starts and takes Wine down (`app/src/quirks.rs`).
 - **Six Sines** is occasionally silent after save and reopen (matrix: intermittent).
 - DPI scaling and cursor offsets on yabridge master were reported by others; we have not tested other DPI settings.

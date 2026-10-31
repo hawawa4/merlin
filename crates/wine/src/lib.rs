@@ -11,8 +11,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+pub mod apps;
 pub mod layout;
 pub mod runtime;
+
+pub use apps::WindowsApp;
 
 use anyhow::{Context, Result, anyhow, bail};
 

@@ -3,7 +3,7 @@
 # Usage: tools/wine-rebuild.sh [version] [tag]   (defaults match tools/build-wine.sh)
 set -euo pipefail
 VERSION="${1:-11.20}"
-TAG="${2:-vblank}"
+TAG="${2:-wow64}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="$ROOT/runtime/src/wine-$VERSION-$TAG"
 OUT="$ROOT/runtime/wine-$VERSION-$TAG"

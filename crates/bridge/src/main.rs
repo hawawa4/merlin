@@ -26,7 +26,7 @@ USAGE
     merlin-bridge [OPTIONS] <COMMAND>
 
 COMMANDS
-    runtime install [--url URL]   Download Wine and yabridge (about 40 MB)
+    runtime install [--url URL]   Download Wine and yabridge (about 70 MB)
     sync [FOLDER...]              Bridge the Windows plugins in the Wine prefix and in the folders
                                   (FOLDERs are remembered; plain `sync` repeats them all)
     forget FOLDER...              Stop bridging a folder and remove its bridges

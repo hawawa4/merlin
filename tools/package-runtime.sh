@@ -11,8 +11,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-WINE="${1:-$ROOT/runtime/wine-11.20-vblank}"
-YAB="${2:-$ROOT/runtime/yabridge-b580a9f7-wine-11.20-vblank}"
+WINE="${1:-$ROOT/runtime/wine-11.20-wow64}"
+YAB="${2:-$ROOT/runtime/yabridge-b580a9f7-wine-11.20-wow64}"
 OUT="$ROOT/dist/runtime"
 
 [ -x "$WINE/bin/wine" ] || { echo "no Wine at $WINE (run: just build-wine)" >&2; exit 1; }

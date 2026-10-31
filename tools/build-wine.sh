@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 # Builds Wine Staging at a pinned version, plus our patches (build-support/wine-patches/),
-# in Docker. 64-bit only. Output: runtime/wine-<version>-<tag>/ (relocatable: bin/wine).
+# in Docker. WoW64 build (i386 + x86_64): 64-bit plugins run natively, and 32-bit programs (most
+# plugin installers are 32-bit) start through Wine's WoW64 layer. A 64-bit-only build cannot run
+# an installer at all ("failed to load syswow64\ntdll.dll"). 32-bit *plugins* are still not
+# bridged (yabridge's bitbridge is off). Output: runtime/wine-<version>-<tag>/ (relocatable:
+# bin/wine).
 set -euo pipefail
 
 VERSION="${1:-11.20}"
-TAG="${2:-vblank}"
+TAG="${2:-wow64}"
 IMAGE="merlin-wine-build"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DL="$ROOT/runtime/src/wine-dl"
@@ -37,7 +41,7 @@ rm -rf "$OUT" && mkdir -p "$OUT"   # make it ourselves, or Docker creates it roo
 docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$SRC:/src" -v "$OUT:/out" -w /src "$IMAGE" bash -c '
     set -e
     mkdir -p build && cd build
-    ../configure --prefix=/out --enable-archs=x86_64 --disable-tests
+    ../configure --prefix=/out --enable-archs=i386,x86_64 --disable-tests
     make -j"$(nproc)"
     make install'
 echo "$VERSION-$TAG" > "$OUT/VERSION"

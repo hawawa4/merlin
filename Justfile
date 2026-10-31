@@ -96,16 +96,16 @@ check-standalone-bridge *args:
     tools/check-standalone-bridge.sh {{args}}
 
 # Build the vendored yabridge against our Wine in Docker; output in runtime/
-yabridge-build wine="wine-11.20-vblank":
+yabridge-build wine="wine-11.20-wow64":
     tools/build-yabridge.sh {{wine}}
 
-yabridge_dir := justfile_directory() / "runtime/yabridge-b580a9f7-wine-11.20-vblank"
+yabridge_dir := justfile_directory() / "runtime/yabridge-b580a9f7-wine-11.20-wow64"
 
 # Build our patched Wine (Wine Staging + build-support/wine-patches/) in Docker; output in runtime/
-wine-build version="11.20" tag="vblank":
+wine-build version="11.20" tag="wow64":
     tools/build-wine.sh {{version}} {{tag}}
 
-patched_wine := justfile_directory() / "runtime/wine-11.20-vblank/bin/wine"
+patched_wine := justfile_directory() / "runtime/wine-11.20-wow64/bin/wine"
 
 # Format, lint and test: run before committing
 check: fmt-check clippy test

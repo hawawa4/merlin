@@ -11,8 +11,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-WINE="${WINE_DIR:-$ROOT/runtime/wine-11.20-vblank}"
-YAB="${YABRIDGE_DIR:-$ROOT/runtime/yabridge-b580a9f7-wine-11.20-vblank}"
+WINE="${WINE_DIR:-$ROOT/runtime/wine-11.20-wow64}"
+YAB="${YABRIDGE_DIR:-$ROOT/runtime/yabridge-b580a9f7-wine-11.20-wow64}"
 PREFIX="${PREFIX:-$ROOT/test-assets/wine/prefix-vblank}"
 DLL="${1:-$PREFIX/drive_c/Program Files/Common Files/CLAP/Surge XT.clap}"
 SCAN="$ROOT/target/release/merlin-scan"

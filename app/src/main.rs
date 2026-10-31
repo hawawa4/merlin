@@ -843,6 +843,7 @@ impl Running {
                 let path = PathBuf::from(path.trim().trim_matches('"'));
                 s.install_windows_plugin(path)
             }
+            Action::LaunchWindowsApp(which) => s.launch_windows_app(&which),
             Action::SyncWindows => s.sync_windows_plugins(),
             Action::OpenWinePrefix => s.open_wine_prefix(),
             Action::DropFile(path) => {
@@ -1513,6 +1514,7 @@ fn parse_script() -> Vec<(Duration, Action)> {
                 "master" => Action::SetMaster(words.next()?.parse().ok()?),
                 "fx" => Action::FxPreset(slot(words.next())?, words.next()?.to_string()),
                 "install" => Action::InstallWindows(words.collect::<Vec<_>>().join(" ")),
+                "launch" => Action::LaunchWindowsApp(words.collect::<Vec<_>>().join(" ")),
                 "sync" => Action::SyncWindows,
                 // map <cc N | note N | program> <action> [pickup]: any device, any channel
                 "map" => {
@@ -1872,6 +1874,10 @@ fn parse_control_action(
     })
 }
 
+/// Set (to the runtime's yabridge folder) when this process pointed `WINELOADER` and `PATH` at
+/// the downloaded Wine and yabridge, so that a restart can tell them from the user's own.
+const MANAGED_RUNTIME: &str = "MERLIN_MANAGED_RUNTIME";
+
 fn main() -> Result<()> {
     let args = parse_args();
     paths::migrate_legacy_rigs();
@@ -1885,6 +1891,22 @@ fn main() -> Result<()> {
     };
     // Windows plugins: yabridge's chainloader finds Wine and its host binary through these.
     // SAFETY: set before any other thread exists.
+    unsafe {
+        // A restart keeps the environment. What the previous run set for the downloaded runtime
+        // is taken back, or it would pass for the user's own Wine and a newer runtime would
+        // never be picked up (the app would restart into the old one forever).
+        if let Some(yabridge) = std::env::var_os(MANAGED_RUNTIME) {
+            std::env::remove_var(MANAGED_RUNTIME);
+            std::env::remove_var("WINELOADER");
+            let path = std::env::var_os("PATH").unwrap_or_default();
+            let kept: Vec<_> = std::env::split_paths(&path)
+                .filter(|dir| dir.as_os_str() != yabridge)
+                .collect();
+            if let Ok(joined) = std::env::join_paths(kept) {
+                std::env::set_var("PATH", joined);
+            }
+        }
+    }
     // The downloaded runtime fills in what neither the settings nor the environment name.
     let managed = (settings.wine_loader.is_none() && std::env::var_os("WINELOADER").is_none())
         .then(|| merlin_wine::runtime::installed(&paths::runtime_dir()))
@@ -1901,6 +1923,7 @@ fn main() -> Result<()> {
             let path = std::env::var("PATH").unwrap_or_default();
             std::env::set_var("WINELOADER", &m.wine);
             std::env::set_var("PATH", format!("{}:{path}", m.yabridge_dir.display()));
+            std::env::set_var(MANAGED_RUNTIME, &m.yabridge_dir);
         }
     }
     merlin_audio_io::preload_pipewire_jack();

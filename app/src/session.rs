@@ -62,6 +62,21 @@ enum WindowsMsg {
     Done(Result<String, String>),
 }
 
+/// How a Windows job reports. Every message also wakes the UI: a job runs for minutes (a
+/// download, an installer or manager app left open), and its status line has to move meanwhile.
+struct WindowsReport {
+    tx: mpsc::Sender<WindowsMsg>,
+    proxy: EventLoopProxy<UserEvent>,
+}
+
+impl WindowsReport {
+    fn send(&self, msg: WindowsMsg) -> Result<(), mpsc::SendError<WindowsMsg>> {
+        let sent = self.tx.send(msg);
+        let _ = self.proxy.send_event(UserEvent::Windows);
+        sent
+    }
+}
+
 /// A MIDI device as the settings list shows it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MidiDeviceRow {
@@ -269,6 +284,9 @@ pub struct Session {
     pub restart_requested: bool,
     /// What the Windows job is doing, or how the last one ended (for the Settings tab).
     pub windows_status: String,
+    /// Programs installed in the Windows prefix that have a shortcut: the vendors' manager
+    /// apps, mostly. Looked up again whenever a Windows job ends.
+    pub windows_apps: Vec<merlin_wine::WindowsApp>,
     /// The folders changed while a Windows job ran: sync again when it is done.
     windows_sync_again: bool,
     /// The Updates tab: what a check found and how an install is going.
@@ -372,6 +390,7 @@ impl Session {
             runtime_changed: Arc::default(),
             restart_requested: false,
             windows_status: String::new(),
+            windows_apps: Vec::new(),
             windows_sync_again: false,
             update: Default::default(),
             font_tx,
@@ -405,6 +424,7 @@ impl Session {
         if s.windows_runtime().is_some() {
             let _ = s.sync_windows_plugins();
         }
+        s.refresh_windows_apps();
         s.say(format!(
             "JACK at {sample_rate} Hz, outputs {outputs:?}, MIDI {:?}",
             s.midi_sources
@@ -493,19 +513,21 @@ impl Session {
     /// Runs `job` on a worker thread; its messages come back as [`UserEvent::Windows`].
     fn start_windows_job(
         &mut self,
-        job: impl FnOnce(&mpsc::Sender<WindowsMsg>) -> Result<String> + Send + 'static,
+        job: impl FnOnce(&WindowsReport) -> Result<String> + Send + 'static,
     ) -> Result<()> {
         if self.windows_busy() {
             return Err(anyhow!("a Windows plugin job is already running"));
         }
         let (tx, rx) = mpsc::channel();
-        let proxy = self.proxy.clone();
+        let report = WindowsReport {
+            tx,
+            proxy: self.proxy.clone(),
+        };
         std::thread::Builder::new()
             .name("windows-job".into())
             .spawn(move || {
-                let done = job(&tx).map_err(|e| format!("{e:#}"));
-                let _ = tx.send(WindowsMsg::Done(done));
-                let _ = proxy.send_event(UserEvent::Windows);
+                let done = job(&report).map_err(|e| format!("{e:#}"));
+                let _ = report.send(WindowsMsg::Done(done));
             })
             .context("cannot start the Windows plugin job")?;
         self.windows_rx = Some(rx);
@@ -612,11 +634,56 @@ impl Session {
         let rt = self
             .windows_runtime()
             .context("set the Wine program and the yabridge folder first")?;
-        let mut installer = rt.installer_command(&file)?;
+        let installer = rt.installer_command(&file)?;
         let name = file
             .file_name()
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-        self.windows_status = format!("preparing to install {name}...");
+        let running =
+            format!("running {name}: finish its installer window, then it is picked up here");
+        self.run_windows_program(rt, installer, name, running)
+    }
+
+    /// Opens a program installed in the Windows prefix (`which` is its name or its path), most
+    /// often a vendor's manager app that installs the plugins. When it is closed, the plugins it
+    /// installed are picked up. This returns at once.
+    pub fn launch_windows_app(&mut self, which: &str) -> Result<()> {
+        let rt = self
+            .windows_runtime()
+            .context("set the Wine program and the yabridge folder first")?;
+        let which = which.trim();
+        let app = self
+            .windows_apps
+            .iter()
+            .find(|a| a.exe == Path::new(which) || a.name.eq_ignore_ascii_case(which))
+            .cloned()
+            .with_context(|| format!("no installed Windows program called {which}"))?;
+        let command = rt.app_command(&app);
+        let running = format!(
+            "running {}: plugins it installs are picked up here when you close it",
+            app.name
+        );
+        self.run_windows_program(rt, command, app.name, running)
+    }
+
+    /// Looks again for the programs installed in the Windows prefix.
+    pub fn refresh_windows_apps(&mut self) {
+        self.windows_apps = self
+            .windows_runtime()
+            .map(|rt| rt.installed_apps())
+            .unwrap_or_default();
+    }
+
+    /// Runs `program` (an installer or an installed app) in the prefix on a worker thread,
+    /// waits for it to end, then makes bridges for whatever plugins are there now. `running` is
+    /// what the Settings tab says while it is open.
+    fn run_windows_program(
+        &mut self,
+        rt: merlin_wine::Runtime,
+        mut program: std::process::Command,
+        name: String,
+        running: String,
+    ) -> Result<()> {
+        self.windows_status = format!("preparing to run {name}...");
         let prefixes = self.windows_prefixes();
         let extra = self.settings.plugin_dirs.clone();
         self.start_windows_job(move |tx| {
@@ -626,12 +693,10 @@ impl Session {
                 ));
                 rt.ensure_prefix(Duration::from_secs(300))?;
             }
-            let _ = tx.send(WindowsMsg::Status(format!(
-                "running {name}: finish its installer window, then it is picked up here"
-            )));
-            let status = installer
+            let _ = tx.send(WindowsMsg::Status(running));
+            let status = program
                 .spawn()
-                .context("cannot start the installer")?
+                .with_context(|| format!("cannot start {name}"))?
                 .wait()?;
             if !status.success() {
                 // Many installers return odd codes; what matters is whether plugins appeared.
@@ -657,6 +722,8 @@ impl Session {
         }
         let Some(result) = finished else { return };
         self.windows_rx = None;
+        // An installer may have put a manager app in the prefix.
+        self.refresh_windows_apps();
         let restart = std::mem::take(&mut self.restart_after_job)
             && self.runtime_changed.load(Ordering::Relaxed);
         match result {

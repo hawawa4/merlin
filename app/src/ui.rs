@@ -178,6 +178,9 @@ pub enum Action {
     DropFile(PathBuf),
     /// Run a Windows plugin installer (path) in the managed prefix, then pick up its plugins.
     InstallWindows(String),
+    /// Open a program installed in the Windows prefix (its path, or its name), usually a vendor's
+    /// manager app; the plugins it installs are picked up when it is closed.
+    LaunchWindowsApp(String),
     /// Make bridges for the Windows plugins already in the prefix.
     SyncWindows,
     /// Show the Wine prefix in the file manager, making it first if it is not there yet.

@@ -939,6 +939,24 @@ fn windows_support(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
                 ui.colored_label(status_color(Status::Ok), "installed");
                 ui.label(&r.id);
             });
+            if !r.runs_32_bit() {
+                // An early download: it cannot start 32-bit programs, which most installers are.
+                ui.horizontal_wrapped(|ui| {
+                    ui.colored_label(
+                        status_color(Status::Fail),
+                        "This version cannot run most plugin installers (they are 32-bit).",
+                    );
+                    if ui
+                        .add_enabled(!s.windows_busy(), egui::Button::new("Update"))
+                        .clicked()
+                    {
+                        actions.push(Action::InstallRuntime);
+                    }
+                });
+                if !s.windows_status.is_empty() {
+                    ui.label(&s.windows_status);
+                }
+            }
         }
         (None, Some(_)) => {
             ui.label("Using a Wine and yabridge that were already set up on this machine.");
@@ -946,7 +964,7 @@ fn windows_support(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
         (None, None) => {
             ui.label(
                 RichText::new(
-                    "Windows plugins need Wine and yabridge. The app downloads a tested pair (about 40 MB) and keeps it in its own folder; your system Wine is never touched.",
+                    "Windows plugins need Wine and yabridge. The app downloads a tested pair (about 70 MB) and keeps it in its own folder; your system Wine is never touched.",
                 )
                 .small()
                 .weak(),
@@ -1089,6 +1107,7 @@ fn windows_plugins(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &m
             actions.push(Action::OpenWinePrefix);
         }
     });
+    installed_apps(ui, s, actions);
     egui::CollapsingHeader::new("Install from a path instead")
         .default_open(false)
         .show(ui, |ui| {
@@ -1121,6 +1140,43 @@ fn windows_plugins(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &m
         .small()
         .weak(),
     );
+}
+
+/// "Installed:" the programs in the Windows environment, one key cap each. Many vendors ship a
+/// manager or downloader app (Native Access, Arturia Software Center, ...) rather than their
+/// plugins, so it has to be possible to open it again after installing it.
+fn installed_apps(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
+    ui.add_space(4.0);
+    crate::hw::inset().show(ui, |ui| {
+        ui.set_width(ui.available_width().min(620.0));
+        ui.horizontal_wrapped(|ui| {
+            crate::hw::engraved(ui, "Installed:");
+            if s.windows_apps.is_empty() {
+                ui.label(
+                    RichText::new(
+                        "nothing yet. A manager or downloader app you install here is listed to open again.",
+                    )
+                    .small()
+                    .weak(),
+                );
+            }
+            ui.add_enabled_ui(!s.windows_busy(), |ui| {
+                for app in &s.windows_apps {
+                    let open = crate::hw::Cap::new(&app.name)
+                        .show(ui)
+                        .on_hover_text(format!(
+                            "Open {} in the Windows environment. The plugins it installs are picked up when you close it.\n{}",
+                            app.name,
+                            app.exe.display()
+                        ));
+                    if open.clicked() {
+                        actions.push(Action::LaunchWindowsApp(app.exe.display().to_string()));
+                    }
+                }
+            });
+        });
+    });
+    ui.add_space(4.0);
 }
 
 /// Looking for a newer release and installing it. Nothing here runs unless the user presses a

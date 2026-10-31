@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Builds the vendored yabridge (vendor/yabridge, with our patches already applied) against our own
 # patched Wine (tools/build-wine.sh), in Docker. 64-bit only, no bitbridge.
-# Usage: tools/build-yabridge.sh [wine-dir-name]    (default: wine-11.20-vblank, under runtime/)
+# Usage: tools/build-yabridge.sh [wine-dir-name]    (default: wine-11.20-wow64, under runtime/)
 # Output: runtime/yabridge-<upstream commit>-<wine-dir-name>/ with the plugin libraries and the
 # Wine host binaries. The meson subprojects (asio, bitsery, clap, ...) are downloaded into
 # vendor/yabridge/subprojects/ (git-ignored there); the first build needs network.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-WINE_NAME="${1:-wine-11.20-vblank}"
+WINE_NAME="${1:-wine-11.20-wow64}"
 WINE="$ROOT/runtime/$WINE_NAME"
 SRC="$ROOT/vendor/yabridge"
 COMMIT="$(cat "$SRC/UPSTREAM_COMMIT")"

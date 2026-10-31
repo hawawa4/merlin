@@ -20,7 +20,7 @@ use crate::Runtime;
 /// What a release publishes next to the archive.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Manifest {
-    /// Names the Wine and yabridge builds, e.g. `wine-11.20-vblank_yabridge-b580a9f7`.
+    /// Names the Wine and yabridge builds, e.g. `wine-11.20-wow64_yabridge-b580a9f7`.
     pub id: String,
     /// The archive, relative to the manifest's own URL (or absolute).
     pub file: String,
@@ -64,6 +64,16 @@ pub struct Installed {
 }
 
 impl Installed {
+    /// Can this Wine start 32-bit programs? Most plugin installers are 32-bit. Runtimes built
+    /// before the WoW64 build (`--enable-archs=i386,x86_64`) are 64-bit only and fail every such
+    /// installer with "failed to load syswow64\ntdll.dll"; they need a newer download.
+    pub fn runs_32_bit(&self) -> bool {
+        self.wine
+            .parent()
+            .and_then(Path::parent)
+            .is_some_and(|root| root.join("lib/wine/i386-windows").is_dir())
+    }
+
     /// A [`Runtime`] using this Wine and yabridge with `prefix`.
     pub fn runtime(&self, prefix: PathBuf) -> Runtime {
         Runtime {
@@ -337,6 +347,27 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn only_a_runtime_with_32_bit_libraries_runs_32_bit_programs() {
+        let root = tempdir("wow64");
+        let installed = |id: &str| Installed {
+            id: id.into(),
+            wine: root.join(id).join("wine/bin/wine"),
+            yabridge_dir: root.join(id).join("yabridge"),
+        };
+        let (old, new) = (installed("old"), installed("new"));
+        for (i, dirs) in [
+            (&old, ["x86_64-unix", "x86_64-windows"]),
+            (&new, ["x86_64-windows", "i386-windows"]),
+        ] {
+            for d in dirs {
+                std::fs::create_dir_all(root.join(&i.id).join("wine/lib/wine").join(d)).unwrap();
+            }
+        }
+        assert!(!old.runs_32_bit());
+        assert!(new.runs_32_bit());
     }
 
     /// A tar.zst with a tiny fake runtime inside, and its manifest, in `dir`.
