@@ -7,7 +7,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 
-const TICKS_PER_BEAT: u32 = 24;
+const TICKS_PER_QUARTER: u32 = 24;
 /// The click: two recorded samples (mono, 16-bit, 24 kHz; the same ones Lyrica uses), the louder
 /// one on the first beat of a bar. Decoded and resampled once, when the transport is made.
 const CLICK_WAV: &[u8] = include_bytes!("../assets/metronome_click.wav");
@@ -49,6 +49,8 @@ pub const MIDI_STOP: u8 = 0xFC;
 pub struct TransportShared {
     tempo: AtomicU32,
     beats_per_bar: AtomicU8,
+    /// 4 when a beat is a quarter note, 8 when it is an eighth (the tempo stays in quarters).
+    beat_unit: AtomicU8,
     count_in_beats: AtomicU8,
     click_on: AtomicBool,
     /// The free-running metronome: clicks at the tempo even while the transport is stopped.
@@ -72,6 +74,7 @@ impl TransportShared {
         Self {
             tempo: AtomicU32::new(120f32.to_bits()),
             beats_per_bar: AtomicU8::new(4),
+            beat_unit: AtomicU8::new(4),
             count_in_beats: AtomicU8::new(0),
             click_on: AtomicBool::new(true),
             metronome_on: AtomicBool::new(false),
@@ -103,6 +106,16 @@ impl TransportShared {
 
     pub fn beats_per_bar(&self) -> u8 {
         self.beats_per_bar.load(Ordering::Relaxed)
+    }
+
+    /// The note that gets the beat: 8 for 6/8, anything else counts in quarters.
+    pub fn set_beat_unit(&self, unit: u8) {
+        self.beat_unit
+            .store(if unit == 8 { 8 } else { 4 }, Ordering::Relaxed);
+    }
+
+    pub fn beat_unit(&self) -> u8 {
+        self.beat_unit.load(Ordering::Relaxed)
     }
 
     pub fn set_click(&self, on: bool, volume: f32) {
@@ -312,6 +325,11 @@ impl Transport {
         click_l[..frames].fill(0.0);
         click_r[..frames].fill(0.0);
         let bpb = u32::from(shared.beats_per_bar.load(Ordering::Relaxed)).max(1);
+        // A beat in quarter notes, and in clock ticks.
+        let beat_quarters = 4.0 / f64::from(shared.beat_unit.load(Ordering::Relaxed).max(1));
+        let ticks_per_beat = (f64::from(TICKS_PER_QUARTER) * beat_quarters)
+            .round()
+            .max(1.0) as u32;
         let metronome = shared.metronome_on.load(Ordering::Relaxed);
         // The metronome is heard whatever the transport's own click is set to.
         let click_on = shared.click_on.load(Ordering::Relaxed) || metronome;
@@ -352,7 +370,7 @@ impl Transport {
             self.metro_until = None;
         } else {
             let tempo = f64::from(shared.tempo());
-            let per_beat = f64::from(self.sample_rate) * 60.0 / tempo;
+            let per_beat = f64::from(self.sample_rate) * 60.0 / tempo * beat_quarters;
             let mut until = *self.metro_until.get_or_insert_with(|| {
                 self.metro_beat = 0;
                 0.0
@@ -369,10 +387,11 @@ impl Transport {
         }
         if let Some(mut until) = self.until_tick {
             let tempo = f64::from(shared.tempo());
-            let per_tick = f64::from(self.sample_rate) * 60.0 / tempo / f64::from(TICKS_PER_BEAT);
+            let per_tick =
+                f64::from(self.sample_rate) * 60.0 / tempo / f64::from(TICKS_PER_QUARTER);
             while until < frames as f64 {
                 let at = until.max(0.0) as u32;
-                if self.tick.is_multiple_of(TICKS_PER_BEAT) {
+                if self.tick.is_multiple_of(ticks_per_beat) {
                     let accent = self.on_beat(bpb, at, clock);
                     shared.beats_total.fetch_add(1, Ordering::Relaxed);
                     if click_on && n_triggers < triggers.len() {
@@ -541,6 +560,25 @@ mod tests {
         assert_eq!(ticks[24].0, 24_000);
         assert!(shared.running());
         assert_eq!(shared.position(), (1, 2), "second beat of bar 1");
+    }
+
+    #[test]
+    fn six_eight_has_six_eighth_note_beats_and_still_24_clock_ticks_a_quarter() {
+        let shared = TransportShared::new();
+        shared.set_tempo(120.0);
+        shared.set_beats_per_bar(6);
+        shared.set_beat_unit(8);
+        let mut t = Transport::new(SR);
+        shared.start(0);
+        // One second at 120 bpm: 2 quarters = 48 ticks, 4 eighth-note beats.
+        let (events, _) = run(&mut t, &shared, 375, 128);
+        let ticks: Vec<_> = events.iter().filter(|e| e.1 == MIDI_CLOCK).collect();
+        assert_eq!(ticks.len(), 48);
+        assert_eq!(ticks[1].0 - ticks[0].0, 1000);
+        assert_eq!(shared.position(), (1, 4), "fourth beat of bar 1");
+        // Another 1.5 seconds finishes the bar (6 eighths = 1.5 s) and starts the next.
+        run(&mut t, &shared, 1, 72_000 / 2);
+        assert_eq!(shared.position().0, 2);
     }
 
     #[test]

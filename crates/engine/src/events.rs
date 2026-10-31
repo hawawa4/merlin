@@ -30,6 +30,17 @@ impl EventBuf {
         }
     }
 
+    /// Adds an event in its place among the others (they are in time order). Events with the
+    /// same time keep the order they came in.
+    pub fn insert(&mut self, ev: MidiEvent) {
+        self.push(ev);
+        let mut i = self.events.len() - 1;
+        while i > 0 && self.events[i - 1].time > self.events[i].time {
+            self.events.swap(i - 1, i);
+            i -= 1;
+        }
+    }
+
     pub fn as_slice(&self) -> &[MidiEvent] {
         &self.events
     }

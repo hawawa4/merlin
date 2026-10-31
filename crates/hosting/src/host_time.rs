@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 static TEMPO: AtomicU32 = AtomicU32::new(0x42f0_0000); // 120.0
 static PLAYING: AtomicBool = AtomicBool::new(false);
 static BEATS_PER_BAR: AtomicU32 = AtomicU32::new(4);
+static BEAT_UNIT: AtomicU32 = AtomicU32::new(4);
 
 pub fn set_tempo(bpm: f32) {
     TEMPO.store(bpm.to_bits(), Ordering::Relaxed);
@@ -29,4 +30,13 @@ pub fn set_beats_per_bar(beats: u32) {
 
 pub fn beats_per_bar() -> u32 {
     BEATS_PER_BAR.load(Ordering::Relaxed)
+}
+
+/// The note value of a beat (4 is a quarter, 8 an eighth): the time signature's denominator.
+pub fn set_beat_unit(unit: u32) {
+    BEAT_UNIT.store(if unit == 0 { 4 } else { unit }, Ordering::Relaxed);
+}
+
+pub fn beat_unit() -> u32 {
+    BEAT_UNIT.load(Ordering::Relaxed)
 }

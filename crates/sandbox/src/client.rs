@@ -656,6 +656,7 @@ impl PluginProcessor for RemoteProcessor {
             .store(host_time::playing() as u32, Ordering::Relaxed);
         h.beats_per_bar
             .store(host_time::beats_per_bar(), Ordering::Relaxed);
+        h.beat_unit.store(host_time::beat_unit(), Ordering::Relaxed);
 
         let mut want = h.req.load(Ordering::Relaxed).wrapping_add(1);
         if want == DEAD {

@@ -8,6 +8,7 @@
 
 mod engine;
 mod events;
+pub mod looper;
 pub mod router;
 pub mod transport;
 
@@ -47,6 +48,8 @@ pub struct Shared {
     pub blocks: AtomicU64,
     /// Tempo, click and start/stop (see [`transport`]).
     pub transport: TransportShared,
+    /// The loop station's state (see [`looper`]).
+    pub looper: looper::LoopShared,
     /// Backing tracks are playing; and how often one ran dry (the decoder fell behind).
     pub stems_playing: AtomicBool,
     pub backing_underruns: AtomicU32,
@@ -67,6 +70,7 @@ impl Shared {
             dropped_events: AtomicU32::new(0),
             blocks: AtomicU64::new(0),
             transport: TransportShared::new(),
+            looper: looper::LoopShared::new(),
             stems_playing: AtomicBool::new(false),
             backing_underruns: AtomicU32::new(0),
         }

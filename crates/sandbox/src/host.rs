@@ -103,6 +103,7 @@ fn audio_loop(shm: Arc<Shm>, mut processor: Box<dyn PluginProcessor>) {
         host_time::set_tempo(f32::from_bits(h.tempo_bits.load(Ordering::Relaxed)));
         host_time::set_playing(h.playing.load(Ordering::Relaxed) != 0);
         host_time::set_beats_per_bar(h.beats_per_bar.load(Ordering::Relaxed));
+        host_time::set_beat_unit(h.beat_unit.load(Ordering::Relaxed));
         let frames = h.frames.load(Ordering::Relaxed) as usize;
         // SAFETY: the block belongs to this thread from the request until `done` is set.
         let status = unsafe {

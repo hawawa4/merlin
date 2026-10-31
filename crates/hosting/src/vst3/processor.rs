@@ -445,7 +445,7 @@ impl PluginProcessor for Vst3Processor {
         ctx.projectTimeSamples = self.position;
         ctx.tempo = f64::from(crate::host_time::tempo());
         ctx.timeSigNumerator = crate::host_time::beats_per_bar().min(i32::MAX as u32) as i32;
-        ctx.timeSigDenominator = 4;
+        ctx.timeSigDenominator = crate::host_time::beat_unit().min(i32::MAX as u32) as i32;
 
         let mut data = ProcessData {
             processMode: 0,

@@ -53,6 +53,8 @@ pub struct Cap {
     label: String,
     icon: Option<Icon>,
     lit: Option<Color32>,
+    /// Lights the cap in this colour for as long as it is held down.
+    flash: Option<Color32>,
     base: Option<Color32>,
     min_width: f32,
 }
@@ -63,6 +65,7 @@ impl Cap {
             label: label.into(),
             icon: None,
             lit: None,
+            flash: None,
             base: None,
             min_width: 0.0,
         }
@@ -77,6 +80,12 @@ impl Cap {
 
     pub fn lit(mut self, colour: Option<Color32>) -> Self {
         self.lit = colour;
+        self
+    }
+
+    /// Backlights the cap while it is pressed (a button that does something once, not a switch).
+    pub fn flash(mut self, colour: Color32) -> Self {
+        self.flash = Some(colour);
         self
     }
 
@@ -108,6 +117,7 @@ impl Cap {
         }
         let enabled = ui.is_enabled();
         let down = enabled && r.is_pointer_button_down_on();
+        let lit = self.lit.or(self.flash.filter(|_| down));
         // A pressed cap sits lower and loses its sheen.
         let rect = if down {
             rect.translate(vec2(0.0, 1.0))
@@ -116,7 +126,7 @@ impl Cap {
         };
         let rounding = CornerRadius::same(5);
         let body = self.base.unwrap_or(CAP);
-        let body = match (self.lit, down, r.hovered() && enabled) {
+        let body = match (lit, down, r.hovered() && enabled) {
             (Some(c), _, _) => mix(body, c, 0.30),
             (None, true, _) => body.gamma_multiply(0.75),
             (None, false, true) => mix(body, Color32::WHITE, 0.07),
@@ -156,7 +166,7 @@ impl Cap {
             ),
             egui::StrokeKind::Inside,
         );
-        if let Some(c) = self.lit {
+        if let Some(c) = lit {
             // The backlight bleeding out under the cap.
             let glow = Rect::from_min_size(
                 egui::pos2(rect.left() + 5.0, rect.bottom() - 3.0),
@@ -164,7 +174,7 @@ impl Cap {
             );
             p.rect_filled(glow, 1.0, c);
         }
-        let text = match (enabled, self.lit) {
+        let text = match (enabled, lit) {
             (false, _) => TEXT_DIM.gamma_multiply(0.6),
             (_, Some(c)) => mix(c, Color32::WHITE, 0.55),
             _ => TEXT,
@@ -205,6 +215,17 @@ pub enum Icon {
     Tape,
     /// A pyramid metronome with its swinging weight.
     Metronome,
+    /// An arrow curling back: take off the last thing done.
+    Undo,
+    /// A bin: empty it.
+    Trash,
+    /// A bin beside three lanes: empty all of them.
+    TrashAll,
+    /// Four beats, the first one struck: a bar of count-in.
+    CountIn,
+    /// The letter A (or B) beside three lanes: all of them to that part.
+    AllA,
+    AllB,
 }
 
 impl Icon {
@@ -339,6 +360,44 @@ impl Icon {
                 );
                 p.line_segment([at(-5.0, 9.0), at(5.0, 9.0)], Stroke::new(2.0, colour));
             }
+            Self::Undo => {
+                // A half circle over the top, from the right round to the left, and an
+                // arrowhead pointing down where it ends.
+                let m = at(0.0, 2.0);
+                let arc: Vec<Pos2> = (0..=16)
+                    .map(|n| {
+                        let a = n as f32 / 16.0 * std::f32::consts::PI;
+                        m + vec2(a.cos() * 6.5, -a.sin() * 6.5)
+                    })
+                    .collect();
+                p.add(Shape::line(arc, Stroke::new(1.8, colour)));
+                p.add(Shape::convex_polygon(
+                    vec![at(-10.5, 2.0), at(-2.5, 2.0), at(-6.5, 8.0)],
+                    colour,
+                    Stroke::NONE,
+                ));
+            }
+            Self::Trash => bin(p, c, colour),
+            Self::TrashAll => {
+                lanes(p, at(-9.0, 0.0), colour);
+                bin(p, at(6.0, 0.0), colour);
+            }
+            Self::CountIn => {
+                p.circle_filled(at(-9.0, 0.0), 3.4, colour);
+                for x in [-3.0_f32, 3.0, 9.0] {
+                    p.circle_stroke(at(x, 0.0), 2.3, Stroke::new(1.3, colour));
+                }
+            }
+            Self::AllA | Self::AllB => {
+                p.text(
+                    at(-7.0, 0.0),
+                    Align2::CENTER_CENTER,
+                    if matches!(self, Self::AllA) { "A" } else { "B" },
+                    FontId::proportional(15.0),
+                    colour,
+                );
+                lanes(p, at(7.0, 0.0), colour);
+            }
             Self::Tape => {
                 let body = Rect::from_center_size(c, vec2(26.0, 17.0));
                 p.rect_stroke(
@@ -358,6 +417,34 @@ impl Icon {
                 ));
             }
         }
+    }
+}
+
+/// A bin: lid with its handle, and the tapering body with two slats.
+fn bin(p: &Painter, c: Pos2, colour: Color32) {
+    let at = |x: f32, y: f32| c + vec2(x, y);
+    let line = Stroke::new(1.5, colour);
+    p.line_segment([at(-6.0, -4.5), at(6.0, -4.5)], line);
+    p.add(Shape::line(
+        vec![at(-2.0, -4.5), at(-2.0, -7.5), at(2.0, -7.5), at(2.0, -4.5)],
+        line,
+    ));
+    p.add(Shape::line(
+        vec![at(-4.5, -2.0), at(-3.5, 8.0), at(3.5, 8.0), at(4.5, -2.0)],
+        line,
+    ));
+    for x in [-1.5_f32, 1.5] {
+        p.line_segment([at(x, 0.0), at(x, 5.5)], Stroke::new(1.0, colour));
+    }
+}
+
+/// Three short bars one above the other: the rack's lanes.
+fn lanes(p: &Painter, c: Pos2, colour: Color32) {
+    for y in [-5.0_f32, 0.0, 5.0] {
+        p.line_segment(
+            [c + vec2(-5.0, y), c + vec2(5.0, y)],
+            Stroke::new(2.0, colour),
+        );
     }
 }
 

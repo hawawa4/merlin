@@ -110,7 +110,7 @@ pub unsafe extern "C" fn callback(
                 sample_rate: c.rate(),
                 tempo,
                 time_sig_numerator: beats,
-                time_sig_denominator: 4,
+                time_sig_denominator: host_time::beat_unit() as i32,
                 flags: TIME_TEMPO_VALID
                     | TIME_SIG_VALID
                     | if host_time::playing() {

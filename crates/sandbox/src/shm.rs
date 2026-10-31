@@ -41,6 +41,7 @@ pub struct Header {
     pub tempo_bits: AtomicU32,
     pub playing: AtomicU32,
     pub beats_per_bar: AtomicU32,
+    pub beat_unit: AtomicU32,
 }
 
 /// A MIDI event as it sits in the block (same fields as [`MidiEvent`], with a fixed layout).

@@ -21,6 +21,7 @@ use std::sync::mpsc;
 mod backing;
 mod capture;
 mod controls;
+mod looper;
 mod macros;
 mod outputs;
 mod setlist;
@@ -29,6 +30,8 @@ mod surface;
 mod timeline;
 mod transport;
 mod update;
+
+pub use looper::{LoopLane, LoopView};
 
 use crate::scan_worker::{self, ScanMsg};
 use winit::event_loop::EventLoopProxy;
@@ -1944,6 +1947,7 @@ impl Session {
         merlin_hosting::host_time::set_tempo(transport.tempo());
         merlin_hosting::host_time::set_playing(transport.running());
         merlin_hosting::host_time::set_beats_per_bar(u32::from(transport.beats_per_bar()));
+        merlin_hosting::host_time::set_beat_unit(u32::from(transport.beat_unit()));
         // While backing tracks are being re-armed or waited for, look again soon.
         let backing = (self.needs_rearm || self.pending_start.is_some())
             .then(|| now + Duration::from_millis(50));

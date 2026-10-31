@@ -34,6 +34,7 @@ impl Session {
         shared.stop();
         shared.set_tempo(t.tempo);
         shared.set_beats_per_bar(t.beats_per_bar);
+        shared.set_beat_unit(t.beat_unit);
         shared.set_click(t.click, t.click_volume);
         self.disarm();
     }
@@ -51,6 +52,8 @@ impl Session {
         let shared = &self.engine.shared.transport;
         shared.set_tempo(bpm);
         shared.set_beats_per_bar(beats_per_bar);
+        // Songs count in quarter notes.
+        shared.set_beat_unit(4);
     }
 
     /// The beats per bar in force now: a running song's, else the rig's.
@@ -58,12 +61,27 @@ impl Session {
         self.engine.shared.transport.beats_per_bar()
     }
 
+    /// The note that gets the beat now: 4 (quarter) or 8 (eighth).
+    pub fn beat_unit(&self) -> u8 {
+        self.engine.shared.transport.beat_unit()
+    }
+
     pub fn set_beats_per_bar(&mut self, beats: u8) {
-        self.rig.transport.beats_per_bar = beats.clamp(1, 16);
-        self.engine
-            .shared
-            .transport
-            .set_beats_per_bar(self.rig.transport.beats_per_bar);
+        self.set_time_signature(beats, self.rig.transport.beat_unit);
+    }
+
+    /// Sets the time signature (`beats` over 4 or 8). Loops recorded in the old one would not
+    /// line up with the new bars, so they go, and the transport stops.
+    pub fn set_time_signature(&mut self, beats: u8, unit: u8) {
+        let (beats, unit) = (beats.clamp(1, 16), if unit == 8 { 8 } else { 4 });
+        if (beats, unit) != (self.beats_per_bar(), self.beat_unit()) {
+            self.loops_no_longer_fit();
+        }
+        self.rig.transport.beats_per_bar = beats;
+        self.rig.transport.beat_unit = unit;
+        let shared = &self.engine.shared.transport;
+        shared.set_beats_per_bar(beats);
+        shared.set_beat_unit(unit);
         self.dirty = true;
     }
 

@@ -145,6 +145,8 @@ pub enum Action {
     RackCollapsed(bool),
     /// Go to one of the app's views (the switch in the header).
     SetView(View),
+    /// A press in the Looper view.
+    Loop(crate::looper_ui::LoopAct),
     /// Script-only: show a settings tab.
     ShowSettingsTab(SettingsTab),
     AddDir(String),
@@ -245,6 +247,8 @@ pub enum Action {
     SetMetronome(bool),
     SetCountIn(u8),
     SetBeatsPerBar(u8),
+    /// Beats and the note that gets one: 6, 8 is 6/8.
+    SetTimeSignature(u8, u8),
     SetMainOutput(Option<[String; 2]>),
     SetClickOutput(Option<[String; 2]>),
     AddSong,
@@ -292,6 +296,8 @@ pub enum View {
     Setlist,
     /// The stage view.
     Perform,
+    /// The loop station.
+    Looper,
     Settings,
 }
 
@@ -313,6 +319,8 @@ pub struct UiState {
     pub settings_open: bool,
     /// The Setlist screen is showing, and the song being edited in it.
     pub setlist_open: bool,
+    /// The Looper view is showing.
+    pub looper_open: bool,
     pub edit_song: usize,
     /// The Perform view is showing.
     pub perform: bool,
@@ -394,6 +402,8 @@ impl UiState {
             View::Perform
         } else if self.settings_open {
             View::Settings
+        } else if self.looper_open {
+            View::Looper
         } else if self.setlist_open {
             View::Setlist
         } else {
@@ -406,6 +416,7 @@ impl UiState {
             tab: DockTab::Plugin,
             settings_open: false,
             setlist_open: false,
+            looper_open: false,
             edit_song: 0,
             perform: false,
             locked: false,
@@ -493,17 +504,24 @@ pub fn draw(
             .frame(hw::chassis())
             .show(ui, |ui| scenes_bar(ui, s, st, actions));
     }
-    if st.setlist_open && !st.settings_open {
-        egui::CentralPanel::default().show(ui, |ui| {
-            *dock_rect = egui::Rect::NOTHING;
-            crate::setlist_ui::show(ui, s, st, actions);
-        });
-        return;
-    }
     if st.settings_open {
         egui::CentralPanel::default().show(ui, |ui| {
             *dock_rect = egui::Rect::NOTHING;
             settings_ui::show(ui, s, st, actions);
+        });
+        return;
+    }
+    if st.looper_open {
+        egui::CentralPanel::default().show(ui, |ui| {
+            *dock_rect = egui::Rect::NOTHING;
+            crate::looper_ui::show(ui, s, actions);
+        });
+        return;
+    }
+    if st.setlist_open {
+        egui::CentralPanel::default().show(ui, |ui| {
+            *dock_rect = egui::Rect::NOTHING;
+            crate::setlist_ui::show(ui, s, st, actions);
         });
         return;
     }
@@ -1019,8 +1037,14 @@ fn header_row(
         // file buttons are there but dead: no New / Open / Save while performing.
         ui.add_enabled_ui(!perform, |ui| file_plate(ui, s, fit.name, actions));
         ui.add_space(10.0);
-        let views = [View::Rack, View::Setlist, View::Perform, View::Settings];
-        let names = ["RACK", "SETLIST", "PERFORM", "SETTINGS"];
+        let views = [
+            View::Rack,
+            View::Setlist,
+            View::Perform,
+            View::Looper,
+            View::Settings,
+        ];
+        let names = ["RACK", "SETLIST", "PERFORM", "LOOPER", "SETTINGS"];
         let now = views.iter().position(|v| *v == st.view()).unwrap_or(0);
         ui.add_enabled_ui(!locked, |ui| {
             if let Some(n) = hw::selector(ui, &names, now, hw::BLUE) {
@@ -1157,24 +1181,55 @@ fn tempo_plate(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
             }
         }
         crate::map_mode::target(ui, s, &number, ControlAction::Tempo, None, actions);
-        // The time signature: the beat is a quarter note, so 6/8 is felt as 6 beats at the
-        // eighth-note tempo.
-        let mut beats = s.beats_per_bar();
-        let signature = ui
-            .add(
-                egui::DragValue::new(&mut beats)
-                    .range(1..=16)
-                    .suffix("/4")
-                    .speed(0.1),
-            )
-            .on_hover_text(
-                "Time signature: beats per bar (over a quarter-note beat). The click accents \
-                 the first beat of each bar. A song's own setting wins while it runs.",
-            );
-        if signature.changed() {
-            actions.push(Action::SetBeatsPerBar(beats));
+        if let Some((beats, unit)) = time_signature_picker(ui, s) {
+            actions.push(Action::SetTimeSignature(beats, unit));
         }
     });
+}
+
+/// The time signatures on offer, as (beats, note that gets the beat).
+const SIGNATURES: [(u8, u8); 12] = [
+    (2, 4),
+    (3, 4),
+    (4, 4),
+    (5, 4),
+    (6, 4),
+    (7, 4),
+    (3, 8),
+    (5, 8),
+    (6, 8),
+    (7, 8),
+    (9, 8),
+    (12, 8),
+];
+
+/// The time signature as a drop-down in the header; returns the one picked. A signature a rig
+/// has that is not on the list (8/4, say) is shown too, so it never disappears.
+fn time_signature_picker(ui: &mut egui::Ui, s: &Session) -> Option<(u8, u8)> {
+    let now = (s.beats_per_bar(), s.beat_unit());
+    let mut picked = None;
+    egui::ComboBox::from_id_salt("time-signature")
+        .selected_text(format!("{}/{}", now.0, now.1))
+        .width(46.0)
+        .show_ui(ui, |ui| {
+            let extra = (!SIGNATURES.contains(&now)).then_some(now);
+            for (beats, unit) in extra.into_iter().chain(SIGNATURES) {
+                if ui
+                    .selectable_label((beats, unit) == now, format!("{beats}/{unit}"))
+                    .clicked()
+                {
+                    picked = Some((beats, unit));
+                }
+            }
+        })
+        .response
+        .on_hover_text(
+            "Time signature. Over 4, a beat is a quarter note; over 8 (6/8, 9/8, 12/8), an \
+             eighth. The tempo is always in quarter notes per minute. The click accents the \
+             first beat of each bar. A song's own setting wins while it runs. Changing it \
+             clears the loops.",
+        );
+    picked
 }
 
 /// How a line in the notice area looks.
@@ -2233,6 +2288,15 @@ mod tests {
             View::Settings,
             "settings is drawn over the setlist"
         );
+        st.settings_open = false;
+        st.looper_open = true;
+        assert_eq!(
+            st.view(),
+            View::Looper,
+            "the looper is drawn over the setlist"
+        );
+        st.settings_open = true;
+        assert_eq!(st.view(), View::Settings);
         st.perform = true;
         assert_eq!(st.view(), View::Perform);
     }

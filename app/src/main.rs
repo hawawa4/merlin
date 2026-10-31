@@ -16,6 +16,7 @@ mod hw;
 mod icons;
 mod keyboard;
 mod library;
+mod looper_ui;
 mod macro_panel;
 mod map_mode;
 mod marker;
@@ -431,7 +432,12 @@ impl Running {
                     self.ui.perform = view == ui::View::Perform;
                     self.ui.settings_open = view == ui::View::Settings;
                     self.ui.setlist_open = view == ui::View::Setlist;
+                    self.ui.looper_open = view == ui::View::Looper;
                 }
+                Ok(())
+            }
+            Action::Loop(act) => {
+                looper_ui::run(s, act);
                 Ok(())
             }
             Action::TouchLearn(start) => {
@@ -687,6 +693,10 @@ impl Running {
                 s.set_beats_per_bar(n);
                 Ok(())
             }
+            Action::SetTimeSignature(beats, unit) => {
+                s.set_time_signature(beats, unit);
+                Ok(())
+            }
             Action::SetCountIn(n) => {
                 s.set_count_in_bars(n);
                 Ok(())
@@ -727,6 +737,7 @@ impl Running {
                 self.ui.setlist_open = !self.ui.setlist_open;
                 if self.ui.setlist_open {
                     self.ui.settings_open = false;
+                    self.ui.looper_open = false;
                 }
                 Ok(())
             }
@@ -1664,6 +1675,32 @@ fn parse_script() -> Vec<(Duration, Action)> {
                     _ => return None,
                 },
                 "setlist" => Action::ToggleSetlist,
+                // loop rec N | part N A|B | mute N | unmute N | undo N | clear N | all A|B |
+                // clearall | bars N | view
+                "loop" => {
+                    use looper_ui::LoopAct;
+                    let part = |w: Option<&str>| match w? {
+                        "a" | "A" => Some(0),
+                        "b" | "B" => Some(1),
+                        _ => None,
+                    };
+                    match words.next()? {
+                        "rec" => Action::Loop(LoopAct::Rec(slot(words.next())?)),
+                        "part" => {
+                            let n = slot(words.next())?;
+                            Action::Loop(LoopAct::Part(n, part(words.next())?))
+                        }
+                        "mute" => Action::Loop(LoopAct::Mute(slot(words.next())?, true)),
+                        "unmute" => Action::Loop(LoopAct::Mute(slot(words.next())?, false)),
+                        "undo" => Action::Loop(LoopAct::Undo(slot(words.next())?)),
+                        "clear" => Action::Loop(LoopAct::Clear(slot(words.next())?)),
+                        "all" => Action::Loop(LoopAct::AllParts(part(words.next())?)),
+                        "clearall" => Action::Loop(LoopAct::ClearAll),
+                        "bars" => Action::Loop(LoopAct::Bars(words.next()?.parse().ok()?)),
+                        "view" => Action::SetView(ui::View::Looper),
+                        _ => return None,
+                    }
+                }
                 // transport (start|stop) ; tempo N ; click on|off ; tap ; countin N
                 "transport" => match words.next()? {
                     "start" => Action::TransportStart,
@@ -1675,6 +1712,11 @@ fn parse_script() -> Vec<(Duration, Action)> {
                 "click" => Action::SetClickState(words.next()? == "on"),
                 "tap" => Action::TapTempo,
                 "countin" => Action::SetCountIn(words.next()?.parse().ok()?),
+                // timesig 6/8
+                "timesig" => {
+                    let (n, d) = words.next()?.split_once('/')?;
+                    Action::SetTimeSignature(n.parse().ok()?, d.parse().ok()?)
+                }
                 // marker S bar beat part N | next | stop | cue text | pc ch prog | cc ch num val
                 "marker" => {
                     use merlin_model::{Marker, MarkerAction as M};

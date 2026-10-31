@@ -23,6 +23,7 @@ Website, downloads and screenshots: **[merlin.hawawa.org](https://merlin.hawawa.
 - **Playing live:** scenes, macros, a Perform view, MIDI mapping of any control on any
   controller, and a Novation Launchkey MK3 driver (DAW mode, pad lights, screen).
 - **Songs:** setlists, songs and parts, backing tracks, a click, MIDI clock and timeline markers.
+- **Looping:** a Looper view: record MIDI per instrument over a loop of 1-8 bars, with A/B parts, overdub and undo.
 - **Plugins:** a searchable browser, a plugin scanner with a cache, and a performance check
   (realtime scheduling and more, with the exact fix). Every plugin runs in a process of its own,
   so one that crashes or hangs silences its slot (with a *Retry* button) and nothing else.

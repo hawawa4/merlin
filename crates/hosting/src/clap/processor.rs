@@ -183,7 +183,7 @@ impl PluginProcessor for ClapProcessor {
             bar_start: zero,
             bar_number: 0,
             time_signature_numerator: host_time::beats_per_bar().min(u32::from(u16::MAX)) as u16,
-            time_signature_denominator: 4,
+            time_signature_denominator: host_time::beat_unit().min(u32::from(u16::MAX)) as u16,
         };
         let result = self.processor.process(
             &ins,

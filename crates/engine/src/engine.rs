@@ -8,6 +8,7 @@ use merlin_model::{FxSettings, MAX_INSERTS, MAX_SLOTS, SelectMode};
 
 use crate::Shared;
 use crate::events::EventBuf;
+use crate::looper::{LoopCommand, Looper, PPQ};
 use crate::router::{Filter, Router};
 use merlin_backing::StemReader;
 
@@ -85,6 +86,8 @@ pub enum Command {
     /// Timeline markers of the entered song (ticks since the run started).
     AddMarker(EngineMarker),
     ClearMarkers,
+    /// The loop station (see [`crate::looper`]).
+    Loop(LoopCommand),
     SetMasterVolume(f32),
     /// The master limiter is on by default.
     SetLimiter(bool),
@@ -248,6 +251,7 @@ pub struct Engine {
     stem_l: Vec<f32>,
     stem_r: Vec<f32>,
     transport: Transport,
+    looper: Looper,
     click_l: Vec<f32>,
     click_r: Vec<f32>,
     clock: Vec<MidiOutEvent>,
@@ -295,6 +299,7 @@ pub fn new(sample_rate: f32, max_block: usize) -> (Engine, EngineHandle) {
         stem_l: vec![0.0; max_block],
         stem_r: vec![0.0; max_block],
         transport: Transport::new(sample_rate),
+        looper: Looper::new(),
         click_l: vec![0.0; max_block],
         click_r: vec![0.0; max_block],
         clock: Vec::with_capacity(512),
@@ -418,7 +423,9 @@ impl Engine {
             Command::AddMarker(m) => self.transport.add_marker(m),
             Command::ClearMarkers => self.transport.clear_markers(),
             Command::SetMasterVolume(v) => self.master_volume = v,
+            Command::Loop(cmd) => self.looper.apply(cmd, &mut self.events),
             Command::Panic => {
+                self.looper.forget_sounding();
                 self.router.panic(&mut self.events);
                 self.fade = Fade::Out(0);
             }
@@ -522,6 +529,26 @@ impl Engine {
             local.time = ev.time.saturating_sub(start as u32);
             self.router.route(&local, &mut self.events);
         }
+
+        // The loop station: it ends with the run, and adds what it plays to the slots' events.
+        if transport.stopped {
+            self.looper.stop(&mut self.events);
+        }
+        if transport.run_start.is_some() {
+            self.looper.start(&mut self.events);
+        }
+        // A bar in loop ticks: its beats, each a quarter note or an eighth.
+        let bar_ticks = u32::from(self.shared.transport.beats_per_bar()).max(1)
+            * (PPQ * 4 / u32::from(self.shared.transport.beat_unit().max(1)));
+        self.looper.process(
+            &mut self.events,
+            transport.run_start.map_or(0, |at| at as usize),
+            frames,
+            self.shared.transport.tempo(),
+            bar_ticks,
+            self.sample_rate,
+        );
+        self.looper.publish(&self.shared.looper, bar_ticks);
 
         self.mix_l[..frames].fill(0.0);
         self.mix_r[..frames].fill(0.0);
