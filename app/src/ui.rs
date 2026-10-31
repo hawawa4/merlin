@@ -1046,7 +1046,10 @@ fn header_row(
         let views = [View::Rack, View::Setlist, View::Perform, View::Looper];
         let pictures = [
             (hw::Icon::Rack, "Rack: the instruments you play"),
-            (hw::Icon::Setlist, "Setlist: songs, scenes and backing tracks"),
+            (
+                hw::Icon::Setlist,
+                "Setlist: songs, scenes and backing tracks",
+            ),
             (hw::Icon::Perform, "Perform: the stage view"),
             (hw::Icon::Looper, "Looper: record MIDI per instrument"),
         ];

@@ -551,7 +551,10 @@ fn keyboard(p: &Painter, c: Pos2, size: Vec2, colour: Color32) {
     for n in [1, 2, 4] {
         let x = body.left() + body.width() * n as f32 / 5.0;
         p.rect_filled(
-            Rect::from_min_size(pos2(x - black_w / 2.0, body.top() + 1.0), vec2(black_w, black)),
+            Rect::from_min_size(
+                pos2(x - black_w / 2.0, body.top() + 1.0),
+                vec2(black_w, black),
+            ),
             0.5,
             colour,
         );
