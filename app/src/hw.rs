@@ -74,7 +74,7 @@ impl Cap {
     /// Draws a small picture on the cap instead of a label.
     pub fn icon(mut self, icon: Icon) -> Self {
         self.icon = Some(icon);
-        self.min_width = self.min_width.max(icon.width());
+        self.min_width = self.min_width.max(Icon::WIDTH);
         self
     }
 
@@ -226,15 +226,23 @@ pub enum Icon {
     /// The letter A (or B) beside three lanes: all of them to that part.
     AllA,
     AllB,
+    /// Three rack units one above the other: the Rack view.
+    Rack,
+    /// A bulleted list: the Setlist view.
+    Setlist,
+    /// A play triangle in a ring: the Perform (stage) view.
+    Perform,
+    /// An arrow chasing its own tail: the Looper view.
+    Looper,
+    /// A cog: the Settings view.
+    Gear,
+    /// A warning triangle with an exclamation mark: panic.
+    Warning,
 }
 
 impl Icon {
-    fn width(self) -> f32 {
-        match self {
-            Self::Map => 54.0,
-            _ => 40.0,
-        }
-    }
+    /// Every icon cap is this wide, so a row of them lines up.
+    const WIDTH: f32 = 40.0;
 
     fn paint(self, p: &Painter, c: Pos2, colour: Color32) {
         let line = Stroke::new(1.5, colour);
@@ -322,15 +330,15 @@ impl Icon {
                 keyboard(p, at(0.0, 7.0), vec2(20.0, 9.0), colour);
             }
             Self::Map => {
-                keyboard(p, at(-11.0, 0.0), vec2(20.0, 12.0), colour);
+                keyboard(p, at(-10.5, 0.0), vec2(16.0, 10.0), colour);
                 // A globe: the outline, a meridian, the equator and two parallels.
-                let g = at(12.0, 0.0);
-                let r = 8.0;
+                let g = at(10.5, 0.0);
+                let r = 7.0;
                 p.circle_stroke(g, r, Stroke::new(1.3, colour));
                 let meridian: Vec<Pos2> = (0..=24)
                     .map(|n| {
                         let a = n as f32 / 24.0 * std::f32::consts::TAU;
-                        g + vec2(a.cos() * 3.6, a.sin() * r)
+                        g + vec2(a.cos() * 3.2, a.sin() * r)
                     })
                     .collect();
                 p.add(Shape::line(meridian, Stroke::new(1.0, colour)));
@@ -338,7 +346,7 @@ impl Icon {
                     [g + vec2(-r, 0.0), g + vec2(r, 0.0)],
                     Stroke::new(1.0, colour),
                 );
-                for y in [-4.0_f32, 4.0] {
+                for y in [-3.5_f32, 3.5] {
                     let half = (r * r - y * y).sqrt();
                     p.line_segment(
                         [g + vec2(-half, y), g + vec2(half, y)],
@@ -397,6 +405,80 @@ impl Icon {
                     colour,
                 );
                 lanes(p, at(7.0, 0.0), colour);
+            }
+            Self::Rack => {
+                // Three units, each with its screw.
+                for y in [-7.0_f32, 0.0, 7.0] {
+                    p.rect_stroke(
+                        Rect::from_center_size(at(0.0, y), vec2(22.0, 5.5)),
+                        1.0,
+                        line,
+                        egui::StrokeKind::Inside,
+                    );
+                    p.circle_filled(at(-7.5, y), 1.1, colour);
+                    p.line_segment([at(-3.0, y), at(7.0, y)], Stroke::new(1.0, colour));
+                }
+            }
+            Self::Setlist => {
+                // A sheet with its corner turned down, and a few items listed on it.
+                p.add(Shape::closed_line(
+                    vec![
+                        at(-7.0, -9.5),
+                        at(2.5, -9.5),
+                        at(7.0, -5.0),
+                        at(7.0, 9.5),
+                        at(-7.0, 9.5),
+                    ],
+                    line,
+                ));
+                p.add(Shape::line(
+                    vec![at(2.5, -9.5), at(2.5, -5.0), at(7.0, -5.0)],
+                    Stroke::new(1.0, colour),
+                ));
+                for y in [-1.5_f32, 2.0, 5.5] {
+                    p.circle_filled(at(-3.6, y), 0.9, colour);
+                    p.line_segment([at(-1.2, y), at(3.8, y)], Stroke::new(1.2, colour));
+                }
+            }
+            Self::Perform => {
+                p.circle_stroke(c, 9.5, Stroke::new(1.5, colour));
+                p.add(Shape::convex_polygon(
+                    vec![at(-3.0, -5.0), at(5.5, 0.0), at(-3.0, 5.0)],
+                    colour,
+                    Stroke::NONE,
+                ));
+            }
+            Self::Looper => {
+                // The lemniscate: an infinity sign, a loop with no end.
+                let a = 10.5_f32;
+                let sign: Vec<Pos2> = (0..=40)
+                    .map(|n| {
+                        let t = n as f32 / 40.0 * std::f32::consts::TAU;
+                        let d = 1.0 + t.sin() * t.sin();
+                        c + vec2(a * t.cos() / d, 1.4 * a * t.sin() * t.cos() / d)
+                    })
+                    .collect();
+                p.add(Shape::line(sign, Stroke::new(1.8, colour)));
+            }
+            Self::Gear => {
+                // Eight teeth round a hub.
+                let mut rim = Vec::new();
+                for k in 0..8 {
+                    let a = k as f32 * std::f32::consts::TAU / 8.0;
+                    for (da, radius) in [(-0.2, 6.2), (-0.13, 9.2), (0.13, 9.2), (0.2, 6.2)] {
+                        rim.push(c + vec2((a + da).cos(), (a + da).sin()) * radius);
+                    }
+                }
+                p.add(Shape::closed_line(rim, line));
+                p.circle_stroke(c, 2.8, line);
+            }
+            Self::Warning => {
+                p.add(Shape::closed_line(
+                    vec![at(0.0, -9.5), at(10.0, 8.0), at(-10.0, 8.0)],
+                    Stroke::new(1.8, colour),
+                ));
+                p.line_segment([at(0.0, -3.0), at(0.0, 2.5)], Stroke::new(2.0, colour));
+                p.circle_filled(at(0.0, 5.3), 1.2, colour);
             }
             Self::Tape => {
                 let body = Rect::from_center_size(c, vec2(26.0, 17.0));
@@ -458,6 +540,7 @@ fn keyboard(p: &Painter, c: Pos2, size: Vec2, colour: Color32) {
         egui::StrokeKind::Inside,
     );
     let black = size.y * 0.5;
+    let black_w = (size.x / 5.0 * 0.75).min(3.2);
     for n in 1..5 {
         let x = body.left() + body.width() * n as f32 / 5.0;
         p.line_segment(
@@ -468,7 +551,7 @@ fn keyboard(p: &Painter, c: Pos2, size: Vec2, colour: Color32) {
     for n in [1, 2, 4] {
         let x = body.left() + body.width() * n as f32 / 5.0;
         p.rect_filled(
-            Rect::from_min_size(pos2(x - 1.6, body.top() + 1.0), vec2(3.2, black)),
+            Rect::from_min_size(pos2(x - black_w / 2.0, body.top() + 1.0), vec2(black_w, black)),
             0.5,
             colour,
         );
@@ -753,6 +836,35 @@ pub fn selector(ui: &mut Ui, items: &[&str], selected: usize, colour: Color32) -
             for (n, label) in items.iter().enumerate() {
                 let lit = (n == selected).then_some(colour);
                 if Cap::new(*label).lit(lit).min_width(60.0).show(ui).clicked() {
+                    clicked = Some(n);
+                }
+            }
+        });
+    });
+    clicked
+}
+
+/// `selector` with a picture on each cap (the name shows when you hover). `selected` is `None`
+/// when what is showing is not one of them. Returns the index of the cap clicked this frame.
+pub fn icon_selector(
+    ui: &mut Ui,
+    items: &[(Icon, &str)],
+    selected: Option<usize>,
+    colour: Color32,
+) -> Option<usize> {
+    let mut clicked = None;
+    inset().show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing = vec2(3.0, 0.0);
+            for (n, (icon, name)) in items.iter().enumerate() {
+                let lit = (Some(n) == selected).then_some(colour);
+                if Cap::new("")
+                    .icon(*icon)
+                    .lit(lit)
+                    .show(ui)
+                    .on_hover_text(*name)
+                    .clicked()
+                {
                     clicked = Some(n);
                 }
             }

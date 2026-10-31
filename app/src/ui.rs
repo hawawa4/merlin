@@ -975,8 +975,8 @@ fn header(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, actions: &mut Ve
     // Everything has to fit on one line, so the fader, the meter and the rig's name shrink as the
     // window narrows (the header is the same in every view).
     let room = ui.available_width();
-    // (The LOOPER switch and the time signature's drop-down made the row 100 points longer.)
-    let (fit, two_rows) = if room >= 1480.0 {
+    // (The view switches are pictures, so the row is about 130 points shorter than with labels.)
+    let (fit, two_rows) = if room >= 1350.0 {
         (
             HeaderFit {
                 readout: true,
@@ -985,7 +985,7 @@ fn header(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, actions: &mut Ve
             },
             false,
         )
-    } else if room >= 1400.0 {
+    } else if room >= 1270.0 {
         (
             HeaderFit {
                 readout: true,
@@ -994,7 +994,7 @@ fn header(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, actions: &mut Ve
             },
             false,
         )
-    } else if room >= 1270.0 {
+    } else if room >= 1140.0 {
         (
             HeaderFit {
                 readout: false,
@@ -1043,26 +1043,38 @@ fn header_row(
         // file buttons are there but dead: no New / Open / Save while performing.
         ui.add_enabled_ui(!perform, |ui| file_plate(ui, s, fit.name, actions));
         ui.add_space(10.0);
-        let views = [
-            View::Rack,
-            View::Setlist,
-            View::Perform,
-            View::Looper,
-            View::Settings,
+        let views = [View::Rack, View::Setlist, View::Perform, View::Looper];
+        let pictures = [
+            (hw::Icon::Rack, "Rack: the instruments you play"),
+            (hw::Icon::Setlist, "Setlist: songs, scenes and backing tracks"),
+            (hw::Icon::Perform, "Perform: the stage view"),
+            (hw::Icon::Looper, "Looper: record MIDI per instrument"),
         ];
-        let names = ["RACK", "SETLIST", "PERFORM", "LOOPER", "SETTINGS"];
-        let now = views.iter().position(|v| *v == st.view()).unwrap_or(0);
+        let now = views.iter().position(|v| *v == st.view());
         ui.add_enabled_ui(!locked, |ui| {
-            if let Some(n) = hw::selector(ui, &names, now, hw::BLUE) {
+            if let Some(n) = hw::icon_selector(ui, &pictures, now, hw::BLUE) {
                 actions.push(Action::SetView(views[n]));
             }
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let p = hw::Cap::new("PANIC")
+            // Right to left: settings is the last thing on the row, panic just before it.
+            ui.add_enabled_ui(!locked, |ui| {
+                let open = st.view() == View::Settings;
+                if hw::Cap::new("")
+                    .icon(hw::Icon::Gear)
+                    .lit(open.then_some(hw::BLUE))
+                    .show(ui)
+                    .on_hover_text("Settings")
+                    .clicked()
+                {
+                    actions.push(Action::SetView(View::Settings));
+                }
+            });
+            let p = hw::Cap::new("")
+                .icon(hw::Icon::Warning)
                 .base(Color32::from_rgb(0x9a, 0x2a, 0x2a))
-                .min_width(70.0)
                 .show(ui)
-                .on_hover_text("Silences everything: all notes off on every slot");
+                .on_hover_text("Panic: silences everything, all notes off on every slot");
             if p.clicked() && !s.map_mode {
                 actions.push(Action::Panic);
             }
