@@ -246,8 +246,10 @@ fn ruler(ui: &mut Ui, view: &LoopView, x0: f32, x1: f32) {
             } else {
                 Color32::from_gray(0x2a)
             };
+            // Narrow cells (12/8) leave the bar's label clear of the beat lines.
+            let top = if first || w >= 30.0 { 0.0 } else { 14.0 };
             p.line_segment(
-                [cell.left_top(), cell.left_bottom()],
+                [cell.left_top() + vec2(0.0, top), cell.left_bottom()],
                 Stroke::new(if first { 2.0 } else { 1.0 }, c),
             );
         }

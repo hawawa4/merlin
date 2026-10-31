@@ -970,7 +970,8 @@ fn header(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, actions: &mut Ve
     // Everything has to fit on one line, so the fader, the meter and the rig's name shrink as the
     // window narrows (the header is the same in every view).
     let room = ui.available_width();
-    let (fit, two_rows) = if room >= 1380.0 {
+    // (The LOOPER switch and the time signature's drop-down made the row 100 points longer.)
+    let (fit, two_rows) = if room >= 1480.0 {
         (
             HeaderFit {
                 readout: true,
@@ -979,7 +980,7 @@ fn header(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, actions: &mut Ve
             },
             false,
         )
-    } else if room >= 1300.0 {
+    } else if room >= 1400.0 {
         (
             HeaderFit {
                 readout: true,
@@ -988,7 +989,7 @@ fn header(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, actions: &mut Ve
             },
             false,
         )
-    } else if room >= 1170.0 {
+    } else if room >= 1270.0 {
         (
             HeaderFit {
                 readout: false,
