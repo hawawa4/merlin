@@ -1,5 +1,5 @@
 # Build environment for our patched Wine (tools/build-wine.sh).
-FROM ubuntu:24.04
+FROM ubuntu:25.10
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64 \
