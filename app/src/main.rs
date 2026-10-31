@@ -30,6 +30,7 @@ mod session;
 mod setlist_ui;
 mod settings;
 mod settings_ui;
+mod system_audio;
 mod tags;
 mod touch;
 mod ui;
@@ -688,6 +689,10 @@ impl Running {
             }
             Action::SetCountIn(n) => {
                 s.set_count_in_bars(n);
+                Ok(())
+            }
+            Action::SetMainOutput(p) => {
+                s.set_main_output(p);
                 Ok(())
             }
             Action::SetClickOutput(p) => {
@@ -1458,6 +1463,15 @@ fn parse_script() -> Vec<(Duration, Action)> {
                     words.next()?.parse().ok()?,
                     words.next()?.parse().ok()?,
                 ),
+                // mainout auto | mainout <left port>|<right port>
+                "mainout" => {
+                    let ports = words.collect::<Vec<_>>().join(" ");
+                    Action::SetMainOutput(
+                        ports
+                            .split_once('|')
+                            .map(|(l, r)| [l.trim().to_owned(), r.trim().to_owned()]),
+                    )
+                }
                 "settings" => match words.next() {
                     None => Action::ToggleSettings,
                     Some(t) => Action::ShowSettingsTab(match t {

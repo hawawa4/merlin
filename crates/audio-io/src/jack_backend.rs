@@ -10,8 +10,8 @@
 //! Everything that reaches the instruments from those inputs is also handed to the rolling MIDI
 //! capture (`merlin-recorder`): the backend starts it and owns it, so it is always listening.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use anyhow::{Context, Result};
@@ -187,6 +187,104 @@ pub fn friendly_name(port: &str) -> String {
             client.to_owned()
         }
         _ => port.to_owned(),
+    }
+}
+
+/// The device a playback port belongs to, readable: PipeWire names the JACK client after the
+/// device (`Ryzen HD Audio Controller Analog Stereo:playback_FL`).
+pub fn device_label(port: &str) -> String {
+    port.rsplit_once(':')
+        .map_or(port, |(device, _)| device)
+        .to_owned()
+}
+
+/// The devices these ports belong to, each once, in the order they first appear.
+pub fn devices_of(ports: &[String]) -> Vec<String> {
+    let mut devices: Vec<String> = Vec::new();
+    for port in ports {
+        let device = device_label(port);
+        if !devices.contains(&device) {
+            devices.push(device);
+        }
+    }
+    devices
+}
+
+/// Two neighbouring outputs of one sound card or interface, as the output pickers list them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OutputPair {
+    /// The left and the right JACK port.
+    pub ports: [String; 2],
+    /// What the picker shows: the device, and which of its outputs when it has more than two.
+    pub label: String,
+}
+
+/// The pairs of neighbouring ports of each device, in the order the server lists them. A port
+/// with no neighbour left (a mono output) is left out: there is nothing to pair it with.
+pub fn output_pairs(ports: &[String]) -> Vec<OutputPair> {
+    devices_of(ports)
+        .into_iter()
+        .flat_map(|device| {
+            let own: Vec<&String> = ports.iter().filter(|p| device_label(p) == device).collect();
+            let several = own.len() > 2;
+            let (pairs, _alone) = own.as_chunks::<2>();
+            pairs
+                .iter()
+                .enumerate()
+                .map(|(n, [left, right])| OutputPair {
+                    ports: [left.to_string(), right.to_string()],
+                    label: if several {
+                        format!("{device}  {}+{}", n * 2 + 1, n * 2 + 2)
+                    } else {
+                        device.clone()
+                    },
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// What this process is connected to, for the settings: `PipeWire 1.6.9`, or `JACK 1.9.22`.
+pub fn server_name() -> &'static str {
+    static NAME: OnceLock<String> = OnceLock::new();
+    NAME.get_or_init(|| describe_server(&jack_version_string()))
+}
+
+/// libjack's own version string: `3.1.6.9 (using PipeWire 1.6.9)` from PipeWire's copy, `1.9.22`
+/// from JACK2's. Empty when libjack is not loaded or does not say.
+fn jack_version_string() -> String {
+    type VersionFn = unsafe extern "C" fn() -> *const libc::c_char;
+    // SAFETY: `RTLD_NOLOAD` only looks up a library that is already loaded (the `jack` crate
+    // loads it by this name), and the symbol, where libjack has it, is declared in `jack.h` as
+    // `const char *jack_get_version_string(void)`; the string it returns is static.
+    unsafe {
+        let lib = libc::dlopen(c"libjack.so.0".as_ptr(), libc::RTLD_NOW | libc::RTLD_NOLOAD);
+        if lib.is_null() {
+            return String::new();
+        }
+        let f = libc::dlsym(lib, c"jack_get_version_string".as_ptr());
+        if f.is_null() {
+            return String::new();
+        }
+        let version = std::mem::transmute::<*mut libc::c_void, VersionFn>(f)();
+        if version.is_null() {
+            return String::new();
+        }
+        std::ffi::CStr::from_ptr(version)
+            .to_string_lossy()
+            .into_owned()
+    }
+}
+
+fn describe_server(version: &str) -> String {
+    let version = version.trim();
+    match version
+        .split_once("(using ")
+        .and_then(|(_, rest)| rest.strip_suffix(')'))
+    {
+        Some(inner) => inner.to_owned(),
+        None if version.is_empty() => "JACK".to_owned(),
+        None => format!("JACK {version}"),
     }
 }
 
@@ -606,24 +704,62 @@ impl JackBackend {
         self.stats.ports_changed.swap(false, Ordering::Relaxed)
     }
 
-    /// Connects our outputs to the first two physical playback ports.
-    pub fn connect_outputs(&self) -> Vec<String> {
+    /// Sends our main outputs to `to` (a left and a right playback port), or, with `None` or when
+    /// those ports are not there (the interface is unplugged), to the first two physical
+    /// playback ports. Returns the ports they end up on.
+    ///
+    /// Only links to the interface's own outputs are ours to move: one made in a patchbay to a
+    /// recorder or another app stays, and a link that is already right is left alone, so asking
+    /// again costs no click.
+    pub fn connect_outputs(&self, to: Option<[&str; 2]>) -> Vec<String> {
         let c = self.client.as_client();
-        let playback = c.ports(
-            None,
-            Some("32 bit float mono audio"),
-            PortFlags::IS_PHYSICAL | PortFlags::IS_INPUT,
-        );
+        let playback = self.playback_ports();
+        let wanted: Vec<String> =
+            match to.filter(|p| p.iter().all(|w| playback.iter().any(|q| q == w))) {
+                Some(p) => p.iter().map(|w| (*w).to_owned()).collect(),
+                None => playback.iter().take(2).cloned().collect(),
+            };
+        let mut connected = Vec::new();
+        for (i, src) in self.out_names.iter().enumerate() {
+            let Some(port) = c.port_by_name(src) else {
+                continue;
+            };
+            let links = port.get_connections();
+            let want = wanted.get(i);
+            let linked = want.is_some_and(|dst| {
+                links.contains(dst) || c.connect_ports_by_name(src, dst).is_ok()
+            });
+            if let (true, Some(dst)) = (linked, want) {
+                connected.push(dst.clone());
+            }
+            // The new link is made before the old one goes, so there is no gap; and if it
+            // could not be made the old one stays rather than leaving the output silent.
+            if linked || want.is_none() {
+                for old in links
+                    .iter()
+                    .filter(|l| Some(*l) != want && playback.contains(l))
+                {
+                    let _ = c.disconnect_ports_by_name(src, old);
+                }
+            }
+        }
+        connected
+    }
+
+    /// The playback ports our main outputs are linked to now.
+    pub fn output_links(&self) -> Vec<String> {
+        let c = self.client.as_client();
+        let playback = self.playback_ports();
         self.out_names
             .iter()
-            .zip(&playback)
-            .filter(|(src, dst)| c.connect_ports_by_name(src, dst).is_ok())
-            .map(|(_, dst)| dst.clone())
+            .filter_map(|n| c.port_by_name(n))
+            .flat_map(|p| p.get_connections())
+            .filter(|l| playback.contains(l))
             .collect()
     }
 
     /// The physical audio playback ports (the interface's outputs), for choosing where the
-    /// click goes.
+    /// main outputs and the click go.
     pub fn playback_ports(&self) -> Vec<String> {
         self.client.as_client().ports(
             None,
@@ -784,5 +920,71 @@ mod tests {
         // Anything unrecognised is kept whole, so two different ports never share a name.
         assert_eq!(friendly_name("synth:keys"), "synth:keys");
         assert_eq!(friendly_name("plain"), "plain");
+    }
+
+    fn names(ports: &[&str]) -> Vec<String> {
+        ports.iter().map(|p| (*p).to_owned()).collect()
+    }
+
+    #[test]
+    fn outputs_are_offered_in_pairs_per_device() {
+        let ports = names(&[
+            "Onboard Analog Stereo:playback_FL",
+            "Onboard Analog Stereo:playback_FR",
+            "Monitor [HDMI 2]:playback_FL",
+            "Monitor [HDMI 2]:playback_FR",
+        ]);
+        let pairs = output_pairs(&ports);
+        assert_eq!(pairs.len(), 2);
+        // A stereo device is just its name.
+        assert_eq!(pairs[0].label, "Onboard Analog Stereo");
+        assert_eq!(
+            pairs[0].ports,
+            [
+                "Onboard Analog Stereo:playback_FL",
+                "Onboard Analog Stereo:playback_FR"
+            ]
+        );
+        assert_eq!(pairs[1].label, "Monitor [HDMI 2]");
+        assert_eq!(
+            devices_of(&ports),
+            ["Onboard Analog Stereo", "Monitor [HDMI 2]"]
+        );
+    }
+
+    #[test]
+    fn a_big_interface_gets_one_pair_per_two_outputs_and_pairs_never_cross_devices() {
+        // The server may list ports of different devices interleaved, and an odd port out.
+        let ports = names(&[
+            "Mono Thing:playback_MONO",
+            "Scarlett:playback_AUX0",
+            "Onboard:playback_FL",
+            "Scarlett:playback_AUX1",
+            "Scarlett:playback_AUX2",
+            "Onboard:playback_FR",
+            "Scarlett:playback_AUX3",
+            "Scarlett:playback_AUX4",
+        ]);
+        let pairs = output_pairs(&ports);
+        let labels: Vec<_> = pairs.iter().map(|p| p.label.as_str()).collect();
+        // The mono device and the Scarlett's fifth output have no partner and are dropped.
+        assert_eq!(labels, ["Scarlett  1+2", "Scarlett  3+4", "Onboard"]);
+        assert_eq!(
+            pairs[1].ports,
+            ["Scarlett:playback_AUX2", "Scarlett:playback_AUX3"]
+        );
+        assert!(output_pairs(&[]).is_empty());
+    }
+
+    #[test]
+    fn the_server_is_named_from_libjacks_version_string() {
+        assert_eq!(
+            describe_server("3.1.6.9 (using PipeWire 1.6.9)"),
+            "PipeWire 1.6.9"
+        );
+        assert_eq!(describe_server("1.9.22"), "JACK 1.9.22");
+        assert_eq!(describe_server(""), "JACK");
+        // Not loaded in a test: it must still answer.
+        assert!(!server_name().is_empty());
     }
 }

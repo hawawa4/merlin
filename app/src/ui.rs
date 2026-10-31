@@ -245,6 +245,7 @@ pub enum Action {
     SetMetronome(bool),
     SetCountIn(u8),
     SetBeatsPerBar(u8),
+    SetMainOutput(Option<[String; 2]>),
     SetClickOutput(Option<[String; 2]>),
     AddSong,
     RemoveSong(usize),

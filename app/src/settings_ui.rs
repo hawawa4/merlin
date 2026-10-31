@@ -356,7 +356,9 @@ fn audio(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Act
         ui.label("Audio is not running.");
         return;
     };
-    let (frames, rate) = (b.buffer_size(), s.sample_rate);
+    let frames = b.buffer_size();
+    engine_panel(ui, s, b);
+    ui.add_space(8.0);
     ui.strong("Buffer size");
     ui.horizontal(|ui| {
         for n in [64u32, 128, 256, 512, 1024] {
@@ -366,29 +368,178 @@ fn audio(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Act
         }
         ui.label("frames");
     });
-    let one_way = frames as f32 * 1000.0 / rate as f32;
-    ui.label(format!(
-        "{frames} frames at {rate} Hz: {one_way:.1} ms per buffer, about {:.1} ms round trip.",
-        one_way * 2.0
-    ));
     ui.label(
         RichText::new("Smaller is more responsive but needs a faster, well-set-up machine (see the performance check).")
             .small()
             .weak(),
     );
     ui.add_space(8.0);
-    ui.strong("Now");
-    ui.label(format!(
-        "DSP load {:.1}%   dropouts {}   slowest callback {:.0} µs",
-        b.cpu_load(),
-        b.stats.xruns.load(Ordering::Relaxed),
-        b.stats.max_ns.load(Ordering::Relaxed) as f64 / 1000.0,
-    ));
-    ui.label(format!("Outputs: {}", b.out_names.join(", ")));
+    // Listed once per frame: asking the server for its ports is not free.
+    let pairs = s.output_pairs();
+    main_output(ui, s, &pairs, actions);
     ui.add_space(8.0);
-    click_output(ui, s, actions);
+    click_output(ui, s, &pairs, actions);
     ui.add_space(8.0);
     backing_folder(ui, s, st, actions);
+}
+
+/// What the audio engine is doing, as one plate of recessed readouts: the server Merlin is
+/// connected to, the format and what it costs in delay, the load, and where the sound goes.
+fn engine_panel(ui: &mut egui::Ui, s: &Session, b: &merlin_audio_io::JackBackend) {
+    use crate::hw;
+    let (frames, rate) = (b.buffer_size(), s.sample_rate);
+    let one_way = frames as f32 * 1000.0 / rate as f32;
+    let xruns = b.stats.xruns.load(Ordering::Relaxed);
+    let devices = s.main_output_devices();
+    let out = if devices.is_empty() {
+        ("not connected".to_owned(), hw::RED)
+    } else {
+        (devices.join(", "), hw::AMBER)
+    };
+    let rows = [
+        (
+            "Server",
+            merlin_audio_io::server_name().to_owned(),
+            hw::AMBER,
+        ),
+        ("Format", format!("{rate} Hz · {frames} frames"), hw::AMBER),
+        (
+            "Latency",
+            format!(
+                "{one_way:.1} ms per buffer · about {:.1} ms round trip",
+                one_way * 2.0
+            ),
+            hw::AMBER,
+        ),
+        (
+            "Load",
+            format!(
+                "DSP {:.1}% · dropouts {xruns} · slowest callback {:.0} µs",
+                b.cpu_load(),
+                b.stats.max_ns.load(Ordering::Relaxed) as f64 / 1000.0,
+            ),
+            hw::AMBER,
+        ),
+        ("Output", out.0, out.1),
+    ];
+    // Every readout as wide as the longest text needs, so the plate is a tidy block.
+    let font = egui::FontId::monospace(12.0);
+    let width = rows
+        .iter()
+        .map(|(_, text, _)| {
+            ui.painter()
+                .layout_no_wrap(text.clone(), font.clone(), Color32::WHITE)
+                .size()
+                .x
+        })
+        .fold(300.0_f32, f32::max)
+        + 24.0;
+    hw::plate().show(ui, |ui| {
+        hw::engraved(ui, "Audio engine");
+        ui.add_space(2.0);
+        egui::Grid::new("audio-engine")
+            .num_columns(3)
+            .spacing([10.0, 6.0])
+            .show(ui, |ui| {
+                for (label, text, colour) in &rows {
+                    hw::engraved(ui, label);
+                    hw::display(ui, text, width, *colour);
+                    if *label == "Load" {
+                        hw::led(ui, true, if xruns == 0 { hw::GREEN } else { hw::AMBER })
+                            .on_hover_text(if xruns == 0 {
+                                "No dropouts since Merlin started."
+                            } else {
+                                "The audio dropped out at least once since Merlin started."
+                            });
+                    }
+                    ui.end_row();
+                }
+            });
+    });
+}
+
+/// Where the main mix is heard.
+fn main_output(
+    ui: &mut egui::Ui,
+    s: &Session,
+    pairs: &[merlin_audio_io::OutputPair],
+    actions: &mut Vec<Action>,
+) {
+    ui.strong("Main output");
+    ui.label(
+        RichText::new("Where the mix is heard. Automatic is the system default output: the one the other programs on your desktop use, as it is when Merlin starts (or when you pick Automatic here). Pick another interface to keep Merlin there instead, whatever the desktop does. Merlin plays through the audio server (PipeWire or JACK) and does not take the sound card over, so other programs keep their sound. A choice whose interface is unplugged is waited for; meanwhile Merlin uses the system default.")
+            .small()
+            .weak(),
+    );
+    if let Some(choice) = output_picker(
+        ui,
+        "main-output",
+        pairs,
+        &s.settings.main_output,
+        "Automatic (system default)",
+    ) {
+        actions.push(Action::SetMainOutput(choice));
+    }
+    ui.label(
+        RichText::new(match s.system_default_output() {
+            Some(name) => format!("System default output: {name}"),
+            None => "System default output: not known (it is asked of WirePlumber with wpctl), so Automatic uses the first outputs the audio server lists.".to_owned(),
+        })
+        .small()
+        .weak(),
+    );
+    if let Some(b) = s.backend() {
+        ui.label(
+            RichText::new(format!(
+                "Merlin's own ports, for a patchbay: {}",
+                b.out_names.join(", ")
+            ))
+            .small()
+            .weak(),
+        );
+    }
+}
+
+/// Choosing a pair of the interface's outputs from a dropdown. The first entry is the default
+/// (`None`). A choice whose interface is not plugged in right now is kept, and shown as such.
+/// Returns what was chosen this frame.
+fn output_picker(
+    ui: &mut egui::Ui,
+    id: &str,
+    pairs: &[merlin_audio_io::OutputPair],
+    current: &Option<[String; 2]>,
+    default_label: &str,
+) -> Option<Option<[String; 2]>> {
+    let shown = match current {
+        None => default_label.to_owned(),
+        Some(saved) => match pairs.iter().find(|p| &p.ports == saved) {
+            Some(pair) => pair.label.clone(),
+            None => format!(
+                "{}  (not connected)",
+                merlin_audio_io::device_label(&saved[0])
+            ),
+        },
+    };
+    let mut chosen = None;
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(shown)
+        .width(ui.available_width().min(460.0))
+        .show_ui(ui, |ui| {
+            if ui
+                .selectable_label(current.is_none(), default_label)
+                .clicked()
+            {
+                chosen = Some(None);
+            }
+            for pair in pairs {
+                let on = current.as_ref() == Some(&pair.ports);
+                let row = ui.selectable_label(on, &pair.label);
+                if row.on_hover_text(pair.ports.join("  +  ")).clicked() {
+                    chosen = Some(Some(pair.ports.clone()));
+                }
+            }
+        });
+    chosen
 }
 
 /// The folder the Setlist view lists backing tracks from.
@@ -418,7 +569,12 @@ fn backing_folder(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mu
 }
 
 /// Where the click is heard.
-fn click_output(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
+fn click_output(
+    ui: &mut egui::Ui,
+    s: &Session,
+    pairs: &[merlin_audio_io::OutputPair],
+    actions: &mut Vec<Action>,
+) {
     ui.strong("Click");
     ui.horizontal(|ui| {
         ui.label("beats per bar when no song sets it");
@@ -436,36 +592,15 @@ fn click_output(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
             .small()
             .weak(),
     );
-    let ports = s.playback_ports();
-    let current = s.settings.click_output.clone();
-    let text = match &current {
-        Some([l, r]) => format!("{l} + {r}"),
-        None => "Main outputs (mixed in)".to_owned(),
-    };
-    egui::ComboBox::from_id_salt("click-output")
-        .selected_text(text)
-        .width(420.0)
-        .show_ui(ui, |ui| {
-            if ui
-                .selectable_label(current.is_none(), "Main outputs (mixed in)")
-                .clicked()
-            {
-                actions.push(Action::SetClickOutput(None));
-            }
-            // Left and right of a pair are neighbouring ports.
-            for pair in ports.chunks(2).filter(|p| p.len() == 2) {
-                let label = format!("{} + {}", pair[0], pair[1]);
-                let chosen = current
-                    .as_ref()
-                    .is_some_and(|c| c[0] == pair[0] && c[1] == pair[1]);
-                if ui.selectable_label(chosen, label).clicked() {
-                    actions.push(Action::SetClickOutput(Some([
-                        pair[0].clone(),
-                        pair[1].clone(),
-                    ])));
-                }
-            }
-        });
+    if let Some(choice) = output_picker(
+        ui,
+        "click-output",
+        pairs,
+        &s.settings.click_output,
+        "Main outputs (mixed in)",
+    ) {
+        actions.push(Action::SetClickOutput(choice));
+    }
 }
 
 /// Where SoundFonts are looked for, with how many each folder holds.

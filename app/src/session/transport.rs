@@ -172,12 +172,4 @@ impl Session {
             }
         }
     }
-
-    /// The interface's output ports, for choosing the click's.
-    pub fn playback_ports(&self) -> Vec<String> {
-        self.backend
-            .as_ref()
-            .map(|b| b.playback_ports())
-            .unwrap_or_default()
-    }
 }

@@ -75,6 +75,9 @@ pub struct Settings {
     /// A plugin with an entry here, even an empty one, is the user's to tag and the scanner's
     /// automatic tags are not used for it; plugins without one are tagged by the scanner.
     pub tags: BTreeMap<String, Vec<Tag>>,
+    /// The two audio outputs of the interface the main mix goes to, as JACK port names; the
+    /// system's default output when unset, or when that interface is not there.
+    pub main_output: Option<[String; 2]>,
     /// The two audio outputs of the interface the click goes to; the main outputs when unset.
     pub click_output: Option<[String; 2]>,
     /// Older versions kept Windows VST2 folders apart; they are folded into `plugin_dirs` when
@@ -110,6 +113,7 @@ impl Default for Settings {
             autosave_secs: 30,
             favorites: Vec::new(),
             tags: BTreeMap::new(),
+            main_output: None,
             click_output: None,
             windows_vst2_dirs: Vec::new(),
             ignored_files: Vec::new(),
@@ -207,6 +211,28 @@ mod tests {
                 .unwrap()
                 .tags
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn the_chosen_outputs_survive_the_file_and_default_to_automatic() {
+        let mut s = Settings::default();
+        s.tags.insert("clap:a".into(), vec![Tag::new("Keys", None)]);
+        s.main_output = Some([
+            "Scarlett 2i2:playback_AUX0".into(),
+            "Scarlett 2i2:playback_AUX1".into(),
+        ]);
+        s.click_output = Some(["Onboard:playback_FL".into(), "Onboard:playback_FR".into()]);
+        // The values sit after the `tags` table in the struct: the file must stay valid TOML.
+        let text = toml::to_string_pretty(&s).unwrap();
+        let back: Settings = toml::from_str(&text).unwrap();
+        assert_eq!(back, s, "{text}");
+        // A file from before this setting: the safe default, the first outputs found.
+        assert_eq!(
+            toml::from_str::<Settings>("frames = 64\n")
+                .unwrap()
+                .main_output,
+            None
         );
     }
 }

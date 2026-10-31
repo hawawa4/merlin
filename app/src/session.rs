@@ -22,6 +22,7 @@ mod backing;
 mod capture;
 mod controls;
 mod macros;
+mod outputs;
 mod setlist;
 mod snapshots;
 mod surface;
@@ -34,6 +35,7 @@ use winit::event_loop::EventLoopProxy;
 
 use crate::guard::{self, Guard, HostInfo};
 use crate::settings::Settings;
+use crate::system_audio;
 use crate::tags::Tag;
 
 /// Slots shown in the rack.
@@ -301,6 +303,9 @@ pub struct Session {
     guard: Arc<Guard>,
     pub engine: EngineHandle,
     backend: Option<JackBackend>,
+    /// The desktop's default audio output (its description), as WirePlumber said when Merlin
+    /// started or when Automatic was last chosen.
+    default_output: Option<String>,
     pub midi_sources: Vec<MidiSource>,
     pub editors: EditorManager,
     pub log: Vec<String>,
@@ -334,7 +339,13 @@ impl Session {
         if let Some(queue) = backend.take_control() {
             controls::spawn_pump(queue, control_tx, proxy.clone(), control_stop.clone());
         }
-        let outputs = backend.connect_outputs();
+        let default_output = system_audio::default_output();
+        let wanted = outputs::target(
+            &merlin_audio_io::output_pairs(&backend.playback_ports()),
+            &settings.main_output,
+            default_output.as_deref(),
+        );
+        let outputs = backend.connect_outputs(outputs::as_strs(&wanted));
         let midi_sources = backend.connect_midi_sources(&midi_policy(&settings.midi_devices));
         let (font_tx, font_rx) = mpsc::channel();
         let mut s = Self {
@@ -405,6 +416,7 @@ impl Session {
             editors: EditorManager::new(xid, scale, settings.editor_cache)?,
             log: Vec::new(),
             log_count: 0,
+            default_output,
             proxy,
             sample_rate,
             last_autosave: Instant::now(),
@@ -1081,7 +1093,8 @@ impl Session {
         }
     }
 
-    /// Hotplug: when ports came or went, reconnects MIDI devices and says what changed.
+    /// Hotplug: when ports came or went, reconnects MIDI devices and the main outputs, and says
+    /// what changed.
     pub fn poll_midi_hotplug(&mut self) {
         if !self
             .backend
@@ -1089,6 +1102,13 @@ impl Session {
             .is_some_and(|b| b.take_ports_changed())
         {
             return;
+        }
+        // A chosen interface that was unplugged and is back (or is gone) moves the main outputs.
+        // Otherwise they stay where they are: a route made by hand in a patchbay is not undone
+        // by unrelated ports.
+        if self.settings.main_output.is_some() && self.apply_main_output() {
+            let devices = self.main_output_devices();
+            self.say(format!("main output: {}", devices.join(", ")));
         }
         let before: Vec<String> = self.midi_sources.iter().map(|m| m.device.clone()).collect();
         self.refresh_midi();
