@@ -1502,6 +1502,20 @@ impl Session {
         Ok(())
     }
 
+    /// Gives a slot a name of its own, so four of the same plugin can be told apart. An empty name
+    /// goes back to the plugin's.
+    pub fn rename_slot(&mut self, i: usize, name: String) {
+        let Some(slot) = self.rig.slots.get_mut(i) else {
+            return;
+        };
+        let name = name.trim().to_owned();
+        if slot.name != name {
+            slot.name = name;
+            self.dirty = true;
+            self.autosave_soon();
+        }
+    }
+
     /// Takes the plugin out of a slot: editor first, then the engine lets go of the processor,
     /// then the plugin is deactivated and destroyed. The rig slot is cleared.
     pub fn unload(&mut self, i: usize) {

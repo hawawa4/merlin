@@ -605,7 +605,7 @@ fn gutter(ui: &mut Ui, s: &Session, i: usize, rect: Rect, live: bool, actions: &
                 "Not selected, or muted: it does not play the keyboard"
             });
             ui.colored_label(colour, (i + 1).to_string());
-            let name = slot.instrument.as_ref().map_or("", |r| r.name.as_str());
+            let name = slot.title();
             let r = ui
                 .add_sized(
                     [92.0, 20.0],

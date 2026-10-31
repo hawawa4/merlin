@@ -404,7 +404,7 @@ fn tile(ui: &mut egui::Ui, s: &Session, st: &UiState, i: usize, actions: &mut Ve
     let slot = &s.rig.slots[i];
     let loaded = s.plugins[i].is_some();
     let playing = s.targets.contains(&i) && !slot.mute;
-    let name = slot.instrument.as_ref().map_or("", |r| r.name.as_str());
+    let name = slot.title();
     // The whole tile selects the instrument; the buttons and sliders on it keep their own clicks.
     let tile = ui.scope_builder(egui::UiBuilder::new().sense(egui::Sense::click()), |ui| {
         egui::Frame::new()

@@ -291,10 +291,7 @@ fn lane(
 ) {
     let l = view.lanes[slot];
     let colour = COLORS[slot];
-    let name = s.rig.slots[slot]
-        .instrument
-        .as_ref()
-        .map_or("", |r| r.name.as_str());
+    let name = s.rig.slots[slot].title();
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), LANE_H), Sense::hover());
     // The name plate, with the lane's colour down its edge.
     let plate = Rect::from_min_size(rect.min, vec2(LABEL_W, LANE_H));

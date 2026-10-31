@@ -393,6 +393,10 @@ impl Running {
                 s.unload(i);
                 Ok(())
             }
+            Action::RenameSlot(i, name) => {
+                s.rename_slot(i, name);
+                Ok(())
+            }
             Action::Retry(i) => s.retry(i),
             Action::Select(i, layer) => {
                 s.select(i, layer);

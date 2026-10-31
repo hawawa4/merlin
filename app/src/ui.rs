@@ -82,6 +82,8 @@ pub enum Action {
     /// Load browser entry `k` into slot `i`.
     Load(usize, usize),
     Unload(usize),
+    /// Give a slot a name of its own; empty: the plugin's name again.
+    RenameSlot(usize, String),
     /// Try a missing or quarantined slot again.
     Retry(usize),
     Select(usize, bool),
@@ -379,6 +381,8 @@ pub struct UiState {
     pub popup_open: bool,
     /// The scene whose name is being edited in the strip, and the text so far.
     pub scene_edit: Option<(usize, String)>,
+    /// The slot whose name is being edited in the rack, and the text so far.
+    pub slot_edit: Option<(usize, String)>,
     /// The header's level meter.
     pub meter: hw::Meter,
     /// The backing-track library shown in the Setlist view.
@@ -454,6 +458,7 @@ impl UiState {
             force_menu: None,
             popup_open: false,
             scene_edit: None,
+            slot_edit: None,
             meter: hw::Meter::new(),
             library: Default::default(),
             picking: None,
@@ -1534,7 +1539,7 @@ fn unit(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, i: usize, actions:
     let label = match (&saved.instrument, loaded) {
         (Some(r), true) => format!(
             "{}  {}{}",
-            r.name,
+            saved.title(),
             match r.format {
                 Format::Vst3 => "VST3",
                 Format::Vst2 => "VST2",
@@ -1544,9 +1549,9 @@ fn unit(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, i: usize, actions:
             },
             if r.windows { "·WIN" } else { "" }
         ),
-        (Some(r), false) => format!(
+        (Some(_), false) => format!(
             "{}  ({})",
-            r.name,
+            saved.title(),
             match missing.as_deref() {
                 Some(m) if m.starts_with("quarantined") => "quarantined",
                 Some(m) if m.starts_with("crashed") => "crashed",
@@ -1576,6 +1581,34 @@ fn unit(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, i: usize, actions:
             } else {
                 RichText::new(label)
             };
+            if let Some((_, text)) = st.slot_edit.as_mut().filter(|(e, _)| *e == i) {
+                let edit = ui.add_sized(
+                    [250.0, 20.0],
+                    egui::TextEdit::singleline(text)
+                        .hint_text(saved.instrument.as_ref().map_or("", |r| r.name.as_str()))
+                        .char_limit(60),
+                );
+                if !edit.has_focus() && !edit.lost_focus() {
+                    edit.request_focus();
+                    // Select the old name so typing replaces it.
+                    if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), edit.id) {
+                        state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
+                            egui::text::CCursor::new(0),
+                            egui::text::CCursor::new(text.chars().count()),
+                        )));
+                        state.store(ui.ctx(), edit.id);
+                    }
+                }
+                if ui.input(|inp| inp.key_pressed(egui::Key::Escape)) {
+                    st.slot_edit = None;
+                } else if edit.lost_focus() {
+                    let name = text.trim().to_owned();
+                    if name != saved.name {
+                        actions.push(Action::RenameSlot(i, name));
+                    }
+                    st.slot_edit = None;
+                }
+            } else {
             let r = ui.add_sized(
                 [250.0, 20.0],
                 egui::Button::selectable(selected, text)
@@ -1592,12 +1625,30 @@ fn unit(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, i: usize, actions:
                 )),
                 None => r,
             };
+            let r = match &saved.instrument {
+                Some(plugin) if !saved.name.trim().is_empty() && saved.name.trim() != plugin.name => {
+                    r.on_hover_text(format!("Plugin: {}", plugin.name))
+                }
+                _ => r,
+            };
             if loaded && r.clicked() && !s.map_mode {
                 actions.push(Action::Select(i, ui.input(|inp| inp.modifiers.shift)));
+            }
+            if saved.instrument.is_some() {
+                if r.double_clicked() && !s.map_mode {
+                    st.slot_edit = Some((i, saved.title().to_owned()));
+                }
+                r.context_menu(|ui| {
+                    if ui.button("Rename").clicked() {
+                        st.slot_edit = Some((i, saved.title().to_owned()));
+                        ui.close();
+                    }
+                });
             }
             if loaded {
                 let a = ControlAction::SelectSlot { slot: i as u8 };
                 crate::map_mode::target(ui, s, &r, a, None, actions);
+            }
             }
             // Red when the slot takes the keyboard, dark when it is not selected or is muted.
             hw::led(ui, active && !mute, hw::RED).on_hover_text(if active && !mute {
@@ -1845,7 +1896,7 @@ fn dock_bar(ui: &mut egui::Ui, s: &Session, st: &UiState, actions: &mut Vec<Acti
                 .get(k)
                 .and_then(Option::as_ref)
                 .map(|n| n.plugin.name.as_str()),
-            _ => s.rig.slots[i].instrument.as_ref().map(|r| r.name.as_str()),
+            _ => Some(s.rig.slots[i].title()),
         }
         .unwrap_or("");
         ui.colored_label(COLORS[i], format!("EDITOR · {} {name}", i + 1));
@@ -2082,12 +2133,7 @@ fn fx_drawer(
                 .lit(lit)
                 .min_width(30.0)
                 .show(ui)
-                .on_hover_text(
-                    s.rig.slots[k]
-                        .instrument
-                        .as_ref()
-                        .map_or(String::new(), |r| r.name.clone()),
-                )
+                .on_hover_text(s.rig.slots[k].title().to_owned())
                 .clicked()
             {
                 actions.push(Action::Select(k, false));

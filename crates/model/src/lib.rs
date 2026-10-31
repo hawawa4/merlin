@@ -175,6 +175,18 @@ impl Default for Slot {
     }
 }
 
+impl Slot {
+    /// What the slot is called: the name it was given, else the plugin's own.
+    pub fn title(&self) -> &str {
+        let name = self.name.trim();
+        if name.is_empty() {
+            self.instrument.as_ref().map_or("", |r| r.name.as_str())
+        } else {
+            name
+        }
+    }
+}
+
 /// How selecting a slot treats the others.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -354,6 +366,24 @@ mod tests {
         let json = serde_json::to_string_pretty(&rig).unwrap();
         let back: Rig = serde_json::from_str(&json).unwrap();
         assert_eq!(rig, back);
+    }
+
+    #[test]
+    fn a_renamed_slot_keeps_its_name_in_the_file() {
+        let mut rig = sample();
+        rig.slots[0].name = "Felt piano".into();
+        let json = serde_json::to_string(&rig).unwrap();
+        let back: Rig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.slots[0].title(), "Felt piano");
+        assert_eq!(back.slots[0].instrument.as_ref().unwrap().name, "Surge XT");
+    }
+
+    #[test]
+    fn a_slot_without_a_name_is_called_after_its_plugin() {
+        let mut slot = sample().slots.remove(0);
+        slot.name = "  ".into();
+        assert_eq!(slot.title(), "Surge XT");
+        assert_eq!(Slot::default().title(), "");
     }
 
     #[test]
