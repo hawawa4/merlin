@@ -10,12 +10,10 @@ sf3 := assets / "MuseScore_General.sf3"
 default:
     @just --list --unsorted
 
-# The app. Loads plugins from the standard CLAP folders plus test-assets (Linux and, through
-# our patched Wine, Windows ones). Try: just dev --fresh      just dev --rig my.mrig
-# This round: MIDI capture. The app always keeps the last 30 minutes you played (keyboards and the on-screen keys);
-# play something, press "Capture MIDI" in the header and open ~/Music/Merlin/Merlin capture *.mid in a sequencer.
+# MIDI capture: the app always keeps the last 30 minutes you played (keyboards and the on-screen keys);
+# press "Capture MIDI" in the header and open ~/Music/Merlin/Merlin capture *.mid in a sequencer.
 # Try it with `just fake-keyboard` in a second terminal, and map the action to a pad or a foot switch (MIDI map).
-# See docs/qa-checklist.md 5n.
+# The app. Loads plugins from the standard CLAP folders plus test-assets (Linux and, through our patched Wine, Windows ones). Try: just dev --fresh      just dev --rig my.mrig
 dev *args:
     cargo build -p merlin --release
     PATH="{{yabridge_dir}}:$PATH" WINELOADER={{patched_wine}} \
@@ -23,13 +21,6 @@ dev *args:
         target/release/merlin \
         --plugin-dir {{assets}}/dl/surge-linux --plugin-dir {{assets}}/sf {{args}}
 
-# Packs the Wine + yabridge pair into dist/runtime/ (a 40 MB .tar.zst and runtime-manifest.json),
-# the files "Download Windows plugin support" fetches. To publish them, put both in a GitHub
-# release tagged `runtime` on the repository, e.g.
-#   gh release create runtime dist/runtime/* --title "Windows plugin support"   (first time)
-#   gh release upload runtime dist/runtime/* --clobber                           (later)
-# To try the download without publishing: serve the folder (`python3 -m http.server -d dist/runtime`)
-# and set runtime_url = "http://127.0.0.1:8000/runtime-manifest.json" in settings.toml.
 # Plays a short song with two stems and markers over and over (default 100 passes, about 8 minutes): every pass
 # must end stopped by its marker with no underruns or xruns. Needs PipeWire running.
 soak-song passes="100":
@@ -61,6 +52,14 @@ launchkey-probe seconds="60":
 fake-keyboard name="Fake Keyboard" seconds="60":
     cargo run -q -p merlin-audio-io --release --example fake_keyboard -- "{{name}}" {{seconds}}
 
+# To publish, put both files in a GitHub release tagged `runtime` on the repository, the archive
+# first and the manifest after it, so the manifest never names a file that is not there yet:
+#   gh release create runtime dist/runtime/* --title "Windows plugin support"   (first time)
+#   gh release upload runtime dist/runtime/<id>.tar.zst                          (later)
+#   gh release upload runtime dist/runtime/runtime-manifest.json --clobber
+# To try the download without publishing: serve the folder (`python3 -m http.server -d dist/runtime`)
+# and set runtime_url = "http://127.0.0.1:8000/runtime-manifest.json" in settings.toml.
+# Packs Wine + yabridge into dist/runtime/ (a 70 MB .tar.zst and runtime-manifest.json): what "Download Windows plugin support" fetches.
 package-runtime:
     tools/package-runtime.sh
 
@@ -128,19 +127,15 @@ test:
 
 # Phase 1 tests that need Wine: Windows plugins through yabridge, on our patched Wine
 test-wine:
-    PATH="{{yabridge_dir}}:$PATH" WINELOADER={{patched_wine}} \
+    PATH="{{yabridge_dir}}:$PATH" WINELOADER={{patched_wine}} WINEDLLOVERRIDES="mscoree,mshtml=d" \
         cargo test -p merlin-audio-io --test clap windows -- --nocapture
 
-# Is realtime scheduling available? (see docs/plan.md, Phase 0 result)
+# Is realtime scheduling available (rtprio limit, pipewire group, rtkit, PipeWire itself)?
 rt-status:
     @echo "ulimit -r (max rtprio): $(ulimit -r)"
     @id -nG | tr ' ' '\n' | grep -qx pipewire && echo "in 'pipewire' group: yes" || echo "in 'pipewire' group: NO  -> sudo usermod -aG pipewire $USER, then log in again"
     @busctl --system status org.freedesktop.RealtimeKit1 >/dev/null 2>&1 && echo "rtkit: running" || echo "rtkit: not available"
     @for pid in $(pidof pipewire); do ps -L -o cls=,comm= -p $pid | grep -q "^ *FF" && echo "pipewire $pid: realtime" || echo "pipewire $pid: NOT realtime"; done
-
-# Phase 1: the engine on JACK with two zoned sine slots and an arpeggio (silent with `--quiet`)
-jack-demo *args:
-    cargo run -p merlin-audio-io --release --example jack_demo -- {{args}}
 
 # Windows plugins for other plugin hosts (REAPER, Bitwig, Ardour...). Try: just bridge --help
 bridge *args:

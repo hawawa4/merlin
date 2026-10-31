@@ -38,6 +38,22 @@ const MAX_DEPTH: usize = 3;
 /// Suffix of the link that names the real Windows plugin beside a bridge.
 const WIN_LINK: &str = "clap-win";
 
+/// The DLL overrides every Wine we start gets: Mono and Gecko off. Without them, a prefix that is
+/// new (or must be upgraded by a different Wine) opens a "Wine Mono Installer" dialog that nobody
+/// asked for.
+pub const NO_MONO_GECKO: &str = "mscoree,mshtml=d";
+
+/// `WINEDLLOVERRIDES` for the app's own environment, which its plugin hosts inherit (they start
+/// Wine themselves, so [`Runtime::command`] does not reach them). What the user already set stays;
+/// if it already says something about Mono, that is their choice.
+pub fn dll_overrides(existing: Option<&str>) -> String {
+    match existing.map(str::trim).filter(|e| !e.is_empty()) {
+        None => NO_MONO_GECKO.to_owned(),
+        Some(e) if e.contains("mscoree") => e.to_owned(),
+        Some(e) => format!("{e};{NO_MONO_GECKO}"),
+    }
+}
+
 /// A Wine plus a yabridge, and the prefix our Windows plugins live in.
 #[derive(Clone, Debug)]
 pub struct Runtime {
@@ -58,7 +74,7 @@ impl Runtime {
             // Wine's own chatter is noise here, and the Mono/Gecko installers are a dialog the
             // user never asked for.
             .env("WINEDEBUG", "-all")
-            .env("WINEDLLOVERRIDES", "mscoree,mshtml=d");
+            .env("WINEDLLOVERRIDES", NO_MONO_GECKO);
         let path = std::env::var_os("PATH").unwrap_or_default();
         let mut dirs = vec![self.yabridge_dir.clone()];
         dirs.extend(std::env::split_paths(&path));
@@ -928,6 +944,22 @@ mod tests {
         std::fs::write(user.join("Odin.clap"), pe(0x8664)).unwrap();
         assert_eq!(rt.clap_dirs().len(), 2);
         assert_eq!(rt.sync_clap_bridges(&out).unwrap().created.len(), 3);
+    }
+
+    #[test]
+    fn mono_is_switched_off_without_overriding_what_the_user_set() {
+        assert_eq!(dll_overrides(None), "mscoree,mshtml=d");
+        assert_eq!(dll_overrides(Some("  ")), "mscoree,mshtml=d");
+        assert_eq!(
+            dll_overrides(Some("winemenubuilder.exe=d")),
+            "winemenubuilder.exe=d;mscoree,mshtml=d"
+        );
+        // They already decided about Mono: left alone, and not added twice on a restart.
+        assert_eq!(dll_overrides(Some("mscoree=n")), "mscoree=n");
+        assert_eq!(
+            dll_overrides(Some(&dll_overrides(Some("a=b")))),
+            "a=b;mscoree,mshtml=d"
+        );
     }
 
     #[test]

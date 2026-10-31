@@ -1907,6 +1907,15 @@ fn main() -> Result<()> {
             }
         }
     }
+    // The plugin hosts start Wine themselves, from this environment: no Mono/Gecko dialogs there
+    // either (a prefix that a newer Wine has to upgrade would open one).
+    // SAFETY: still before any other thread exists.
+    unsafe {
+        std::env::set_var(
+            "WINEDLLOVERRIDES",
+            merlin_wine::dll_overrides(std::env::var("WINEDLLOVERRIDES").ok().as_deref()),
+        );
+    }
     // The downloaded runtime fills in what neither the settings nor the environment name.
     let managed = (settings.wine_loader.is_none() && std::env::var_os("WINELOADER").is_none())
         .then(|| merlin_wine::runtime::installed(&paths::runtime_dir()))

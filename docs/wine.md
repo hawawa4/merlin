@@ -80,6 +80,7 @@ Not covered: nothing watches the folders, so a new plugin needs a `sync`; the to
 - DPI scaling and cursor offsets on yabridge master were reported by others; we have not tested other DPI settings.
 - Copy protection (iLok and similar) may fail in Wine.
 - Not tested: Wine stable 11.0.x as the base instead of the 11.20 development release.
+- **To revisit: Wine's `winemenubuilder` writes into the user's home** (decided 2026-10-31 to leave it as it is for now). An installer's shortcuts become `.desktop` files and menu entries, and a new prefix registers file associations (`.reg`, `.chm`, ...) pointing at *our* prefix, replacing the user's own Wine's. Adding `winemenubuilder.exe=d` to `NO_MONO_GECKO` (`crates/wine/src/lib.rs`, which the plugin hosts also get through `dll_overrides`) would stop all of it; the "Installed:" list already replaces the menu entries. Weigh that against anyone who wants a plugin's manager in their desktop menu. Related: the prefix's `Desktop`, `Documents` and `Downloads` are links to the real folders, so an installer's Desktop shortcut lands on the user's real Desktop.
 
 ## Why Staging, and why a bundled runtime
 
