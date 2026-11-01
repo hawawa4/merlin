@@ -46,19 +46,24 @@ pub fn wine_prefix() -> PathBuf {
     merlin_wine::layout::wine_prefix()
 }
 
+/// The folder of every bridge the app makes, whatever the format.
+pub fn bridges_root() -> PathBuf {
+    data_dir().join("bridges")
+}
+
 /// Bridges (yabridge chainloader copies) for the Windows CLAP plugins in that prefix.
 pub fn bridges_dir() -> PathBuf {
-    data_dir().join("bridges").join("clap")
+    bridges_root().join("clap")
 }
 
 /// The same for Windows VST3 plugins (merged bundles).
 pub fn bridges_vst3_dir() -> PathBuf {
-    data_dir().join("bridges").join("vst3")
+    bridges_root().join("vst3")
 }
 
 /// The same for Windows VST2 plugins (a chainloader `.so` with the `.dll` linked beside it).
 pub fn bridges_vst2_dir() -> PathBuf {
-    data_dir().join("bridges").join("vst2")
+    bridges_root().join("vst2")
 }
 
 pub fn settings_file() -> PathBuf {

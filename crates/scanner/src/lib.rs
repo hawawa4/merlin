@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 pub const DAW_BRIDGES_DIR: &str = "merlin-bridges";
 
 /// How deep below a scan folder `.clap` files are looked for (vendors use subfolders).
-const MAX_DEPTH: usize = 3;
+const MAX_DEPTH: usize = 5;
 
 /// One plugin file and what was found inside it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

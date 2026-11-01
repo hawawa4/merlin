@@ -9,6 +9,7 @@
 
 mod autotag;
 mod browser;
+mod cabinet;
 mod dialog;
 mod drivers;
 mod guard;
@@ -861,8 +862,28 @@ impl Running {
             }
             Action::InstallWindows(path) => {
                 let path = PathBuf::from(path.trim().trim_matches('"'));
-                s.install_windows_plugin(path)
+                match cabinet::advice(&path) {
+                    Some(advice) => {
+                        self.ui.cabinet_prompt = Some((path, advice));
+                        Ok(())
+                    }
+                    None => s.install_windows_plugin(path),
+                }
             }
+            Action::InstallWindowsHere(path) => {
+                if s.windows_runtime().is_none() {
+                    Err(anyhow!(
+                        "Windows plugin support is not installed yet: press \"Download Windows \
+                         plugin support\" here first"
+                    ))
+                } else {
+                    s.install_windows_plugin(path)
+                }
+            }
+            Action::OpenCabinet => cabinet::open().map(|()| {
+                s.say("Cabinet is open: the plugins it installs show up here when you come back");
+            }),
+            Action::InstallCabinet => s.install_cabinet(),
             Action::LaunchWindowsApp(which) => s.launch_windows_app(&which),
             Action::SyncWindows => s.sync_windows_plugins(),
             Action::OpenWinePrefix => s.open_wine_prefix(),
@@ -892,7 +913,10 @@ impl Running {
                         // Show the progress where it is written.
                         self.ui.settings_open = true;
                         self.ui.settings_tab = settings_ui::SettingsTab::Windows;
-                        if s.windows_runtime().is_none() {
+                        if let Some(advice) = cabinet::advice(&path) {
+                            self.ui.cabinet_prompt = Some((path, advice));
+                            Ok(())
+                        } else if s.windows_runtime().is_none() {
                             Err(anyhow!(
                                 "Windows plugin support is not installed yet: press \"Download \
                                  Windows plugin support\" here, then drop the installer again"
@@ -1381,6 +1405,8 @@ impl ApplicationHandler<UserEvent> for App {
                 event_loop.exit();
                 return;
             }
+            // Back from another app (Cabinet, a vendor's installer): pick up what it installed.
+            WindowEvent::Focused(true) => run.session.scan_on_focus(),
             WindowEvent::Resized(size) => {
                 if let (Some(w), Some(h)) =
                     (NonZeroU32::new(size.width), NonZeroU32::new(size.height))
@@ -1938,6 +1964,39 @@ fn parse_control_action(
 /// the downloaded Wine and yabridge, so that a restart can tell them from the user's own.
 const MANAGED_RUNTIME: &str = "MERLIN_MANAGED_RUNTIME";
 
+/// Points this process's `WINELOADER` and `PATH` at the Wine and yabridge the settings name, or at
+/// the downloaded runtime, with Mono and Gecko off, for plugins loaded in this process.
+///
+/// # Safety
+/// Changes the environment: only while no other thread exists.
+unsafe fn set_wine_environment(settings: &Settings) {
+    let prepend = |dir: &std::path::Path| {
+        let path = std::env::var("PATH").unwrap_or_default();
+        format!("{}:{path}", dir.display())
+    };
+    // The downloaded runtime fills in what neither the settings nor the environment name.
+    let managed = (settings.wine_loader.is_none() && std::env::var_os("WINELOADER").is_none())
+        .then(|| merlin_wine::runtime::installed(&paths::runtime_dir()))
+        .flatten();
+    unsafe {
+        std::env::set_var(
+            "WINEDLLOVERRIDES",
+            merlin_wine::dll_overrides(std::env::var("WINEDLLOVERRIDES").ok().as_deref()),
+        );
+        if let Some(w) = &settings.wine_loader {
+            std::env::set_var("WINELOADER", w);
+        }
+        if let Some(y) = &settings.yabridge_dir {
+            std::env::set_var("PATH", prepend(y));
+        }
+        if let Some(m) = &managed {
+            std::env::set_var("WINELOADER", &m.wine);
+            std::env::set_var("PATH", prepend(&m.yabridge_dir));
+            std::env::set_var(MANAGED_RUNTIME, &m.yabridge_dir);
+        }
+    }
+}
+
 fn main() -> Result<()> {
     let args = parse_args();
     paths::migrate_legacy_rigs();
@@ -1949,12 +2008,16 @@ fn main() -> Result<()> {
             Settings::default()
         }
     };
-    // Windows plugins: yabridge's chainloader finds Wine and its host binary through these.
+    // Windows plugins: yabridge's chainloader finds Wine and its host binary through `WINELOADER`
+    // and `PATH`. The plugin hosts get them per plugin, for the app's own bridges only
+    // (`Session::bridge_env`): set for this whole process they would reach the bridges other
+    // tools made too (Cabinet, yabridgectl), and run those tools' prefixes with our Wine.
     // SAFETY: set before any other thread exists.
     unsafe {
-        // A restart keeps the environment. What the previous run set for the downloaded runtime
-        // is taken back, or it would pass for the user's own Wine and a newer runtime would
-        // never be picked up (the app would restart into the old one forever).
+        // A restart keeps the environment. What a previous run set for the downloaded runtime
+        // (this version with `MERLIN_NO_SANDBOX`, or an older one) is taken back, or it would
+        // pass for the user's own Wine and a newer runtime would never be picked up (the app
+        // would restart into the old one forever).
         if let Some(yabridge) = std::env::var_os(MANAGED_RUNTIME) {
             std::env::remove_var(MANAGED_RUNTIME);
             std::env::remove_var("WINELOADER");
@@ -1967,33 +2030,11 @@ fn main() -> Result<()> {
             }
         }
     }
-    // The plugin hosts start Wine themselves, from this environment: no Mono/Gecko dialogs there
-    // either (a prefix that a newer Wine has to upgrade would open one).
-    // SAFETY: still before any other thread exists.
-    unsafe {
-        std::env::set_var(
-            "WINEDLLOVERRIDES",
-            merlin_wine::dll_overrides(std::env::var("WINEDLLOVERRIDES").ok().as_deref()),
-        );
-    }
-    // The downloaded runtime fills in what neither the settings nor the environment name.
-    let managed = (settings.wine_loader.is_none() && std::env::var_os("WINELOADER").is_none())
-        .then(|| merlin_wine::runtime::installed(&paths::runtime_dir()))
-        .flatten();
-    unsafe {
-        if let Some(w) = &settings.wine_loader {
-            std::env::set_var("WINELOADER", w);
-        }
-        if let Some(y) = &settings.yabridge_dir {
-            let path = std::env::var("PATH").unwrap_or_default();
-            std::env::set_var("PATH", format!("{}:{path}", y.display()));
-        }
-        if let Some(m) = &managed {
-            let path = std::env::var("PATH").unwrap_or_default();
-            std::env::set_var("WINELOADER", &m.wine);
-            std::env::set_var("PATH", format!("{}:{path}", m.yabridge_dir.display()));
-            std::env::set_var(MANAGED_RUNTIME, &m.yabridge_dir);
-        }
+    // Plugins loaded in this process (`MERLIN_NO_SANDBOX`, for debugging) can only get them from
+    // the process itself, so there they are set for everything, as before.
+    if sandbox::disabled() {
+        // SAFETY: still before any other thread exists.
+        unsafe { set_wine_environment(&settings) };
     }
     merlin_audio_io::preload_pipewire_jack();
     let guard = guard::Guard::new();

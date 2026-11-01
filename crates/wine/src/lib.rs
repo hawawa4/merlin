@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 pub mod apps;
 pub mod layout;
 pub mod runtime;
+pub mod version_info;
 
 pub use apps::WindowsApp;
 
@@ -43,9 +44,9 @@ const WIN_LINK: &str = "clap-win";
 /// asked for.
 pub const NO_MONO_GECKO: &str = "mscoree,mshtml=d";
 
-/// `WINEDLLOVERRIDES` for the app's own environment, which its plugin hosts inherit (they start
-/// Wine themselves, so [`Runtime::command`] does not reach them). What the user already set stays;
-/// if it already says something about Mono, that is their choice.
+/// `WINEDLLOVERRIDES` for the plugin hosts that load the app's own bridges (they start Wine
+/// themselves, so [`Runtime::command`] does not reach them). What the user already set stays; if
+/// it already says something about Mono, that is their choice.
 pub fn dll_overrides(existing: Option<&str>) -> String {
     match existing.map(str::trim).filter(|e| !e.is_empty()) {
         None => NO_MONO_GECKO.to_owned(),
@@ -75,13 +76,37 @@ impl Runtime {
             // user never asked for.
             .env("WINEDEBUG", "-all")
             .env("WINEDLLOVERRIDES", NO_MONO_GECKO);
+        if let Some(path) = self.path_with_yabridge() {
+            cmd.env("PATH", path);
+        }
+        cmd
+    }
+
+    /// `PATH` with yabridge's folder first: a copied chainloader finds yabridge there.
+    fn path_with_yabridge(&self) -> Option<OsString> {
         let path = std::env::var_os("PATH").unwrap_or_default();
         let mut dirs = vec![self.yabridge_dir.clone()];
         dirs.extend(std::env::split_paths(&path));
-        if let Ok(joined) = std::env::join_paths(dirs) {
-            cmd.env("PATH", joined);
+        std::env::join_paths(dirs).ok()
+    }
+
+    /// What a plugin host needs in its environment to load a bridge with a copied chainloader
+    /// ([`Placement::Copy`]): yabridge first on `PATH`, this Wine as `WINELOADER`, and the DLL
+    /// overrides. Only for those bridges: yabridge lets an explicit `WINELOADER` win, so a bridge
+    /// another tool made (Cabinet, `yabridgectl`) would run its prefix with this Wine instead of
+    /// its own.
+    pub fn bridge_env(&self) -> Vec<(OsString, OsString)> {
+        let mut env = vec![
+            ("WINELOADER".into(), self.wine.clone().into_os_string()),
+            (
+                "WINEDLLOVERRIDES".into(),
+                dll_overrides(std::env::var("WINEDLLOVERRIDES").ok().as_deref()).into(),
+            ),
+        ];
+        if let Some(path) = self.path_with_yabridge() {
+            env.push(("PATH".into(), path));
         }
-        cmd
+        env
     }
 
     /// `wine --version`, e.g. `wine-11.20 (Staging)`.
@@ -298,7 +323,8 @@ fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<()> {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Placement {
     /// A copy of the chainloader. It does not know where its runtime is, so whoever loads it
-    /// must put yabridge on `PATH` and set `WINELOADER` (the app does).
+    /// must put yabridge on `PATH` and set `WINELOADER` (the app does, for its plugin hosts:
+    /// [`Runtime::bridge_env`]).
     #[default]
     Copy,
     /// A symlink to the chainloader. The bridge finds its runtime from there (see
@@ -995,6 +1021,26 @@ mod tests {
             .map(|(k, _)| k.to_string_lossy().into_owned())
             .collect();
         assert!(env.contains(&"WINEPREFIX".to_string()) && env.contains(&"PATH".to_string()));
+    }
+
+    #[test]
+    fn bridges_get_this_wine_and_yabridge_first_on_the_path() {
+        let (rt, _) = fixture("bridge-env");
+        let env: std::collections::HashMap<String, OsString> = rt
+            .bridge_env()
+            .into_iter()
+            .map(|(k, v)| (k.to_string_lossy().into_owned(), v))
+            .collect();
+        assert_eq!(env["WINELOADER"], rt.wine.as_os_str());
+        let path = std::env::split_paths(&env["PATH"]).next();
+        assert_eq!(path.as_deref(), Some(rt.yabridge_dir.as_path()));
+        assert!(
+            env["WINEDLLOVERRIDES"]
+                .to_string_lossy()
+                .contains("mscoree")
+        );
+        // A prefix is never named: yabridge finds each plugin's own.
+        assert!(!env.contains_key("WINEPREFIX"));
     }
 
     #[test]

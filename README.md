@@ -47,9 +47,16 @@ folders in Settings. The scan runs in a separate process and caches its result, 
 that crashes the scanner is set aside instead of taking the app down.
 
 **Windows plugins.** Settings > Windows plugins downloads the Wine + yabridge runtime (about
-70 MB) and can run a plugin installer, or a vendor's manager app (Native Access and the like),
-inside Merlin's own Wine prefix. Plugins that show up are bridged automatically. Your system
-Wine is never used or modified.
+70 MB) and can run a plugin installer inside Merlin's own Wine prefix. Plugins that show up are
+bridged automatically. Your system Wine is never used or modified.
+
+Plugins that come through a vendor's store app (Native Instruments' Native Access and Kontakt, IK
+Product Manager, iZotope, Spitfire Audio, Arturia, Waves and others) need fixes under Wine that
+Merlin does not have. Install those with [Cabinet](https://github.com/mark12870/cabinet), a
+Flatpak that keeps a tested setup for each of these vendors: Merlin says so when you drop such an
+installer, and can install or open Cabinet for you. Plugins Cabinet installs (in
+`~/.vst3/cabinet` and the like) show up in Merlin's browser by themselves and run with Cabinet's
+own Wine. Plugins bridged with `yabridgectl` work the same way.
 
 **What you get:**
 

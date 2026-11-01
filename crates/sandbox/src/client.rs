@@ -5,6 +5,7 @@
 //! silent, every call fails at once, and the app is told with [`HostEvent::Crashed`].
 
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
@@ -164,7 +165,9 @@ struct EditorCache {
 
 impl RemotePlugin {
     /// Starts `host_exe` and has it load `id` from `path`. `load_timeout` bounds the whole load
-    /// (a cold Wine start takes a while).
+    /// (a cold Wine start takes a while). `env` is added to the host's environment (what a
+    /// bridge to a Windows plugin needs to find Wine and yabridge).
+    #[allow(clippy::too_many_arguments)]
     pub fn spawn(
         host_exe: &Path,
         path: &Path,
@@ -173,6 +176,7 @@ impl RemotePlugin {
         sample_rate: f64,
         max_block: u32,
         load_timeout: Duration,
+        env: &[(OsString, OsString)],
     ) -> Result<Self> {
         let shm = Shm::create()?;
         let (mine, theirs) = UnixStream::pair()?;
@@ -182,6 +186,7 @@ impl RemotePlugin {
             .arg(sock_fd.to_string())
             .arg(shm_fd.to_string())
             .stdin(Stdio::null())
+            .envs(env.iter().map(|(k, v)| (k, v)))
             // Its own group: killing it takes the Wine processes it starts along.
             .process_group(0);
         // SAFETY: only fcntl, which is async-signal-safe, runs between fork and exec.

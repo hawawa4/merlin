@@ -1041,27 +1041,81 @@ fn windows(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<A
         .show(ui, |ui| own_wine(ui, st, actions));
     ui.add_space(12.0);
     windows_plugins(ui, s, st, actions);
+    ui.add_space(12.0);
+    cabinet(ui, s, actions);
     ui.add_space(8.0);
     ui.strong("In use right now");
-    for var in ["WINELOADER", "PATH"] {
-        let value = std::env::var(var).unwrap_or_default();
-        let shown = if var == "PATH" {
-            value
-                .split(':')
-                .filter(|p| p.contains("yabridge"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        } else {
-            value
-        };
+    let rt = s.windows_runtime();
+    for (what, value) in [
+        ("Wine", rt.as_ref().map(|r| r.wine.display().to_string())),
+        (
+            "yabridge",
+            rt.as_ref().map(|r| r.yabridge_dir.display().to_string()),
+        ),
+    ] {
         ui.label(format!(
-            "{var}: {}",
-            if shown.is_empty() {
-                "(not set)"
-            } else {
-                &shown
-            }
+            "{what} for the app's own bridges: {}",
+            value.as_deref().unwrap_or("(not set)")
         ));
+    }
+    ui.label(
+        RichText::new("Bridges other tools made (Cabinet, yabridgectl) run with their own Wine.")
+            .small()
+            .weak(),
+    );
+}
+
+/// Cabinet, for the vendors whose plugins come through a store app (Native Access, ...): what it
+/// is, and a key to open or install it.
+fn cabinet(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
+    ui.strong("Plugins from vendors' store apps");
+    ui.label(
+        RichText::new(
+            "Native Access (Kontakt), IK Product Manager, iZotope Product Portal, Spitfire Audio, Arturia Software Center and other store apps need fixes under Wine that this app does not have. Cabinet, a free app, installs them with those fixes; the plugins it installs show up here by themselves.",
+        )
+        .small()
+        .weak(),
+    );
+    cabinet_keys(ui, s, actions);
+}
+
+/// "Open Cabinet", or "Install Cabinet" with what that runs; shared with the installer popup.
+pub fn cabinet_keys(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
+    use crate::cabinet;
+    ui.horizontal_wrapped(|ui| {
+        if cabinet::installed() {
+            ui.colored_label(status_color(Status::Ok), "Cabinet is installed");
+            if crate::hw::Cap::new("Open Cabinet").show(ui).clicked() {
+                actions.push(Action::OpenCabinet);
+            }
+        } else if cabinet::flatpak_available() {
+            ui.add_enabled_ui(!s.windows_busy(), |ui| {
+                if crate::hw::Cap::new("Install Cabinet")
+                    .show(ui)
+                    .on_hover_text("Installs Cabinet from its own Flatpak repository, for you only (no password asked)")
+                    .clicked()
+                {
+                    actions.push(Action::InstallCabinet);
+                }
+            });
+        } else {
+            ui.colored_label(
+                status_color(Status::Warn),
+                "Cabinet is a Flatpak: install Flatpak from your distribution first",
+            );
+        }
+        ui.hyperlink_to("About Cabinet", cabinet::HOMEPAGE);
+    });
+    if !cabinet::installed() {
+        ui.label(RichText::new("Installing it runs:").small().weak());
+        for line in cabinet::install_commands() {
+            ui.label(
+                RichText::new(line)
+                    .family(egui::FontFamily::Monospace)
+                    .size(11.0)
+                    .weak(),
+            );
+        }
     }
 }
 

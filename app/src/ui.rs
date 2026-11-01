@@ -181,7 +181,14 @@ pub enum Action {
     /// A file was dropped on the window (or the script's `drop`): install, load or open it.
     DropFile(PathBuf),
     /// Run a Windows plugin installer (path) in the managed prefix, then pick up its plugins.
+    /// An installer from a vendor whose store app needs Cabinet asks first.
     InstallWindows(String),
+    /// [`Action::InstallWindows`] without asking: "Install here anyway".
+    InstallWindowsHere(PathBuf),
+    /// Open Cabinet's window.
+    OpenCabinet,
+    /// Install Cabinet (a Flatpak, for this user).
+    InstallCabinet,
     /// Open a program installed in the Windows prefix (its path, or its name), usually a vendor's
     /// manager app; the plugins it installs are picked up when it is closed.
     LaunchWindowsApp(String),
@@ -371,6 +378,8 @@ pub struct UiState {
     pub new_base: usize,
     /// What a file being dragged over the window would do, while one is.
     pub drag_hint: Option<(String, bool)>,
+    /// An installer that is better run in Cabinet, while the popup that says so is open.
+    pub cabinet_prompt: Option<(PathBuf, crate::cabinet::Advice)>,
     pub perf: Option<(std::time::Instant, Vec<perf::Check>)>,
     pub peaks_shown: [f32; UI_SLOTS],
     pub held_key: Option<u8>,
@@ -451,6 +460,7 @@ impl UiState {
             new_slot: 0,
             new_base: 0,
             drag_hint: None,
+            cabinet_prompt: None,
             perf: None,
             peaks_shown: [0.0; UI_SLOTS],
             held_key: None,
@@ -475,6 +485,7 @@ pub fn draw(
     actions: &mut Vec<Action>,
 ) {
     drag_overlay(ui, st);
+    cabinet_prompt(ui, s, st, actions);
     poll_dialog(ui, s, st, actions);
     // The level meter: fed every frame, and the frames keep coming while it is still moving.
     let (now, dt) = ui.input(|i| (i.time, i.unstable_dt.min(0.1)));
@@ -841,6 +852,59 @@ fn sampler_panel(
                 }
             }
         });
+}
+
+/// "Better installed with Cabinet": over everything, for an installer from a vendor whose store
+/// app needs Cabinet's fixes, until the user picks what to do.
+fn cabinet_prompt(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
+    let Some((installer, advice)) = st.cabinet_prompt.clone() else {
+        return;
+    };
+    let file = installer
+        .file_name()
+        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    let mut close = false;
+    let shown = egui::Modal::new(egui::Id::unique("cabinet-prompt"))
+        .frame(egui::Frame::NONE)
+        .show(ui.ctx(), |ui| {
+            ui.set_width(640.0);
+            hw::rack(ui, "Better installed with Cabinet", advice.vendor, |ui| {
+                ui.add_space(4.0);
+                ui.label(format!("{file} is from {}.", advice.vendor));
+                ui.label(advice.why);
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(
+                        "Cabinet is a free app that installs Windows plugins with those fixes, each vendor in a Wine prefix of its own. Install the store app there (Library), sign in and install your plugins: they show up in this app's browser by themselves and run with Cabinet's Wine.",
+                    )
+                    .small()
+                    .weak(),
+                );
+                ui.add_space(6.0);
+                crate::settings_ui::cabinet_keys(ui, s, actions);
+                if s.windows_busy() && !s.windows_status.is_empty() {
+                    ui.label(&s.windows_status);
+                }
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    let here = hw::Cap::new("Install here anyway")
+                        .show(ui)
+                        .on_hover_text("Run the installer in this app's own Windows environment, without Cabinet's fixes");
+                    if here.clicked() {
+                        actions.push(Action::InstallWindowsHere(installer.clone()));
+                        close = true;
+                    }
+                    if hw::Cap::new("Close").show(ui).clicked() {
+                        close = true;
+                    }
+                });
+            });
+        });
+    // Opening Cabinet is the way on: the popup has done its job.
+    let opened = actions.iter().any(|a| matches!(a, Action::OpenCabinet));
+    if close || shown.should_close() || opened {
+        st.cabinet_prompt = None;
+    }
 }
 
 /// A banner over everything while a file is dragged across the window.

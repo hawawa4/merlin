@@ -280,6 +280,15 @@ pub struct Session {
     last_load_update: Instant,
     /// A scan was asked for while one was running: run it next, forgetting these files.
     scan_again: Option<Vec<PathBuf>>,
+    /// The running scan was started because the window got the focus back: it only says
+    /// something when it finds a file it had to probe.
+    scan_quiet: bool,
+    /// The running scan probed at least one new or changed file.
+    scan_probed: bool,
+    /// When the last focus scan started.
+    focus_scan_at: Option<Instant>,
+    /// The hint about NI products from Cabinet was given (once a run).
+    cabinet_hint_shown: bool,
     windows_rx: Option<mpsc::Receiver<WindowsMsg>>,
     /// The running job is the runtime download: restart into it when it succeeds.
     restart_after_job: bool,
@@ -399,6 +408,10 @@ impl Session {
             host_cpu: Default::default(),
             last_load_update: Instant::now(),
             scan_again: None,
+            scan_quiet: false,
+            scan_probed: false,
+            focus_scan_at: None,
+            cabinet_hint_shown: false,
             windows_rx: None,
             restart_after_job: false,
             runtime_changed: Arc::default(),
@@ -500,6 +513,20 @@ impl Session {
         })
     }
 
+    /// What the plugin hosts and the scanner add to their environment for the app's own bridges:
+    /// the Wine and yabridge [`Self::windows_runtime`] names. The app process itself does not set
+    /// them (except with `MERLIN_NO_SANDBOX`, see `main`), so bridges other tools made keep their
+    /// own Wine.
+    pub fn bridge_env(&self) -> crate::sandbox::BridgeEnv {
+        crate::sandbox::BridgeEnv {
+            root: crate::paths::bridges_root(),
+            vars: self
+                .windows_runtime()
+                .map(|rt| rt.bridge_env())
+                .unwrap_or_default(),
+        }
+    }
+
     /// The Wine prefixes to look for Windows plugins in: ours first, then the one the
     /// environment names (`WINEPREFIX`) and `~/.wine`, when they exist.
     pub fn windows_prefixes(&self) -> Vec<PathBuf> {
@@ -565,6 +592,9 @@ impl Session {
         self.windows_status = "contacting the download server...".into();
         self.restart_after_job = true;
         let changed = self.runtime_changed.clone();
+        let before = self.installed_runtime().map(|r| r.wine);
+        // Bridges for the Windows plugins in the user's folders, once it is in place.
+        self.windows_sync_again = true;
         let prefix = self
             .settings
             .wine_prefix
@@ -589,9 +619,16 @@ impl Session {
             // Bridges made for other plugin hosts (`merlin-bridge`) use this prefix for
             // plugins that are in no prefix; a new runtime must say so too.
             let _ = installed.set_default_prefix(&prefix);
-            // Wine is chosen at startup: a restart is needed unless this process already runs
-            // with exactly this runtime.
-            let in_use = std::env::var_os("WINELOADER").is_some_and(|w| w == installed.wine);
+            // A plugin host takes the runtime that is current when it starts, so a first one is
+            // in use at once. A new one replacing another needs a restart: hosts still running
+            // the old Wine keep its wineserver, which a different Wine cannot join. Plugins
+            // loaded in this process (`MERLIN_NO_SANDBOX`) take Wine from the environment,
+            // which is set at startup.
+            let in_use = if crate::sandbox::disabled() {
+                std::env::var_os("WINELOADER").is_some_and(|w| w == installed.wine)
+            } else {
+                before.is_none_or(|w| w == installed.wine)
+            };
             changed.store(!in_use, Ordering::Relaxed);
             Ok(if in_use {
                 format!(
@@ -620,6 +657,18 @@ impl Session {
         let prefixes = self.windows_prefixes();
         let extra = self.settings.plugin_dirs.clone();
         self.start_windows_job(move |_| sync_report(&rt, &prefixes, &extra))
+    }
+
+    /// Installs Cabinet (for vendors' store apps) on a worker thread; the Windows tab and the
+    /// installer popup show how far it got.
+    pub fn install_cabinet(&mut self) -> Result<()> {
+        self.windows_status = "installing Cabinet...".into();
+        self.start_windows_job(|tx| {
+            crate::cabinet::install(&|text| {
+                let _ = tx.send(WindowsMsg::Status(text));
+            })?;
+            Ok("Cabinet is installed: open it to install your store apps".into())
+        })
     }
 
     /// Shows the Wine prefix in the file manager. When it is not there yet it is made first (in
@@ -878,6 +927,19 @@ impl Session {
         self.start_scan(forget);
         // New Windows plugins in the folders are bridged first, then scanned.
         self.request_windows_sync();
+    }
+
+    /// The window got the focus back: look for plugins that appeared meanwhile (installed by
+    /// Cabinet or another tool, which the app is not told about), at most every few seconds, and
+    /// without a word unless something new was found.
+    pub fn scan_on_focus(&mut self) {
+        const EVERY: Duration = Duration::from_secs(5);
+        if self.scan_rx.is_some() || self.focus_scan_at.is_some_and(|t| t.elapsed() < EVERY) {
+            return;
+        }
+        self.focus_scan_at = Some(Instant::now());
+        self.start_scan(Vec::new());
+        self.scan_quiet = true;
     }
 
     /// Probes one file again (the "retry" for a file that failed to scan).
@@ -1155,13 +1217,17 @@ impl Session {
             // One scan at a time; ask for another when this one is done (new files may have
             // appeared since it listed the folders).
             self.scan_again.get_or_insert_with(Vec::new).extend(forget);
+            self.scan_quiet = false;
             return;
         }
+        self.scan_quiet = false;
+        self.scan_probed = false;
         self.scan_rx = Some(scan_worker::spawn(
             self.plugin_dirs.clone(),
             self.settings.ignored_files.clone(),
             crate::paths::plugin_cache_file(),
             forget,
+            self.bridge_env(),
             self.proxy.clone(),
         ));
     }
@@ -1175,7 +1241,10 @@ impl Session {
         let mut changed = false;
         while let Ok(msg) = rx.try_recv() {
             match msg {
-                ScanMsg::Started(p) => self.scan_current = Some(p),
+                ScanMsg::Started(p) => {
+                    self.scan_current = Some(p);
+                    self.scan_probed = true;
+                }
                 ScanMsg::Entry(e) => {
                     match self.entries.iter_mut().find(|x| x.path == e.path) {
                         Some(slot) => *slot = e,
@@ -1192,8 +1261,12 @@ impl Session {
         if finished {
             self.scan_rx = None;
             self.scan_current = None;
+            let quiet = self.scan_quiet && !self.scan_probed;
             if let Some(forget) = self.scan_again.take() {
                 self.start_scan(forget);
+            }
+            if quiet {
+                return;
             }
             let failed = self.entries.iter().filter(|e| e.error.is_some()).count();
             self.say(format!(
@@ -1261,14 +1334,14 @@ impl Session {
     }
 
     fn create_plugin(&mut self, i: usize, path: &Path, id: &str, windows: bool) -> Result<Loaded> {
-        let name = self
+        let (name, vendor) = self
             .found
             .iter()
             .chain(&self.hidden)
             .chain(&self.effects)
             .find(|f| f.info.id == id)
-            .map(|f| f.info.name.clone())
-            .unwrap_or_else(|| id.to_owned());
+            .map(|f| (f.info.name.clone(), f.info.vendor.clone()))
+            .unwrap_or_else(|| (id.to_owned(), String::new()));
         self.guard.register_plugin(HostInfo {
             slot: i,
             path: path.to_owned(),
@@ -1300,6 +1373,17 @@ impl Session {
                 return Err(e);
             }
         };
+        // NI products from Cabinet are activated by NI's background service, which runs while
+        // Native Access does; loaded without it, Kontakt opens as a demo.
+        if crate::cabinet::is_bridge(path)
+            && vendor.to_lowercase().contains("native instruments")
+            && !std::mem::replace(&mut self.cabinet_hint_shown, true)
+        {
+            self.say(format!(
+                "{name} comes from Cabinet: if it opens as a demo, open Native Access in Cabinet \
+                 (it activates Native Instruments products while it runs), then load {name} again"
+            ));
+        }
         if windows && in_process {
             guard::install_socket_hook();
             for pid in guard::host_children().difference(&before) {
@@ -1354,8 +1438,9 @@ impl Session {
             // Shorter than the watchdog's limits, so a stuck load ends here first.
             let limit = Duration::from_secs(if windows { 100 } else { 30 });
             let host = crate::sandbox::plugin_host_exe();
+            let env = self.bridge_env();
             Box::new(
-                    RemotePlugin::spawn(&host, path, id, waker, sample_rate, MAX_BLOCK as u32, limit)
+                    RemotePlugin::spawn(&host, path, id, waker, sample_rate, MAX_BLOCK as u32, limit, env.for_file(path))
                         .map_err(|e| match host.exists() {
                             true => e,
                             false => e.context(format!(

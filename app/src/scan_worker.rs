@@ -9,6 +9,7 @@ use std::time::Duration;
 use merlin_scanner::{Cache, Entry, run_isolated, scan_ignoring};
 use winit::event_loop::EventLoopProxy;
 
+use crate::sandbox::BridgeEnv;
 use crate::session::UserEvent;
 
 /// A native plugin should load in well under this; the first Wine start can take much longer.
@@ -35,9 +36,11 @@ fn probe(
     exe: &Path,
     file: &Path,
     windows: bool,
+    env: &BridgeEnv,
 ) -> anyhow::Result<Vec<merlin_hosting::PluginInfo>> {
     let mut cmd = Command::new(exe);
-    cmd.arg(file);
+    cmd.arg(file)
+        .envs(env.for_file(file).iter().map(|(k, v)| (k, v)));
     if windows {
         cmd.arg("--windows");
     }
@@ -52,11 +55,13 @@ fn probe(
 }
 
 /// Starts a scan of `dirs`, leaving the `ignored` files alone. Files in `forget` are probed again even if the cache has them.
+/// The app's own bridges are probed with `env`.
 pub fn spawn(
     dirs: Vec<PathBuf>,
     ignored: Vec<PathBuf>,
     cache_file: PathBuf,
     forget: Vec<PathBuf>,
+    env: BridgeEnv,
     proxy: EventLoopProxy<UserEvent>,
 ) -> mpsc::Receiver<ScanMsg> {
     let (tx, rx) = mpsc::channel();
@@ -76,7 +81,7 @@ pub fn spawn(
                 &dirs,
                 &ignored,
                 &mut cache,
-                &|file, windows| probe(&exe, file, windows),
+                &|file, windows| probe(&exe, file, windows, &env),
                 |file| send(ScanMsg::Started(file.to_owned())),
                 |entry| send(ScanMsg::Entry(entry.clone())),
             );

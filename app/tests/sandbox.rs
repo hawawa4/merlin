@@ -63,6 +63,7 @@ fn start() -> Option<(RemotePlugin, mpsc::Receiver<HostEvent>)> {
         48_000.0,
         512,
         Duration::from_secs(20),
+        &[],
     )
     .expect("the plugin loads");
     Some((plugin, rx))
@@ -311,6 +312,7 @@ fn a_plugin_that_cannot_load_is_an_error_and_a_crash_while_loading_is_one_too() 
         48_000.0,
         512,
         Duration::from_secs(20),
+        &[],
     )
     .err()
     .expect("an error");
@@ -328,6 +330,7 @@ fn a_plugin_that_cannot_load_is_an_error_and_a_crash_while_loading_is_one_too() 
         48_000.0,
         512,
         Duration::from_secs(20),
+        &[],
     )
     .err()
     .expect("an error");
@@ -340,6 +343,7 @@ fn a_plugin_that_cannot_load_is_an_error_and_a_crash_while_loading_is_one_too() 
         48_000.0,
         512,
         Duration::from_secs(1),
+        &[],
     );
     assert!(missing.is_err());
 }
