@@ -136,6 +136,14 @@ impl Session {
         }
     }
 
+    /// Stops the transport (or a start that is waiting); nothing when it is already stopped.
+    pub fn transport_stop(&mut self) {
+        let shared = &self.engine.shared.transport;
+        if self.pending_start.is_some() || shared.running() || shared.counting_in() {
+            self.transport_toggle();
+        }
+    }
+
     pub(super) fn start_transport_now(&mut self) {
         let t = self.rig.transport;
         // The song's own time signature is already on the audio thread.

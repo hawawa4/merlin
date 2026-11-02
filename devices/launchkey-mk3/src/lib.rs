@@ -246,14 +246,14 @@ pub fn describe(model: Model) -> Description {
             "Scene down",
             true,
         ),
-        ("capture", None, 74, "Capture MIDI", false),
+        ("capture", Some(Role::Capture), 74, "Capture MIDI", false),
         ("quantise", Some(Role::Tap), 75, "Quantise", false),
-        ("click", Some(Role::Click), 76, "Click", false),
+        ("click", Some(Role::Click), 76, "Click", true),
         ("undo", Some(Role::Undo), 77, "Undo", false),
-        ("play", Some(Role::Play), 115, "Play", false),
+        ("play", Some(Role::Play), 115, "Play", true),
         ("stop", Some(Role::Stop), 116, "Stop", false),
-        ("record", Some(Role::Record), 117, "Record", false),
-        ("loop", Some(Role::Loop), 118, "Loop", false),
+        ("record", Some(Role::Record), 117, "Record", true),
+        ("loop", Some(Role::Loop), 118, "Loop", true),
     ];
     for (name, role, number, label, lit) in buttons {
         add(
@@ -539,6 +539,23 @@ mod tests {
             (prev.role, prev.source.kind),
             (Some(Role::TrackPrev), SourceKind::Cc(103))
         );
+        // The transport row, Capture MIDI, Click and Undo, with the lights the host can drive.
+        for (name, role, cc, lit) in [
+            ("play", Role::Play, 115, true),
+            ("stop", Role::Stop, 116, false),
+            ("record", Role::Record, 117, true),
+            ("capture", Role::Capture, 74, false),
+            ("click", Role::Click, 76, true),
+            ("undo", Role::Undo, 77, false),
+            ("loop", Role::Loop, 118, true),
+        ] {
+            let c = d.control(&format!("button.{name}")).unwrap();
+            assert_eq!(
+                (c.role, c.source.kind, c.has_light),
+                (Some(role), SourceKind::Cc(cc), lit),
+                "{name}"
+            );
+        }
         // The same ids are unique.
         let mut ids: Vec<_> = d.all_controls().map(|c| c.id.clone()).collect();
         let n = ids.len();

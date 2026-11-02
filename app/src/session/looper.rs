@@ -102,6 +102,16 @@ impl Session {
         }
     }
 
+    /// Switches the slot to the other part (the one it is not on, or heading for).
+    pub fn loop_toggle_part(&mut self, slot: usize) {
+        if slot >= UI_SLOTS || self.plugins[slot].is_none() {
+            return;
+        }
+        let lane = self.loop_view().lanes[slot];
+        let next = 1 - lane.pending.unwrap_or(lane.part);
+        self.loop_cmd(LoopCommand::Part(slot, next));
+    }
+
     /// Every slot switches to part A or B.
     pub fn loop_all(&mut self, part: usize) {
         for slot in 0..UI_SLOTS {

@@ -111,7 +111,16 @@ pub enum ControlAction {
     PrevSong,
     /// Start or stop the transport (count-in and click, MIDI clock).
     TransportToggle,
+    /// Stop the transport (and with it the loops); does nothing when it is stopped.
+    TransportStop,
     ClickToggle,
+    /// The loop station's REC button for the slot that plays: arm, finish, overdub, back to
+    /// playing.
+    LoopRecord,
+    /// Undo the last recorded pass of the slot that plays.
+    LoopUndo,
+    /// Switch the slot that plays between loop part A and B (at the next round of the loop).
+    LoopPart,
     /// The free-running metronome in the header: clicks at the tempo, transport or not.
     MetronomeToggle,
     /// Tap the tempo with a foot switch or a pad.
@@ -236,6 +245,10 @@ impl ControlAction {
                 format!("Recall snapshot {}", snapshot as usize + 1)
             }
             Self::TransportToggle => "Start / stop the transport".into(),
+            Self::TransportStop => "Stop the transport".into(),
+            Self::LoopRecord => "Loop: record / overdub the slot that plays".into(),
+            Self::LoopUndo => "Loop: undo the last pass of the slot that plays".into(),
+            Self::LoopPart => "Loop: switch the slot that plays between part A and B".into(),
             Self::ClickToggle => "Click on / off".into(),
             Self::MetronomeToggle => "Metronome on / off".into(),
             Self::TapTempo => "Tap tempo".into(),

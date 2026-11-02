@@ -4,7 +4,8 @@
 //! the device back.
 
 use merlin_audio_io::{DEVICE_OUTPUTS, DeviceMessage, friendly_name, sink_friendly_name};
-use merlin_control::surface::{self, PADS, RigState, SlotState};
+use merlin_control::surface::{self, LoopLight, PADS, RigState, SlotState};
+use merlin_engine::looper::LoopMode;
 use surface_api::Surface;
 
 use super::{Session, UI_SLOTS};
@@ -131,6 +132,8 @@ impl Session {
         }
         v.snapshots = self.rig.snapshots.len();
         v.snapshot = self.last_snapshot;
+        v.transport_running = self.transport_running() || self.counting_in();
+        v.click_on = self.rig.transport.click;
         let primary = self.targets.first().copied();
         v.lines[0] = match primary.and_then(|i| Some((i, self.rig.slots[i].instrument.as_ref()?))) {
             Some((i, r)) => format!("{} {}", i + 1, r.name),
@@ -142,6 +145,16 @@ impl Session {
             (None, Some(n)) => format!("Snap {} {tempo:.0}bpm", n + 1),
             (None, None) => format!("{tempo:.0} bpm"),
         };
+        if let Some(i) = primary.filter(|&i| i < UI_SLOTS) {
+            let lane = self.loop_view().lanes[i];
+            v.part_b = lane.part == 1;
+            v.part_switching = lane.pending.is_some();
+            v.looping = match lane.mode {
+                LoopMode::Armed => LoopLight::Armed,
+                LoopMode::Rec | LoopMode::Over => LoopLight::Recording,
+                LoopMode::Idle | LoopMode::Play => LoopLight::Idle,
+            };
+        }
         if let Some(i) = primary {
             for k in 0..PADS {
                 v.knobs[k] = self.knob_label(i, k);

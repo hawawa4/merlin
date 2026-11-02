@@ -52,6 +52,11 @@ pub fn profile(device: &str, desc: &Description) -> Vec<Mapping> {
                 Some(Role::SceneNext) => ControlAction::NextPart,
                 Some(Role::Play) => ControlAction::TransportToggle,
                 Some(Role::Click) => ControlAction::ClickToggle,
+                Some(Role::Stop) => ControlAction::TransportStop,
+                Some(Role::Record) => ControlAction::LoopRecord,
+                Some(Role::Undo) => ControlAction::LoopUndo,
+                Some(Role::Loop) => ControlAction::LoopPart,
+                Some(Role::Capture) => ControlAction::CaptureMidi,
                 Some(Role::Tap) => ControlAction::TapTempo,
                 _ => continue,
             },
@@ -106,12 +111,32 @@ pub struct RigState {
     pub faders: [String; PADS + 1],
     /// The colour the drum pads take: that of the slot that plays.
     pub drum: Option<Rgb>,
+    pub transport_running: bool,
+    pub click_on: bool,
+    /// What the loop station is doing with the slot that plays.
+    pub looping: LoopLight,
+    /// The loop part of the slot that plays: B is playing, and a switch is waiting.
+    pub part_b: bool,
+    pub part_switching: bool,
+}
+
+/// How the loop station shows on the Record button.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LoopLight {
+    #[default]
+    Idle,
+    /// Waiting for the loop to come round, to start recording.
+    Armed,
+    /// Recording (the first pass or an overdub).
+    Recording,
 }
 
 const GREY: Rgb = [110, 110, 110];
 const WHITE: Rgb = [255, 255, 255];
 const GREEN: Rgb = [70, 255, 70];
 const BLUE: Rgb = [80, 90, 255];
+const RED: Rgb = [255, 70, 70];
+const AMBER: Rgb = [255, 150, 60];
 
 /// The lights, text and labels for a device with this description.
 pub fn to_view(state: &RigState, desc: &Description) -> View {
@@ -150,6 +175,29 @@ pub fn to_view(state: &RigState, desc: &Description) -> View {
                 (true, false) => Light::steady(WHITE),
                 (true, true) => Light::steady(GREY),
             }),
+            (Kind::Button, _) => match c.role {
+                Some(Role::Play) => Some(if state.transport_running {
+                    Light::steady(GREEN)
+                } else {
+                    Light::OFF
+                }),
+                Some(Role::Click) => Some(if state.click_on {
+                    Light::steady(WHITE)
+                } else {
+                    Light::OFF
+                }),
+                Some(Role::Loop) => Some(match (state.part_switching, state.part_b) {
+                    (true, _) => Light::pulse(AMBER),
+                    (false, true) => Light::steady(AMBER),
+                    (false, false) => Light::OFF,
+                }),
+                Some(Role::Record) => Some(match state.looping {
+                    LoopLight::Idle => Light::OFF,
+                    LoopLight::Armed => Light::pulse(RED),
+                    LoopLight::Recording => Light::steady(RED),
+                }),
+                _ => None,
+            },
             _ => None,
         };
         if let Some(light) = light {
@@ -234,6 +282,12 @@ mod tests {
             ("prev", Role::TrackPrev, 91),
             ("play", Role::Play, 92),
             ("shift", Role::Shift, 93),
+            ("stop", Role::Stop, 94),
+            ("record", Role::Record, 95),
+            ("undo", Role::Undo, 96),
+            ("capture", Role::Capture, 97),
+            ("click", Role::Click, 98),
+            ("loop", Role::Loop, 99),
         ] {
             controls.push(ctl(id::button(name), Kind::Button, Some(role), 0, n));
         }
@@ -305,6 +359,34 @@ mod tests {
             m.handle(&cc(dev, 93, 127), &ctx).is_empty(),
             "no job for Shift"
         );
+        // The transport row drives the loop station for the slot that plays.
+        assert_eq!(
+            m.handle(&cc(dev, 94, 127), &ctx),
+            vec![Outcome::TransportStop]
+        );
+        assert_eq!(
+            m.handle(&cc(dev, 95, 127), &ctx),
+            vec![Outcome::LoopRecord(0)]
+        );
+        assert_eq!(
+            m.handle(&cc(dev, 96, 127), &ctx),
+            vec![Outcome::LoopUndo(0)]
+        );
+        assert_eq!(
+            m.handle(&cc(dev, 97, 127), &ctx),
+            vec![Outcome::CaptureMidi]
+        );
+        assert_eq!(
+            m.handle(&cc(dev, 99, 127), &ctx),
+            vec![Outcome::LoopPart(0)]
+        );
+        // Nothing plays: nothing to record on.
+        let idle = Context {
+            primary: None,
+            ..Context::default()
+        };
+        assert!(m.handle(&cc(dev, 95, 127), &idle).is_empty());
+        assert!(m.handle(&cc(dev, 99, 127), &idle).is_empty());
         assert_eq!(
             m.handle(&cc(dev, 70, 127), &ctx),
             vec![Outcome::ToggleMute(0)]
@@ -363,7 +445,40 @@ mod tests {
         s.lines = ["1 Piano".into(), "Snap 2".into()];
         s.knobs[2] = ("Bass".into(), "+3dB".into());
         s.faders[8] = "1.00".into();
+        s.transport_running = true;
+        s.click_on = false;
+        s.looping = LoopLight::Armed;
         let v = to_view(&s, &d);
+        assert_eq!(v.lights["button.play"], Light::steady(GREEN));
+        assert_eq!(v.lights["button.click"], Light::OFF);
+        assert_eq!(v.lights["button.record"], Light::pulse(RED));
+        s.looping = LoopLight::Recording;
+        assert_eq!(to_view(&s, &d).lights["button.record"], Light::steady(RED));
+        assert_eq!(v.lights["button.loop"], Light::OFF, "part A");
+        s.part_b = true;
+        assert_eq!(
+            to_view(&s, &d).lights["button.loop"],
+            Light::steady(AMBER),
+            "part B"
+        );
+        s.part_switching = true;
+        assert_eq!(
+            to_view(&s, &d).lights["button.loop"],
+            Light::pulse(AMBER),
+            "waiting to switch"
+        );
+        s.part_b = false;
+        s.part_switching = false;
+        s.looping = LoopLight::Idle;
+        s.transport_running = false;
+        s.click_on = true;
+        let v2 = to_view(&s, &d);
+        assert_eq!(v2.lights["button.play"], Light::OFF);
+        assert_eq!(v2.lights["button.click"], Light::steady(WHITE));
+        assert_eq!(v2.lights["button.record"], Light::OFF);
+        s.transport_running = true;
+        s.click_on = false;
+        s.looping = LoopLight::Armed;
         assert_eq!(v.lights["main.pad.0.0"], Light::pulse([255, 0, 0]));
         assert_eq!(v.lights["main.pad.0.1"], Light::steady(GREY), "muted");
         assert_eq!(v.lights["main.pad.0.2"], Light::OFF, "not loaded");

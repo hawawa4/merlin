@@ -663,9 +663,7 @@ impl Running {
                 Ok(())
             }
             Action::TransportStop => {
-                if s.transport_running() || s.counting_in() {
-                    s.transport_toggle();
-                }
+                s.transport_stop();
                 Ok(())
             }
             Action::SetClickState(on) => {

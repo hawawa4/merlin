@@ -37,6 +37,10 @@ pub enum ActionKind {
     SelectedMacro,
     SelectedVolume,
     TransportToggle,
+    TransportStop,
+    LoopRecord,
+    LoopUndo,
+    LoopPart,
     ClickToggle,
     MetronomeToggle,
     TapTempo,
@@ -56,7 +60,7 @@ pub enum ActionKind {
 }
 
 impl ActionKind {
-    const ALL: [ActionKind; 28] = [
+    const ALL: [ActionKind; 32] = [
         Self::SelectSlot,
         Self::ToggleLayer,
         Self::ToggleMute,
@@ -69,6 +73,10 @@ impl ActionKind {
         Self::SelectedMacro,
         Self::SelectedVolume,
         Self::TransportToggle,
+        Self::TransportStop,
+        Self::LoopRecord,
+        Self::LoopUndo,
+        Self::LoopPart,
         Self::ClickToggle,
         Self::MetronomeToggle,
         Self::TapTempo,
@@ -101,6 +109,10 @@ impl ActionKind {
             Self::SelectedMacro => "Macro of the slot that plays (knob or fader)",
             Self::SelectedVolume => "Volume of the slot that plays (fader or knob)",
             Self::TransportToggle => "Start / stop (count-in, click, MIDI clock)",
+            Self::TransportStop => "Stop (transport and loops)",
+            Self::LoopRecord => "Loop: record / overdub the slot that plays",
+            Self::LoopUndo => "Loop: undo the last pass of the slot that plays",
+            Self::LoopPart => "Loop: switch the slot that plays between part A and B",
             Self::ClickToggle => "Click on / off (during songs)",
             Self::MetronomeToggle => "Metronome on / off",
             Self::TapTempo => "Tap tempo",
@@ -149,6 +161,10 @@ impl ActionKind {
             Self::SelectedMacro => A::SelectedMacro { index: base },
             Self::SelectedVolume => A::SelectedVolume,
             Self::TransportToggle => A::TransportToggle,
+            Self::TransportStop => A::TransportStop,
+            Self::LoopRecord => A::LoopRecord,
+            Self::LoopUndo => A::LoopUndo,
+            Self::LoopPart => A::LoopPart,
             Self::ClickToggle => A::ClickToggle,
             Self::MetronomeToggle => A::MetronomeToggle,
             Self::TapTempo => A::TapTempo,

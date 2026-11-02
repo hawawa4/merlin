@@ -85,9 +85,15 @@ pub enum Outcome {
     NextSong,
     PrevSong,
     TransportToggle,
+    TransportStop,
     ClickToggle,
     MetronomeToggle,
     TapTempo,
+    /// The loop station for the slot that plays (the first selected one).
+    LoopRecord(usize),
+    LoopUndo(usize),
+    /// Switch the slot between loop parts A and B.
+    LoopPart(usize),
     Panic,
     CaptureMidi,
     /// Knob positions (0..=1): the session turns them into the target's own range.
@@ -359,6 +365,10 @@ fn fire(action: &ControlAction, inc: &Incoming, ctx: &Context) -> Option<Outcome
             }))
         }
         ControlAction::TransportToggle => Some(Outcome::TransportToggle),
+        ControlAction::TransportStop => Some(Outcome::TransportStop),
+        ControlAction::LoopRecord => ctx.primary.map(Outcome::LoopRecord),
+        ControlAction::LoopUndo => ctx.primary.map(Outcome::LoopUndo),
+        ControlAction::LoopPart => ctx.primary.map(Outcome::LoopPart),
         ControlAction::ClickToggle => Some(Outcome::ClickToggle),
         ControlAction::MetronomeToggle => Some(Outcome::MetronomeToggle),
         ControlAction::TapTempo => Some(Outcome::TapTempo),

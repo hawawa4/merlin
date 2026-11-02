@@ -99,6 +99,8 @@ pub enum Role {
     Record,
     Loop,
     Click,
+    /// Save what was just played (Capture MIDI).
+    Capture,
     /// Quantise or tap tempo.
     Tap,
     Undo,
