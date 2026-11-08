@@ -119,6 +119,30 @@ pub enum HostEvent {
     Crashed,
 }
 
+/// How the audio thread of a plugin process got scheduled, compared with the app's own audio
+/// thread: a plugin that plays at a lower priority than the thread waiting for it is preempted
+/// by anything busy on the machine, and the wait shows up as dropouts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AudioPriority {
+    /// Realtime, like the app's audio thread.
+    Realtime,
+    /// Realtime, granted by the RealtimeKit service (this user has no realtime limit of their own).
+    RealtimeByRtkit,
+    /// Not realtime, but a raised priority (a lower nice value).
+    Raised,
+    /// Ordinary priority: it was refused anything better.
+    Normal,
+    /// Nothing to match: the app's audio thread is not realtime either.
+    Unneeded,
+}
+
+impl AudioPriority {
+    /// Does the plugin play at the priority of the thread that waits for it?
+    pub fn is_matched(self) -> bool {
+        !matches!(self, Self::Raised | Self::Normal)
+    }
+}
+
 /// How a plugin reaches the main thread. Called from any thread, so keep it cheap and
 /// non-blocking (the app implements it with an event-loop proxy).
 pub trait Waker: Send + Sync {
@@ -170,6 +194,12 @@ pub trait PluginHandle {
 
     /// The process the plugin runs in, when it is not ours.
     fn process_id(&self) -> Option<u32> {
+        None
+    }
+
+    /// How the thread that plays the plugin is scheduled, for plugins in a process of their own
+    /// (`None` before that thread has run, and for plugins that play on our audio thread).
+    fn audio_priority(&self) -> Option<AudioPriority> {
         None
     }
 

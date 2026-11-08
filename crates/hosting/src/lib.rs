@@ -5,20 +5,23 @@
 
 pub mod builtin;
 pub mod clap;
+pub mod denormals;
 pub mod host_time;
 pub mod lv2;
 mod midi;
 mod open;
 mod plugin;
+pub mod slice;
 pub mod soundfont;
 pub mod vst2;
 pub mod vst3;
 
+pub use denormals::flush_to_zero;
 pub use midi::{MidiEvent, MidiKind};
 pub use open::open_plugin;
 pub use plugin::{
-    EditorSize, HostEvent, ParamInfo, PluginEditor, PluginHandle, PluginInfo, PresetInfo,
-    SamplerTone, Waker,
+    AudioPriority, EditorSize, HostEvent, ParamInfo, PluginEditor, PluginHandle, PluginInfo,
+    PresetInfo, SamplerTone, Waker,
 };
 
 /// What a processor tells the engine after a block.

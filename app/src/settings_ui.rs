@@ -1507,6 +1507,7 @@ fn performance(ui: &mut egui::Ui, s: &Session, st: &mut UiState) {
             s.sample_rate,
             b.stats.xruns.load(Ordering::Relaxed),
             b.cpu_load(),
+            s.plugin_priorities(),
         );
         st.perf = Some((Instant::now(), perf::evaluate(&inputs)));
     }

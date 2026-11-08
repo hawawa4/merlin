@@ -17,6 +17,7 @@
 mod client;
 pub mod host;
 pub mod proto;
+mod rtkit;
 pub mod shm;
 
 pub use client::{PluginFailed, RemotePlugin, RemoteProcessor};

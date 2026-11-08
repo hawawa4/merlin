@@ -19,7 +19,7 @@ use merlin_hosting::{
 };
 
 use crate::proto::{Request, Response, ToApp, ToHost, read_message, write_message};
-use crate::shm::{MAX_EVENTS, Shm, futex_wait, futex_wake};
+use crate::shm::{MAX_EVENTS, Shm, futex_wait, futex_wake, sched};
 
 /// What the main thread has to look at.
 enum Task {
@@ -27,11 +27,23 @@ enum Task {
     Host(HostEvent),
 }
 
-struct HostWaker(Mutex<Sender<Task>>);
+struct HostWaker {
+    tasks: Sender<Task>,
+    /// A main-thread callback is already queued and has not run yet.
+    callback_queued: Arc<AtomicBool>,
+}
 
 impl Waker for HostWaker {
     fn wake(&self, event: HostEvent) {
-        let _ = self.0.lock().unwrap().send(Task::Host(event));
+        // Plugins call this from their audio thread, sometimes every block: asking twice before
+        // the main thread has looked once means the same thing, so only the first goes in the
+        // queue (the second would allocate and wake the main thread for nothing).
+        if event == HostEvent::MainThreadCallback
+            && self.callback_queued.swap(true, Ordering::AcqRel)
+        {
+            return;
+        }
+        let _ = self.tasks.send(Task::Host(event));
     }
 }
 
@@ -61,8 +73,73 @@ struct AudioThread {
     handle: JoinHandle<()>,
 }
 
+/// Gives the calling thread the scheduling of the app's audio thread, which the app wrote into
+/// the header: the app's thread sleeps until this one answers, so this one must not be the one
+/// that anything busy on the machine can preempt.
+///
+/// A user with a realtime limit of their own lets the thread do it directly. Where realtime
+/// comes from rtkit instead (no limit, as on most desktops), the request goes to the service,
+/// from a helper thread so the first blocks do not wait for the bus.
+fn take_priority(shm: &Arc<Shm>) {
+    let h = shm.header();
+    let policy = h.sched_policy.load(Ordering::Relaxed);
+    if policy == 0 {
+        h.host_sched.store(sched::UNNEEDED, Ordering::Relaxed);
+        return;
+    }
+    let priority = h.sched_priority.load(Ordering::Relaxed);
+    // SAFETY: scheduling the calling thread like the app's audio thread.
+    let refused = unsafe {
+        let p = libc::sched_param {
+            sched_priority: priority as i32,
+        };
+        if libc::sched_setscheduler(0, policy as i32, &p) == 0 {
+            h.host_sched.store(sched::REALTIME, Ordering::Relaxed);
+            return;
+        }
+        std::io::Error::last_os_error().to_string()
+    };
+    h.host_sched.store(sched::NORMAL, Ordering::Relaxed);
+    // SAFETY: gettid takes no arguments and cannot fail.
+    let tid = unsafe { libc::syscall(libc::SYS_gettid) } as u64;
+    let shm = shm.clone();
+    let why = refused.clone();
+    let asked = std::thread::Builder::new()
+        .name("rtkit".into())
+        .spawn(move || {
+            let h = shm.header();
+            match crate::rtkit::prepare_thread(tid, priority) {
+                Ok(crate::rtkit::Granted::Realtime(_)) => {
+                    h.host_sched.store(sched::REALTIME_RTKIT, Ordering::Relaxed);
+                }
+                Ok(crate::rtkit::Granted::Raised(nice)) => {
+                    h.host_sched.store(sched::RAISED, Ordering::Relaxed);
+                    eprintln!(
+                        "plugin host: no realtime scheduling; audio runs at nice {nice} instead"
+                    );
+                }
+                Err(e) => eprintln!(
+                    "plugin host: cannot get realtime scheduling ({why}; {e}); audio runs at normal priority"
+                ),
+            }
+        });
+    if asked.is_err() {
+        eprintln!(
+            "plugin host: cannot get realtime scheduling ({refused}); audio runs at normal priority"
+        );
+    }
+}
+
 /// Plays blocks until the header says stop.
 fn audio_loop(shm: Arc<Shm>, mut processor: Box<dyn PluginProcessor>) {
+    // The plugin's code runs on this thread, which starts with the process' floating point
+    // defaults: flush denormals here as the app does on its own audio thread, or a plugin whose
+    // tails decay into them costs many times more here than it would in any other host.
+    merlin_hosting::flush_to_zero();
+    // Whatever priority it ends up with (see `take_priority`), this thread is woken once per
+    // block and must run at once: a short slice makes it preempt what is running instead of
+    // queueing behind it, which matters when it cannot be realtime and the machine is busy.
+    merlin_hosting::slice::set_slice(merlin_hosting::slice::SHORTEST);
     let h = shm.header();
     let mut events: Vec<MidiEvent> = Vec::with_capacity(MAX_EVENTS);
     // The last block that was finished: a request made before this thread got going is not lost.
@@ -82,23 +159,9 @@ fn audio_loop(shm: Arc<Shm>, mut processor: Box<dyn PluginProcessor>) {
         };
         last = req;
         if !scheduled {
+            // The app tells us its scheduling with the first block.
             scheduled = true;
-            let policy = h.sched_policy.load(Ordering::Relaxed);
-            if policy != 0 {
-                // SAFETY: scheduling the calling thread like the app's audio thread.
-                let ok = unsafe {
-                    let p = libc::sched_param {
-                        sched_priority: h.sched_priority.load(Ordering::Relaxed) as i32,
-                    };
-                    libc::sched_setscheduler(0, policy as i32, &p) == 0
-                };
-                if !ok {
-                    eprintln!(
-                        "plugin host: cannot get realtime scheduling ({}); audio runs at normal priority",
-                        std::io::Error::last_os_error()
-                    );
-                }
-            }
+            take_priority(&shm);
         }
         host_time::set_tempo(f32::from_bits(h.tempo_bits.load(Ordering::Relaxed)));
         host_time::set_playing(h.playing.load(Ordering::Relaxed) != 0);
@@ -138,6 +201,8 @@ struct Host {
     audio: Option<AudioThread>,
     /// Stops the audio thread without waiting on the app.
     stop: Arc<AtomicBool>,
+    /// See [`HostWaker`].
+    callback_queued: Arc<AtomicBool>,
 }
 
 impl Host {
@@ -166,7 +231,10 @@ impl Host {
                 sample_rate,
                 max_block,
             } => {
-                let waker = Arc::new(HostWaker(Mutex::new(self.tasks.clone())));
+                let waker = Arc::new(HostWaker {
+                    tasks: self.tasks.clone(),
+                    callback_queued: self.callback_queued.clone(),
+                });
                 let mut plugin = open_plugin(&path, &id, waker, sample_rate, max_block)?;
                 let info = plugin.info().clone();
                 let has_editor = plugin.editor().is_some();
@@ -264,6 +332,9 @@ fn forward(w: &Writer, event: HostEvent) {
 
 /// Serves the app on `socket` and `shm_fd` (both inherited) until told to stop. Never returns.
 pub fn serve(socket: i32, shm_fd: i32) -> ! {
+    // Threads inherit their parent's slice: set it before any are started, so that the helper
+    // threads a plugin starts (multicore rendering) are woken as promptly as the audio thread.
+    merlin_hosting::slice::set_slice(merlin_hosting::slice::SHORTEST);
     // A panic would unwind into plugin code or be swallowed by a plugin thread: end the process.
     std::panic::set_hook(Box::new(|info| {
         eprintln!("plugin host: {info}");
@@ -312,6 +383,7 @@ pub fn serve(socket: i32, shm_fd: i32) -> ! {
             plugin: None,
             audio: None,
             stop: Arc::new(AtomicBool::new(false)),
+            callback_queued: Arc::new(AtomicBool::new(false)),
         },
         rx,
     )
@@ -345,6 +417,8 @@ fn main_loop(mut host: Host, rx: Receiver<Task>) -> ! {
             }
             Some(Task::Host(event)) => match event {
                 HostEvent::MainThreadCallback => {
+                    // Before running it: a request made while it runs must queue another.
+                    host.callback_queued.store(false, Ordering::Release);
                     if let Some(p) = host.plugin.as_mut() {
                         p.on_main_thread();
                     }
@@ -384,5 +458,86 @@ pub fn main() -> ! {
             );
             std::process::exit(64)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shm::wait_change;
+
+    /// Remembers whether denormals were being flushed while it played.
+    struct Probe(Arc<AtomicBool>);
+
+    impl PluginProcessor for Probe {
+        fn process(&mut self, _: &mut Io, _: &[MidiEvent]) -> ProcessStatus {
+            self.0.store(
+                merlin_hosting::denormals::is_flushing_to_zero(),
+                Ordering::SeqCst,
+            );
+            ProcessStatus::Continue
+        }
+    }
+
+    /// Plays one block through a host audio thread the way the app would, and stops it.
+    fn play_one_block(shm: &Arc<Shm>, probe: Probe) {
+        let thread = {
+            let shm = shm.clone();
+            std::thread::spawn(move || audio_loop(shm, Box::new(probe)))
+        };
+        let h = shm.header();
+        h.frames.store(64, Ordering::Relaxed);
+        h.events.store(0, Ordering::Relaxed);
+        h.has_input.store(0, Ordering::Relaxed);
+        h.req.store(1, Ordering::Release);
+        futex_wake(&h.req);
+        let done = wait_change(&h.done, 0, Duration::from_secs(10));
+        assert_eq!(done, 1, "the block was not played");
+        h.stop.store(1, Ordering::Release);
+        futex_wake(&h.req);
+        thread.join().unwrap();
+    }
+
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn the_plugin_plays_with_denormals_flushed() {
+        // Not only on the threads that happen to have it from before: a fresh thread, like the
+        // host's, starts without.
+        let shm = Arc::new(Shm::create().unwrap());
+        let flushed = Arc::new(AtomicBool::new(false));
+        play_one_block(&shm, Probe(flushed.clone()));
+        assert!(flushed.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn an_app_thread_that_is_not_realtime_asks_nothing_of_the_host() {
+        let shm = Arc::new(Shm::create().unwrap());
+        play_one_block(&shm, Probe(Arc::default()));
+        assert_eq!(
+            shm.header().host_sched.load(Ordering::Relaxed),
+            sched::UNNEEDED
+        );
+    }
+
+    #[test]
+    fn plugin_callback_requests_are_queued_once_until_they_run() {
+        let (tx, rx) = mpsc::channel();
+        let waker = HostWaker {
+            tasks: tx,
+            callback_queued: Arc::new(AtomicBool::new(false)),
+        };
+        let queued = |rx: &Receiver<Task>| rx.try_iter().count();
+        for _ in 0..1000 {
+            waker.wake(HostEvent::MainThreadCallback);
+        }
+        assert_eq!(queued(&rx), 1, "a thousand requests, one wakeup");
+        // Other events are never merged.
+        waker.wake(HostEvent::StateDirty);
+        waker.wake(HostEvent::StateDirty);
+        assert_eq!(queued(&rx), 2);
+        // Once the main thread has taken it, the next request queues again.
+        waker.callback_queued.store(false, Ordering::Release);
+        waker.wake(HostEvent::MainThreadCallback);
+        assert_eq!(queued(&rx), 1);
     }
 }

@@ -37,11 +37,29 @@ pub struct Header {
     /// The app's audio thread scheduling, copied to the host's (policy 0 = leave it).
     pub sched_policy: AtomicU32,
     pub sched_priority: AtomicU32,
+    /// How the host's audio thread ended up scheduled (one of the `SCHED_*` codes below; 0 until
+    /// it has run its first block).
+    pub host_sched: AtomicU32,
     /// What plugins may ask the host about time ([`merlin_hosting::host_time`]).
     pub tempo_bits: AtomicU32,
     pub playing: AtomicU32,
     pub beats_per_bar: AtomicU32,
     pub beat_unit: AtomicU32,
+}
+
+/// `Header::host_sched`: what the host's audio thread got compared with the app's.
+pub mod sched {
+    pub const UNKNOWN: u32 = 0;
+    /// Realtime, set by the host itself (the user's own realtime limit allows it).
+    pub const REALTIME: u32 = 1;
+    /// Realtime, granted by rtkit.
+    pub const REALTIME_RTKIT: u32 = 2;
+    /// A raised nice level, no realtime.
+    pub const RAISED: u32 = 3;
+    /// Nothing better than ordinary priority (rtkit may still be answering).
+    pub const NORMAL: u32 = 4;
+    /// The app's audio thread is not realtime: nothing to match.
+    pub const UNNEEDED: u32 = 5;
 }
 
 /// A MIDI event as it sits in the block (same fields as [`MidiEvent`], with a fixed layout).

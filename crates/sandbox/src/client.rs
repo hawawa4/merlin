@@ -18,12 +18,12 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow, bail};
 use merlin_hosting::{
-    EditorSize, HostEvent, Io, MidiEvent, ParamInfo, PluginEditor, PluginHandle, PluginInfo,
-    PluginProcessor, ProcessStatus, Waker, host_time,
+    AudioPriority, EditorSize, HostEvent, Io, MidiEvent, ParamInfo, PluginEditor, PluginHandle,
+    PluginInfo, PluginProcessor, ProcessStatus, Waker, host_time,
 };
 
 use crate::proto::{Request, Response, ToApp, ToHost, read_message, write_message};
-use crate::shm::{MAX_FRAMES, Shm, futex_wait, futex_wake};
+use crate::shm::{MAX_FRAMES, Shm, futex_wait, futex_wake, sched};
 
 /// `Header::done` after the host is gone: never equal to a request number.
 const DEAD: u32 = u32::MAX;
@@ -406,6 +406,17 @@ impl PluginHandle for RemotePlugin {
 
     fn process_id(&self) -> Option<u32> {
         Some(self.shared.pid as u32)
+    }
+
+    fn audio_priority(&self) -> Option<AudioPriority> {
+        match self.shared.shm.header().host_sched.load(Ordering::Relaxed) {
+            sched::REALTIME => Some(AudioPriority::Realtime),
+            sched::REALTIME_RTKIT => Some(AudioPriority::RealtimeByRtkit),
+            sched::RAISED => Some(AudioPriority::Raised),
+            sched::NORMAL => Some(AudioPriority::Normal),
+            sched::UNNEEDED => Some(AudioPriority::Unneeded),
+            _ => None,
+        }
     }
 
     fn activate(&mut self, sample_rate: f64, max_block: u32) -> Result<Box<dyn PluginProcessor>> {

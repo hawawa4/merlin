@@ -497,19 +497,6 @@ struct Callback {
 /// channel 10, the General MIDI drums, where the pads of a Launchkey's Drum mode report.
 const CONTROLLER_PLAYED_CHANNEL: u8 = 9;
 
-/// Flush denormals to zero (FTZ + DAZ) on this thread: plugins' decaying tails otherwise cost
-/// 100x per sample.
-fn set_flush_to_zero() {
-    #[cfg(target_arch = "x86_64")]
-    // SAFETY: reads and sets this thread's MXCSR; no memory is touched.
-    unsafe {
-        let mut csr: u32 = 0;
-        std::arch::asm!("stmxcsr [{}]", in(reg) &mut csr, options(nostack));
-        csr |= 0x8040;
-        std::arch::asm!("ldmxcsr [{}]", in(reg) &csr, options(nostack));
-    }
-}
-
 /// Inserts keeping time order; stable for equal times (a note-off before a note-on at the
 /// same frame must stay in that order).
 fn push_sorted(events: &mut Vec<MidiEvent>, stats: &Stats, ev: MidiEvent) {
@@ -528,7 +515,7 @@ impl jack::ProcessHandler for Callback {
     fn process(&mut self, _: &Client, ps: &jack::ProcessScope) -> Control {
         let t0 = Instant::now();
         if !self.ftz_set {
-            set_flush_to_zero();
+            merlin_hosting::flush_to_zero();
             self.ftz_set = true;
         }
         self.events.clear();

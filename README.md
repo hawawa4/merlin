@@ -73,7 +73,8 @@ own Wine. Plugins bridged with `yabridgectl` work the same way.
 - **Crash isolation:** every plugin runs in its own process. If one crashes or hangs, its slot
   goes silent (with a *Retry* button) and nothing else is affected.
 - **Performance check:** reports whether realtime scheduling and similar are set up, with the
-  fix for each problem it finds.
+  fix for each problem it finds, including whether each plugin process plays at the audio
+  thread's priority.
 
 **Where files go** (XDG locations):
 

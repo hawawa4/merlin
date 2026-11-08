@@ -4,6 +4,8 @@
 
 use std::path::Path;
 
+use merlin_hosting::AudioPriority;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
     Ok,
@@ -36,6 +38,8 @@ pub struct PerfInputs {
     pub sample_rate: u32,
     pub xruns: u32,
     pub dsp_load_percent: f32,
+    /// How each plugin process' audio thread is scheduled (plugins that run in the app are not here).
+    pub plugin_priorities: Vec<AudioPriority>,
 }
 
 const MIB: u64 = 1024 * 1024;
@@ -88,6 +92,44 @@ pub fn evaluate(p: &PerfInputs) -> Vec<Check> {
         detail,
         fix,
     });
+
+    // The plugin processes: the audio thread waits for each of them every block, so each must
+    // run at its priority or any busy moment on the machine lands in the audio thread's lap.
+    let playing: Vec<&AudioPriority> = p
+        .plugin_priorities
+        .iter()
+        .filter(|a| **a != AudioPriority::Unneeded)
+        .collect();
+    if !playing.is_empty() {
+        let behind = playing.iter().filter(|a| !a.is_matched()).count();
+        let (status, detail, fix) = if behind == 0 {
+            (
+                Status::Ok,
+                format!(
+                    "{} plugin process{} play{} at the audio thread's priority.",
+                    playing.len(),
+                    if playing.len() == 1 { "" } else { "es" },
+                    if playing.len() == 1 { "s" } else { "" },
+                ),
+                None,
+            )
+        } else {
+            (
+                Status::Warn,
+                format!(
+                    "{behind} of {} plugin processes play at ordinary priority while the audio thread waits for them every block: anything busy on the machine can delay them, which shows up as dropouts and a higher load.",
+                    playing.len()
+                ),
+                Some(join_group_advice(&p.groups)),
+            )
+        };
+        checks.push(Check {
+            name: "Plugin priority",
+            status,
+            detail,
+            fix,
+        });
+    }
 
     // Locked memory.
     let (status, detail, fix) = match p.memlock_limit {
@@ -298,6 +340,7 @@ pub fn gather(
     sample_rate: u32,
     xruns: u32,
     dsp_load_percent: f32,
+    plugin_priorities: Vec<AudioPriority>,
 ) -> PerfInputs {
     PerfInputs {
         rtprio_limit: rlimit(libc::RLIMIT_RTPRIO),
@@ -310,6 +353,7 @@ pub fn gather(
         sample_rate,
         xruns,
         dsp_load_percent,
+        plugin_priorities,
     }
 }
 
@@ -329,6 +373,7 @@ mod tests {
             sample_rate: 48000,
             xruns: 0,
             dsp_load_percent: 8.0,
+            plugin_priorities: vec![AudioPriority::Realtime],
         }
     }
 
@@ -394,6 +439,55 @@ mod tests {
     }
 
     #[test]
+    fn a_plugin_process_below_the_audio_threads_priority_is_flagged() {
+        let p = PerfInputs {
+            plugin_priorities: vec![AudioPriority::RealtimeByRtkit, AudioPriority::Normal],
+            groups: vec!["hawa".into()],
+            ..good()
+        };
+        let checks = evaluate(&p);
+        let c = find(&checks, "Plugin priority");
+        assert_eq!(c.status, Status::Warn);
+        assert!(
+            c.detail.starts_with("1 of 2 plugin processes"),
+            "{}",
+            c.detail
+        );
+        assert!(c.fix.as_deref().unwrap().contains("usermod -aG pipewire"));
+        assert_eq!(overall(&checks), Status::Warn);
+        // Raised is better than nothing, and still not the audio thread's priority.
+        let p = PerfInputs {
+            plugin_priorities: vec![AudioPriority::Raised],
+            ..good()
+        };
+        assert_eq!(find(&evaluate(&p), "Plugin priority").status, Status::Warn);
+    }
+
+    #[test]
+    fn plugin_priority_is_only_judged_when_there_is_something_to_match() {
+        let matched = PerfInputs {
+            plugin_priorities: vec![AudioPriority::Realtime, AudioPriority::RealtimeByRtkit],
+            ..good()
+        };
+        let checks = evaluate(&matched);
+        let c = find(&checks, "Plugin priority");
+        assert_eq!(c.status, Status::Ok);
+        assert!(
+            c.detail.starts_with("2 plugin processes play"),
+            "{}",
+            c.detail
+        );
+        // No plugin processes, or an audio thread that is not realtime itself: no such check.
+        for none in [vec![], vec![AudioPriority::Unneeded]] {
+            let p = PerfInputs {
+                plugin_priorities: none,
+                ..good()
+            };
+            assert!(evaluate(&p).iter().all(|c| c.name != "Plugin priority"));
+        }
+    }
+
+    #[test]
     fn buffer_load_and_dropouts_are_graded() {
         let grade = |f: &dyn Fn(&mut PerfInputs), name: &str| {
             let mut p = good();
@@ -429,7 +523,7 @@ mod tests {
 
     #[test]
     fn the_real_system_can_be_read() {
-        let p = gather(128, 48000, 0, 1.0);
+        let p = gather(128, 48000, 0, 1.0, vec![]);
         assert!(p.rtprio_limit.is_some() && p.memlock_limit.is_some());
         // Whatever the machine looks like, evaluation produces a verdict for every check.
         assert!(evaluate(&p).len() >= 5);

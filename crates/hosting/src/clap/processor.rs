@@ -123,8 +123,12 @@ impl PluginProcessor for ClapProcessor {
             push_midi(&mut self.events, ev);
         }
 
+        // Only the part of each channel this block reads: the buffers hold MAX_FRAMES per channel,
+        // and clearing all of them every block costs more than the block at small sizes.
         for b in &mut self.in_bufs {
-            b.fill(0.0);
+            for channel in b.as_chunks_mut::<MAX_FRAMES>().0 {
+                channel[..n].fill(0.0);
+            }
         }
         if let (Some((l, r)), Some(buf), Some(&ch)) =
             (io.input, self.in_bufs.first_mut(), self.in_channels.first())

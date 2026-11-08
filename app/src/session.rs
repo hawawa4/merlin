@@ -2569,6 +2569,17 @@ impl Session {
         }
     }
 
+    /// How the audio thread of each plugin that runs in a process of its own is scheduled
+    /// (instruments and inserts), for the performance check.
+    pub fn plugin_priorities(&self) -> Vec<merlin_hosting::AudioPriority> {
+        self.plugins
+            .iter()
+            .flatten()
+            .chain(self.inserts.iter().flatten().flatten())
+            .filter_map(|l| l.plugin.audio_priority())
+            .collect()
+    }
+
     /// Peaks since the last call, per slot.
     /// The main outputs' peak (left, right) since the last call: what the header's meter shows.
     pub fn take_meter(&self) -> (f32, f32) {
