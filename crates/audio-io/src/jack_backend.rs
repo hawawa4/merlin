@@ -450,6 +450,7 @@ impl JackClient {
             stats: stats.clone(),
             tap,
             ftz_set: false,
+            events_at_block_start: std::env::var_os("MERLIN_MIDI_AT_BLOCK_START").is_some(),
         };
         let client = client.activate_async(Notifications(stats.clone()), callback)?;
         Ok(JackBackend {
@@ -491,6 +492,10 @@ struct Callback {
     stats: Arc<Stats>,
     tap: Tap,
     ftz_set: bool,
+    /// `MERLIN_MIDI_AT_BLOCK_START`: hand every event to the plugins at the start of its block
+    /// instead of at its frame (an experiment: plugins that split their block at each event
+    /// pay for it while many keys are pressed).
+    events_at_block_start: bool,
 }
 
 /// The MIDI channel (from 0) whose notes a controller plays instead of only controlling with:
@@ -570,7 +575,15 @@ impl jack::ProcessHandler for Callback {
                 push_sorted(
                     &mut self.events,
                     &self.stats,
-                    MidiEvent::new(raw.time, i as u8 + 1, data),
+                    MidiEvent::new(
+                        if self.events_at_block_start {
+                            0
+                        } else {
+                            raw.time
+                        },
+                        i as u8 + 1,
+                        data,
+                    ),
                 );
             }
         }

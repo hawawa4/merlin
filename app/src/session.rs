@@ -43,7 +43,18 @@ use crate::tags::Tag;
 
 /// Slots shown in the rack.
 pub const UI_SLOTS: usize = 8;
-const MAX_BLOCK: usize = 4096;
+/// The longest block plugins are told to expect. `MERLIN_MAX_BLOCK=<frames>` overrides it, to
+/// find out whether a plugin works differently when told the real block size (an experiment).
+fn max_block() -> usize {
+    static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *N.get_or_init(|| {
+        std::env::var("MERLIN_MAX_BLOCK")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|n| (16..=4096).contains(n))
+            .unwrap_or(4096)
+    })
+}
 
 /// What plugins and background threads send to the main loop.
 #[derive(Debug)]
@@ -344,7 +355,7 @@ impl Session {
     ) -> Result<Self> {
         let client = JackClient::open("merlin", Some(settings.frames))?;
         let sample_rate = client.sample_rate;
-        let (engine, handle) = merlin_engine::new(sample_rate as f32, MAX_BLOCK);
+        let (engine, handle) = merlin_engine::new(sample_rate as f32, max_block());
         let mut backend = client.start(engine)?;
         let (control_tx, control_rx) = mpsc::channel();
         let control_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -1433,14 +1444,14 @@ impl Session {
         let plugin: Box<dyn PluginHandle> = if merlin_hosting::soundfont::is_source(path)
             || crate::sandbox::disabled()
         {
-            merlin_hosting::open_plugin(path, id, waker, sample_rate, MAX_BLOCK as u32)?
+            merlin_hosting::open_plugin(path, id, waker, sample_rate, max_block() as u32)?
         } else {
             // Shorter than the watchdog's limits, so a stuck load ends here first.
             let limit = Duration::from_secs(if windows { 100 } else { 30 });
             let host = crate::sandbox::plugin_host_exe();
             let env = self.bridge_env();
             Box::new(
-                    RemotePlugin::spawn(&host, path, id, waker, sample_rate, MAX_BLOCK as u32, limit, env.for_file(path))
+                    RemotePlugin::spawn(&host, path, id, waker, sample_rate, max_block() as u32, limit, env.for_file(path))
                         .map_err(|e| match host.exists() {
                             true => e,
                             false => e.context(format!(
@@ -1460,7 +1471,7 @@ impl Session {
             let _call = guard.call(i, "starting up", Duration::from_secs(30));
             loaded
                 .plugin
-                .activate(self.sample_rate as f64, MAX_BLOCK as u32)?
+                .activate(self.sample_rate as f64, max_block() as u32)?
         };
         self.plugins[i] = Some(loaded);
         self.push_slot_settings(i);
@@ -2346,7 +2357,7 @@ impl Session {
             );
             loaded
                 .plugin
-                .activate(self.sample_rate as f64, MAX_BLOCK as u32)?
+                .activate(self.sample_rate as f64, max_block() as u32)?
         };
         self.inserts[slot][index] = Some(loaded);
         self.engine
