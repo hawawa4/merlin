@@ -2,13 +2,6 @@
 
 Things seen in use that are not fixed yet. Remove an entry when it is.
 
-## LV2 plugin editors are cut off at a square
-
-An LV2 plugin's editor is not drawn in full: it is clipped to a square area instead of the
-plugin's own size (reported on Pianoteq, 2026-11-08). Look at `crates/hosting/src/lv2/editor.rs`
-(the size the editor window and the embedded UI are given, and whether the plugin's size hints
-and resize requests reach `EditorSize`) and at how the dock sizes the canvas for it.
-
 ## Pianoteq costs more CPU hosted than standalone
 
 On the same passages Merlin shows about 20 points more load than standalone Pianoteq, and

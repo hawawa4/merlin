@@ -130,6 +130,14 @@ pub struct UiResize {
     pub ui_resize: unsafe extern "C" fn(*mut c_void, i32, i32) -> i32,
 }
 
+/// `LV2_Options_Interface`: what a plugin or UI returns for `opts:interface`, to read and change
+/// options after it was made.
+#[repr(C)]
+pub struct OptionsInterface {
+    pub get: unsafe extern "C" fn(Handle, *mut OptionsOption) -> u32,
+    pub set: unsafe extern "C" fn(Handle, *const OptionsOption) -> u32,
+}
+
 #[repr(C)]
 pub struct UiIdle {
     pub idle: unsafe extern "C" fn(Handle) -> i32,

@@ -301,16 +301,16 @@ impl PluginHandle for Lv2Plugin {
     fn on_fd_ready(&mut self) {}
 }
 
-impl PluginEditor for Lv2Plugin {
-    fn attach(&mut self, parent: u32, scale: f64) -> Result<EditorSize> {
+impl Lv2Plugin {
+    fn open_editor(&self, parent: u32, scale: f64) -> Result<Lv2Editor> {
         let ui = self
             .desc
             .ui
-            .clone()
+            .as_ref()
             .context("the plugin has no X11 editor")?;
-        let e = Lv2Editor::open(
+        Lv2Editor::open(
             &self.desc,
-            &ui,
+            ui,
             &self.inst,
             &self.inst.lib,
             self.bank.clone(),
@@ -319,7 +319,13 @@ impl PluginEditor for Lv2Plugin {
             parent,
             scale,
             self.sample_rate,
-        )?;
+        )
+    }
+}
+
+impl PluginEditor for Lv2Plugin {
+    fn attach(&mut self, parent: u32, scale: f64) -> Result<EditorSize> {
+        let e = self.open_editor(parent, scale)?;
         let size = e.size;
         self.editor = Some(e);
         Ok(size)
@@ -344,15 +350,43 @@ impl PluginEditor for Lv2Plugin {
     }
 
     fn can_resize(&self) -> bool {
-        false
+        self.editor.as_ref().is_some_and(Lv2Editor::can_resize)
     }
 
-    fn adjust_size(&mut self, _want: EditorSize) -> EditorSize {
-        self.size()
+    /// LV2 has no way to ask a UI which size it would take: a resizable one is offered `want`.
+    fn adjust_size(&mut self, want: EditorSize) -> EditorSize {
+        if self.can_resize() { want } else { self.size() }
     }
 
-    fn set_size(&mut self, _size: EditorSize) -> bool {
-        false
+    fn set_size(&mut self, size: EditorSize) -> bool {
+        self.editor.as_mut().is_some_and(|e| e.set_size(size))
+    }
+
+    /// A UI may take a new `ui:scaleFactor` while it runs; many only read it when they are made
+    /// (Pianoteq 9 accepts the option and stays as it was), so those are made over at the new
+    /// scale, in the same window.
+    fn set_zoom(&mut self, scale: f64) -> Option<EditorSize> {
+        let e = self.editor.as_mut()?;
+        let before = e.size;
+        if (e.scale - scale).abs() < 1e-3 {
+            return Some(before);
+        }
+        if let Some(size) = e.set_zoom(scale).filter(|s| *s != before) {
+            return Some(size);
+        }
+        let (parent, old_scale) = (e.parent, e.scale);
+        // The old UI goes first: it owns the child window in `parent`.
+        self.editor = None;
+        let e = match self.open_editor(parent, scale) {
+            Ok(e) => e,
+            Err(_) => {
+                self.editor = self.open_editor(parent, old_scale).ok();
+                return None;
+            }
+        };
+        let size = e.size;
+        self.editor = Some(e);
+        Some(size)
     }
 
     fn note_size(&mut self, size: EditorSize) {

@@ -12,11 +12,13 @@ use x11rb::rust_connection::RustConnection;
 
 use super::abi::*;
 use super::features::{
-    Audio, FeatureSet, INSTANCE_ACCESS, UI_IDLE, UI_IDLE_EXT, UI_PARENT, UI_RESIZE, ui_supported,
+    ATOM_FLOAT, Audio, FeatureSet, INSTANCE_ACCESS, OPTIONS_INSTANCE, OPTIONS_INTERFACE, UI_IDLE,
+    UI_IDLE_EXT, UI_PARENT, UI_RESIZE, UI_SCALE, ui_supported,
 };
 use super::instance::{Bank, Instance};
 use super::processor::{UI_ATOM_BYTES, UiAtom};
 use super::ttl::{PluginDesc, PortKind, UiDesc};
+use super::urid::Urids;
 use crate::{EditorSize, HostEvent, Waker};
 
 const IDLE_EVERY: Duration = Duration::from_millis(16);
@@ -83,11 +85,19 @@ pub struct Lv2Editor {
     ui_desc: *const UiDescriptor,
     handle: Handle,
     idle: Option<*const UiIdle>,
+    /// The UI's own `ui:resize`: how the host resizes it.
+    resize: Option<*const UiResize>,
+    /// The UI's `opts:interface`: how the host changes its scale after it was made.
+    options: Option<*const OptionsInterface>,
+    urids: Arc<Urids>,
     controller: Box<Controller>,
     // Kept alive for the UI's lifetime.
     _features: FeatureSet,
-    _resize: Box<UiResize>,
+    _host_resize: Box<UiResize>,
     pub size: EditorSize,
+    /// The window the UI is in, and the `ui:scaleFactor` it was made with.
+    pub parent: u32,
+    pub scale: f64,
     last_idle: Instant,
 }
 
@@ -154,6 +164,7 @@ impl Lv2Editor {
         }
 
         let urids = inst.urids().clone();
+        let own_urids = urids.clone();
         let controller = Box::new(Controller {
             bank: bank.clone(),
             to_plugin,
@@ -205,16 +216,19 @@ impl Lv2Editor {
         if handle.is_null() {
             bail!("the editor refused to start (instantiate returned null)");
         }
-        let idle = {
-            let ext = CString::new(UI_IDLE_EXT).unwrap();
+        let extension = |uri: &str| {
+            let ext = CString::new(uri).unwrap();
             // SAFETY: extension_data is optional and returns static data.
             unsafe {
                 (*ui_desc)
                     .extension_data
-                    .map(|f| f(ext.as_ptr()) as *const UiIdle)
+                    .map(|f| f(ext.as_ptr()))
                     .filter(|p| !p.is_null())
             }
         };
+        let idle = extension(UI_IDLE_EXT).map(|p| p as *const UiIdle);
+        let ui_resize_ext = extension(UI_RESIZE).map(|p| p as *const UiResize);
+        let options = extension(OPTIONS_INTERFACE).map(|p| p as *const OptionsInterface);
         let packed = controller.size.load(Ordering::Acquire);
         let size = if packed != 0 {
             EditorSize {
@@ -232,10 +246,15 @@ impl Lv2Editor {
             ui_desc,
             handle,
             idle,
+            resize: ui_resize_ext,
+            options,
+            urids: own_urids,
             controller,
             _features: features,
-            _resize: resize,
+            _host_resize: resize,
             size,
+            parent,
+            scale,
             last_idle: Instant::now(),
         };
         // Show the current values.
@@ -259,6 +278,66 @@ impl Lv2Editor {
                 &value as *const f32 as *const c_void,
             );
         }
+    }
+
+    /// Whether the host can resize the UI (it offers `ui:resize` itself).
+    pub fn can_resize(&self) -> bool {
+        self.resize.is_some()
+    }
+
+    /// Asks the UI to take this size. `false` if it cannot be resized or refused.
+    pub fn set_size(&mut self, size: EditorSize) -> bool {
+        let Some(r) = self.resize else {
+            return false;
+        };
+        let (w, h) = (size.width.min(16383) as i32, size.height.min(16383) as i32);
+        // SAFETY: a live UI. The `handle` field of a UI's own LV2UI_Resize is unused: the host
+        // passes the UI's handle.
+        let ok = unsafe { ((*r).ui_resize)(self.handle, w, h) } == 0;
+        if ok {
+            self.size = size;
+        }
+        ok
+    }
+
+    /// Changes the UI's `ui:scaleFactor` (its content scale) and returns the size it has then.
+    /// `None` if it has no options interface or refused the option.
+    pub fn set_zoom(&mut self, scale: f64) -> Option<EditorSize> {
+        let o = self.options?;
+        let value = scale as f32;
+        let options = [
+            OptionsOption {
+                context: self.urids.map(OPTIONS_INSTANCE),
+                subject: 0,
+                key: self.urids.map(UI_SCALE),
+                size: 4,
+                kind: self.urids.map(ATOM_FLOAT),
+                value: &value as *const f32 as *const c_void,
+            },
+            OptionsOption {
+                context: 0,
+                subject: 0,
+                key: 0,
+                size: 0,
+                kind: 0,
+                value: std::ptr::null(),
+            },
+        ];
+        // SAFETY: a live UI; a list ending with a zero key, alive for the call.
+        let status = unsafe { ((*o).set)(self.handle, options.as_ptr()) };
+        if status != 0 {
+            return None;
+        }
+        self.scale = scale;
+        // A UI answers a new scale by asking for a new size, through our `ui_resize`.
+        let packed = self.controller.size.load(Ordering::Acquire);
+        if packed != 0 {
+            self.size = EditorSize {
+                width: packed >> 16,
+                height: packed & 0xFFFF,
+            };
+        }
+        Some(self.size)
     }
 
     /// Runs the UI's idle callback when it is due.

@@ -245,7 +245,14 @@ pub fn read_bundle(bundle: &Path) -> Result<Vec<PluginDesc>> {
             .first(s, &format!("{DOAP}maintainer"))
             .and_then(|m| graph.text(m, &format!("{FOAF}name")))
             .unwrap_or_default();
-        let instrument = types.iter().any(|t| *t == lv2("InstrumentPlugin"));
+        // Every LV2 class is `lv2:<Something>Plugin`. JUCE's LV2 wrapper can write its class
+        // macro unexpanded (`lv2:JucePlugin_LV2PluginClass`, Pianoteq 9), which leaves the
+        // plugin with no class at all: it is then decided from its ports, below.
+        let classified = types.iter().any(|t| {
+            t.strip_prefix(LV2)
+                .is_some_and(|c| c.ends_with("Plugin") && c != "Plugin")
+        });
+        let declared_instrument = types.iter().any(|t| *t == lv2("InstrumentPlugin"));
         let required: Vec<String> = graph.iris(s, &lv2("requiredFeature"));
         let has_state = graph
             .iris(s, &lv2("extensionData"))
@@ -299,6 +306,11 @@ pub fn read_bundle(bundle: &Path) -> Result<Vec<PluginDesc>> {
             });
         }
         ports.sort_by_key(|p| p.index);
+        let instrument = if classified {
+            declared_instrument
+        } else {
+            ports.iter().any(|p| p.input && p.midi)
+        };
 
         // The X11 editor: `ui:ui <uri>` on the plugin, with the UI's own subject in the manifest.
         let ui = graph
@@ -422,6 +434,31 @@ mod tests {
         assert_eq!(ui.binary, dir.join("libui.so"));
         assert!(ui.required.iter().any(|r| r.ends_with("#parent")));
         assert!(p.required.iter().any(|r| r.ends_with("urid#map")));
+    }
+
+    /// JUCE can write its class macro unexpanded (Pianoteq 9): a plugin with no real class is an
+    /// instrument when it takes MIDI, even with an audio input; one with a class keeps it.
+    #[test]
+    fn a_plugin_without_a_real_class_is_judged_by_its_midi_input() {
+        let manifest = r#"@prefix lv2: <http://lv2plug.in/ns/lv2core#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+<urn:test:p> a lv2:Plugin ; lv2:binary <p.so> ; rdfs:seeAlso <data.ttl> ."#;
+        let data = |class: &str| {
+            format!(
+                r#"@prefix lv2: <http://lv2plug.in/ns/lv2core#> .
+@prefix atom: <http://lv2plug.in/ns/ext/atom#> .
+@prefix midi: <http://lv2plug.in/ns/ext/midi#> .
+<urn:test:p> a {class} ;
+    lv2:port
+      [ a lv2:InputPort , atom:AtomPort ; atom:supports midi:MidiEvent ; lv2:index 0 ] ,
+      [ a lv2:InputPort , lv2:AudioPort ; lv2:index 1 ] ,
+      [ a lv2:OutputPort , lv2:AudioPort ; lv2:index 2 ] ."#
+            )
+        };
+        let juce = bundle("juce", manifest, &data("lv2:JucePlugin_LV2PluginClass"));
+        assert!(read_bundle(&juce).unwrap()[0].instrument);
+        let effect = bundle("midifx", manifest, &data("lv2:PitchPlugin"));
+        assert!(!read_bundle(&effect).unwrap()[0].instrument);
     }
 
     #[test]

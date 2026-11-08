@@ -22,6 +22,7 @@ pub const UI_RESIZE: &str = "http://lv2plug.in/ns/extensions/ui#resize";
 pub const UI_IDLE: &str = "http://lv2plug.in/ns/extensions/ui#idleInterface";
 pub const INSTANCE_ACCESS: &str = "http://lv2plug.in/ns/ext/instance-access";
 pub const UI_IDLE_EXT: &str = "http://lv2plug.in/ns/extensions/ui#idleInterface";
+pub const OPTIONS_INTERFACE: &str = "http://lv2plug.in/ns/ext/options#interface";
 pub const STATE_INTERFACE: &str = "http://lv2plug.in/ns/ext/state#interface";
 
 const PARAM_SAMPLE_RATE: &str = "http://lv2plug.in/ns/ext/parameters#sampleRate";
@@ -29,10 +30,10 @@ const BUFSZ_MIN: &str = "http://lv2plug.in/ns/ext/buf-size#minBlockLength";
 const BUFSZ_MAX: &str = "http://lv2plug.in/ns/ext/buf-size#maxBlockLength";
 const BUFSZ_NOMINAL: &str = "http://lv2plug.in/ns/ext/buf-size#nominalBlockLength";
 const BUFSZ_SEQUENCE: &str = "http://lv2plug.in/ns/ext/buf-size#sequenceSize";
-const UI_SCALE: &str = "http://lv2plug.in/ns/extensions/ui#scaleFactor";
-const ATOM_FLOAT: &str = "http://lv2plug.in/ns/ext/atom#Float";
+pub const UI_SCALE: &str = "http://lv2plug.in/ns/extensions/ui#scaleFactor";
+pub const ATOM_FLOAT: &str = "http://lv2plug.in/ns/ext/atom#Float";
 const ATOM_INT: &str = "http://lv2plug.in/ns/ext/atom#Int";
-const OPTIONS_INSTANCE: &str = "http://lv2plug.in/ns/ext/options#Instance";
+pub const OPTIONS_INSTANCE: &str = "http://lv2plug.in/ns/ext/options#Instance";
 
 /// Whether a plugin that requires this feature can be hosted here.
 pub fn supported(uri: &str) -> bool {
