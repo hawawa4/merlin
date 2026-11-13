@@ -91,29 +91,54 @@ fn processes() -> Vec<(u32, u32, String, char)> {
     v
 }
 
-/// Direct children of this process that are yabridge plugin hosts.
-/// Clock ticks of CPU time (user + system, all threads) a process has used so far.
-pub fn cpu_ticks(pid: u32) -> Option<u64> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let rest: Vec<&str> = stat[stat.rfind(')')? + 2..].split(' ').collect();
-    // After the command name: state is field 0, utime 11, stime 12.
-    Some(rest.get(11)?.parse::<u64>().ok()? + rest.get(12)?.parse::<u64>().ok()?)
-}
-
-/// CPU ticks of a process and everything it started (a plugin host and its Wine host).
-pub fn tree_cpu_ticks(root: u32) -> Option<u64> {
-    let all = processes();
-    let mut family = vec![root];
-    let mut i = 0;
-    while i < family.len() {
-        let parent = family[i];
-        family.extend(all.iter().filter(|p| p.1 == parent).map(|p| p.0));
-        i += 1;
+/// CPU ticks of each root process and everything it started (a plugin host and its Wine host),
+/// in the order asked. Reads `/proc` once for all of them: a whole-table scan costs a few
+/// milliseconds, too much to repeat per plugin several times a second.
+pub fn tree_cpu_ticks(roots: &[u32]) -> Vec<Option<u64>> {
+    if roots.is_empty() {
+        return Vec::new();
     }
-    let ticks: Vec<u64> = family.into_iter().filter_map(cpu_ticks).collect();
-    (!ticks.is_empty()).then(|| ticks.iter().sum())
+    // (pid, parent pid, ticks) of every process.
+    let mut all: Vec<(u32, u32, u64)> = Vec::new();
+    if let Ok(rd) = std::fs::read_dir("/proc") {
+        for e in rd.flatten() {
+            let Ok(pid) = e.file_name().to_string_lossy().parse::<u32>() else {
+                continue;
+            };
+            let Ok(stat) = std::fs::read_to_string(e.path().join("stat")) else {
+                continue;
+            };
+            let Some(close) = stat.rfind(')') else {
+                continue;
+            };
+            // After the command name: state 0, parent 1, utime 11, stime 12.
+            let rest: Vec<&str> = stat[close + 2..].split(' ').collect();
+            let field = |k: usize| rest.get(k).and_then(|f| f.parse::<u64>().ok());
+            if let (Some(ppid), Some(u), Some(s)) = (field(1), field(11), field(12)) {
+                all.push((pid, ppid as u32, u + s));
+            }
+        }
+    }
+    roots
+        .iter()
+        .map(|&root| {
+            let mut family = vec![root];
+            let mut i = 0;
+            while i < family.len() {
+                let parent = family[i];
+                family.extend(all.iter().filter(|p| p.1 == parent).map(|p| p.0));
+                i += 1;
+            }
+            let ticks: Vec<u64> = family
+                .iter()
+                .filter_map(|pid| all.iter().find(|p| p.0 == *pid).map(|p| p.2))
+                .collect();
+            (!ticks.is_empty()).then(|| ticks.iter().sum())
+        })
+        .collect()
 }
 
+/// Direct children of this process that are yabridge plugin hosts.
 pub fn host_children() -> HashSet<u32> {
     let me = std::process::id();
     processes()

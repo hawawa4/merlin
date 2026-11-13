@@ -47,7 +47,8 @@ pub fn found_label(f: &merlin_scanner::Found) -> String {
     }
     if f.info.format == Format::SoundFont {
         // A folder of SoundFonts plays as one instrument.
-        label.push_str(if f.path.is_dir() {
+        // (Told by its id, not by asking the disk: this runs for every row of every frame.)
+        label.push_str(if f.info.id.starts_with("folder:") {
             " (SoundFonts)"
         } else {
             " (SoundFont)"
@@ -382,6 +383,8 @@ pub struct UiState {
     pub cabinet_prompt: Option<(PathBuf, crate::cabinet::Advice)>,
     pub perf: Option<(std::time::Instant, Vec<perf::Check>)>,
     pub peaks_shown: [f32; UI_SLOTS],
+    /// The browser's filtered list and tree.
+    pub browser_cache: crate::browser::Cache,
     pub held_key: Option<u8>,
     /// The drag going on in a lane of the zones view: whose lane and what it is doing.
     pub zone_drag: Option<(usize, crate::zone_view::Grab)>,
@@ -394,6 +397,9 @@ pub struct UiState {
     pub slot_edit: Option<(usize, String)>,
     /// The header's level meter.
     pub meter: hw::Meter,
+    /// The clock the meter was last fed at (seconds), and how many lamps it was last drawn with.
+    pub meter_now: f64,
+    pub meter_lamps: usize,
     /// The backing-track library shown in the Setlist view.
     pub library: crate::library::Browsing,
     /// The file dialog that is open, if one is.
@@ -463,6 +469,7 @@ impl UiState {
             cabinet_prompt: None,
             perf: None,
             peaks_shown: [0.0; UI_SLOTS],
+            browser_cache: Default::default(),
             held_key: None,
             zone_drag: None,
             force_menu: None,
@@ -470,6 +477,8 @@ impl UiState {
             scene_edit: None,
             slot_edit: None,
             meter: hw::Meter::new(),
+            meter_now: 0.0,
+            meter_lamps: 24,
             library: Default::default(),
             picking: None,
             status: StatusInfo::default(),
@@ -487,13 +496,8 @@ pub fn draw(
     drag_overlay(ui, st);
     cabinet_prompt(ui, s, st, actions);
     poll_dialog(ui, s, st, actions);
-    // The level meter: fed every frame, and the frames keep coming while it is still moving.
-    let (now, dt) = ui.input(|i| (i.time, i.unstable_dt.min(0.1)));
-    st.meter.feed(s.take_meter(), now, dt);
-    if st.meter.moving(now) {
-        ui.ctx()
-            .request_repaint_after(std::time::Duration::from_millis(33));
-    }
+    // The meters are fed by the main loop between frames (`Running::tick`), which asks for a
+    // frame only when what they show changes.
     if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::M)) {
         actions.push(Action::SetMapMode(!s.map_mode));
     }
@@ -1193,14 +1197,8 @@ fn header_levels(
             .selectable(false),
         );
     }
-    let (m, new) = hw::meter_fader(
-        ui,
-        &st.meter,
-        fit.lamps,
-        ui.input(|i| i.time),
-        master,
-        !s.map_mode,
-    );
+    st.meter_lamps = fit.lamps;
+    let (m, new) = hw::meter_fader(ui, &st.meter, fit.lamps, st.meter_now, master, !s.map_mode);
     let m = m.on_hover_text(format!(
         "Master volume {} and what is going to your speakers, left and right. Drag across the lamps \
          to set the volume (Shift for fine steps), scroll over them, double-click for 0 dB. The round \
@@ -1615,7 +1613,17 @@ fn unit(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, i: usize, actions:
     let missing = s.missing[i].clone();
     let (active, mute) = (s.targets.contains(&i), saved.mute);
     let vol = saved.volume;
+    let pending = s.loading(i).map(|p| (p.name.clone(), p.since.elapsed()));
     let label = match (&saved.instrument, loaded) {
+        _ if pending.is_some() => {
+            let (name, since) = pending.clone().unwrap_or_default();
+            // A slow start (a cold Wine, a big library) counts up, so it does not look stuck.
+            if since >= std::time::Duration::from_secs(2) {
+                format!("{name}  loading… {}s", since.as_secs())
+            } else {
+                format!("{name}  loading…")
+            }
+        }
         (Some(r), true) => format!(
             "{}  {}{}",
             saved.title(),
@@ -1637,10 +1645,7 @@ fn unit(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, i: usize, actions:
                 _ => "missing",
             }
         ),
-        (None, _) => match &s.loading[i] {
-            Some((_, name)) => format!("{name}  (loading…)"),
-            None => "— empty —".to_string(),
-        },
+        (None, _) => "— empty —".to_string(),
     };
     let frame = egui::Frame::new()
         .fill(color.gamma_multiply(if selected { 0.30 } else { 0.12 }))
@@ -1655,7 +1660,17 @@ fn unit(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, i: usize, actions:
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
             ui.colored_label(color, format!("{}", i + 1));
-            let text = if missing.is_some() {
+            // The busy lamp takes its room from the name, so the controls stay in line with
+            // the other rows.
+            let name_w = if pending.is_some() {
+                hw::throbber(ui, hw::AMBER).on_hover_text(
+                    "Loading in the background: the rest of the rig keeps playing meanwhile",
+                );
+                250.0 - hw::THROBBER - ui.spacing().item_spacing.x
+            } else {
+                250.0
+            };
+            let text = if missing.is_some() && pending.is_none() {
                 RichText::new(label).color(Color32::from_rgb(0xe0, 0x6c, 0x5a))
             } else {
                 RichText::new(label)
@@ -1689,7 +1704,7 @@ fn unit(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, i: usize, actions:
                 }
             } else {
             let r = ui.add_sized(
-                [250.0, 20.0],
+                [name_w, 20.0],
                 egui::Button::selectable(selected, text)
                     .frame(false)
                     .sense(egui::Sense::click()),
@@ -2318,6 +2333,14 @@ fn inserts_strip(ui: &mut egui::Ui, s: &Session, i: usize, actions: &mut Vec<Act
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 5.0;
                     hw::engraved(ui, &(k + 1).to_string());
+                    if let Some(p) = s.loading(crate::session::insert_id(i, k)) {
+                        ui.label(&p.name);
+                        hw::throbber(ui, hw::AMBER).on_hover_text("Loading in the background");
+                        if hw::Cap::new("REMOVE").show(ui).clicked() {
+                            actions.push(Action::UnloadInsert(i, k));
+                        }
+                        return;
+                    }
                     match s.rig.slots[i].inserts.get(k).and_then(Option::as_ref) {
                         Some(ins) => {
                             ui.label(&ins.plugin.name);

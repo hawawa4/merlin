@@ -603,6 +603,23 @@ impl Meter {
         }
     }
 
+    /// What `lamps` lamps show of it: per channel, how many the level lights and which one
+    /// holds the peak, and whether the clip lamp is on. A frame is only needed when this
+    /// changes (a steady tone or a noise floor moves the level, not the lamps).
+    pub fn shown(&self, lamps: usize, now: f64) -> ([i16; 4], bool) {
+        let step = (FADER_TOP - METER_FLOOR) / lamps.max(4) as f32;
+        let at = |db: f32| (db - METER_FLOOR) / step;
+        (
+            [
+                at(self.level[0]).round() as i16,
+                at(self.hold[0]).ceil() as i16,
+                at(self.level[1]).round() as i16,
+                at(self.hold[1]).ceil() as i16,
+            ],
+            now - self.clip_at < 2.0,
+        )
+    }
+
     /// Whether anything is still moving (the header keeps repainting while it is).
     pub fn moving(&self, now: f64) -> bool {
         self.level
@@ -933,6 +950,46 @@ pub fn led(ui: &mut Ui, on: bool, colour: Color32) -> Response {
     }
     r
 }
+
+/// A busy lamp: a ring of small LEDs in a recessed well, one lit and chasing round with a
+/// fading tail, like the activity ring of a hardware unit. It asks for frames only as often as
+/// the light moves (about 12 a second), not every frame.
+pub fn throbber(ui: &mut Ui, colour: Color32) -> Response {
+    const DOTS: usize = 8;
+    const STEP: f64 = 0.085;
+    let (rect, r) = ui.allocate_exact_size(vec2(THROBBER, THROBBER), Sense::hover());
+    let (c, radius) = (rect.center(), 6.0);
+    let p = ui.painter();
+    p.circle_filled(c, radius + 3.4, BEVEL_LO);
+    p.circle_filled(c, radius + 2.6, WELL);
+    let now = ui.input(|i| i.time);
+    let head = (now / STEP) as usize % DOTS;
+    let dark = mix(Color32::BLACK, colour, 0.22);
+    for k in 0..DOTS {
+        let a = k as f32 / DOTS as f32 * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
+        let at = c + vec2(a.cos(), a.sin()) * radius;
+        let glow = match (head + DOTS - k) % DOTS {
+            0 => 1.0,
+            1 => 0.6,
+            2 => 0.3,
+            _ => 0.0,
+        };
+        if glow > 0.0 {
+            let lit = mix(dark, colour, glow);
+            p.circle_filled(at, 3.2, lit.gamma_multiply(0.22 * glow));
+            p.circle_filled(at, 1.8, lit);
+        } else {
+            p.circle_filled(at, 1.5, dark);
+        }
+    }
+    let next = STEP - now.rem_euclid(STEP);
+    ui.ctx()
+        .request_repaint_after(std::time::Duration::from_secs_f64(next.max(0.01)));
+    r
+}
+
+/// The width and height of a [`throbber`].
+pub const THROBBER: f32 = 20.0;
 
 /// A screw head, for the corners of panels.
 pub fn screw(p: &Painter, at: Pos2) {

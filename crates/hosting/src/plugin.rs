@@ -208,6 +208,14 @@ pub trait PluginHandle {
     fn activate(&mut self, sample_rate: f64, max_block: u32) -> Result<Box<dyn PluginProcessor>>;
     fn deactivate(&mut self);
 
+    /// Starts ending a plugin that runs in a process of its own, and returns what is left to
+    /// do (waiting for the process to end, killing it if it does not), for another thread, so
+    /// the main thread does not wait seconds for it. Dropping the plugin afterwards is then
+    /// instant. `None` for plugins whose drop does all of it (ours, in our own process).
+    fn begin_close(&mut self) -> Option<Box<dyn FnOnce() + Send>> {
+        None
+    }
+
     fn params(&mut self) -> Vec<ParamInfo>;
     /// Sets a parameter from the main thread (reaches the plugin on the next block).
     fn set_param(&mut self, id: u32, value: f64);

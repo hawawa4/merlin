@@ -102,8 +102,27 @@ struct Running {
     cpu_script: Option<(Instant, u64)>,
     script: Vec<(Duration, Action)>,
     quit: bool,
-    requested: bool,
+    /// A frame was asked of the window system (when) and has not been drawn yet.
+    requested: Option<Instant>,
+    /// When the last frame was drawn.
+    last_frame: Instant,
+    /// When the meters were last read, and what they showed at the last frame.
+    meters_at: Instant,
+    meters_shown: Vec<i16>,
+    /// Frames counted at the last CPU reading.
+    frames_mark: u64,
 }
+
+/// The shortest time between two frames. 60 a second is plenty for a rack of controls, and a
+/// burst of input (a controller's knob, a fast mouse) would otherwise draw a frame per event.
+const FRAME_MIN: Duration = Duration::from_micros(16_667);
+/// How often the window is drawn while something on it moves (meters, MIDI lights, keys).
+const ANIMATE: Duration = Duration::from_millis(33);
+/// ... and while nothing does (the CPU readings, which change once a second).
+const IDLE: Duration = Duration::from_secs(1);
+/// How often the meters are looked at while silent, so a note shows on them at once. Reading
+/// them is a few atomics; only a change that shows asks for a frame.
+const POLL: Duration = Duration::from_millis(100);
 
 struct App {
     proxy: EventLoopProxy<UserEvent>,
@@ -282,7 +301,11 @@ impl App {
             cpu_script: None,
             script: parse_script(),
             quit: false,
-            requested: false,
+            requested: None,
+            last_frame: Instant::now() - FRAME_MIN,
+            meters_at: Instant::now(),
+            meters_shown: Vec::new(),
+            frames_mark: 0,
         };
         // Lay out once so the dock has its real rect before the first editor is created.
         run.redraw();
@@ -295,17 +318,28 @@ impl App {
 }
 
 impl Running {
+    /// Asks for a frame: now, or as soon as [`FRAME_MIN`] after the last one allows.
     fn ask_redraw(&mut self) {
-        self.requested = true;
-        self.window.request_redraw();
+        // (Asked again if the answer is long overdue: a lost request must not stop the window.)
+        if self
+            .requested
+            .is_some_and(|t| t.elapsed() < Duration::from_millis(250))
+        {
+            return;
+        }
+        let now = Instant::now();
+        let earliest = self.last_frame + FRAME_MIN;
+        if now >= earliest {
+            self.requested = Some(now);
+            self.window.request_redraw();
+        } else {
+            self.repaint_at = Some(self.repaint_at.map_or(earliest, |t| t.min(earliest)));
+        }
     }
 
     fn redraw(&mut self) {
         self.frames += 1;
-        let peaks = self.session.take_peaks();
-        for (shown, p) in self.ui.peaks_shown.iter_mut().zip(peaks) {
-            *shown = p.max(*shown * 0.7);
-        }
+        self.last_frame = Instant::now();
         let raw = self.egui.take_egui_input(&self.window);
         let ctx = self.egui.egui_ctx().clone();
         let mut dock_rect = egui::Rect::NOTHING;
@@ -359,12 +393,10 @@ impl Running {
             .get(&ViewportId::ROOT)
             .map(|v| v.repaint_delay)
             .unwrap_or(Duration::MAX);
-        self.repaint_at = if delay == Duration::ZERO {
+        self.repaint_at = Instant::now().checked_add(delay);
+        if delay == Duration::ZERO {
             self.ask_redraw();
-            None
-        } else {
-            Instant::now().checked_add(delay)
-        };
+        }
         for action in actions {
             self.apply(action);
         }
@@ -1294,27 +1326,65 @@ impl Running {
         }
     }
 
+    /// Feeds the slot meters and the header's meter from the engine, and returns whether they
+    /// still move and what they now show.
+    fn feed_meters(&mut self, now: Instant) -> (bool, Vec<i16>) {
+        let dt = now.duration_since(self.meters_at).as_secs_f32().min(0.2);
+        self.meters_at = now;
+        let t = self.started.elapsed().as_secs_f64();
+        // The slot meters fall back by 30 % every 33 ms, whatever the frame rate.
+        let fall = 0.7f32.powf(dt / 0.033);
+        for (shown, p) in self
+            .ui
+            .peaks_shown
+            .iter_mut()
+            .zip(self.session.take_peaks())
+        {
+            *shown = p.max(*shown * fall);
+            if *shown < 0.0005 {
+                *shown = 0.0;
+            }
+        }
+        self.ui.meter.feed(self.session.take_meter(), t, dt);
+        self.ui.meter_now = t;
+        let moving = self.ui.peaks_shown.iter().any(|&p| p > 0.002) || self.ui.meter.moving(t);
+        // What is on screen: the bars to the pixel (the widest is about 200 px, in Perform), the
+        // lamps exactly.
+        let (lamps, clip) = self.ui.meter.shown(self.ui.meter_lamps, t);
+        let mut shown: Vec<i16> = self
+            .ui
+            .peaks_shown
+            .iter()
+            .map(|p| (p.clamp(0.0, 1.0).sqrt() * 200.0) as i16)
+            .collect();
+        shown.extend(lamps);
+        shown.push(i16::from(clip));
+        (moving, shown)
+    }
+
     fn tick(&mut self, now: Instant) {
         if now >= self.next_status {
-            let active = self.ui.peaks_shown.iter().any(|&p| p > 0.002)
-                || self.session.midi_active()
-                || self.session.transport_running()
+            let (moving, mut shown) = self.feed_meters(now);
+            // The held keys and the MIDI lights are on screen too: a frame when they change.
+            let mut held = [0i16; 8];
+            for (k, h) in self.session.engine.shared.held.iter().enumerate() {
+                if h.load(std::sync::atomic::Ordering::Relaxed) != 0 {
+                    held[k / 16] |= 1 << (k % 16);
+                }
+            }
+            shown.extend(held);
+            let midi = self.session.midi_active();
+            shown.push(i16::from(midi));
+            // Things that move on screen all the time while they are on.
+            let busy = self.session.transport_running()
                 || self.session.counting_in()
-                || self.ui.held_key.is_some()
-                || self.session.touch_learning().is_some()
-                || self
-                    .session
-                    .engine
-                    .shared
-                    .held
-                    .iter()
-                    .any(|h| h.load(std::sync::atomic::Ordering::Relaxed) != 0);
-            self.next_status = now
-                + if active {
-                    Duration::from_millis(50)
-                } else {
-                    Duration::from_millis(500)
-                };
+                || self.session.touch_learning().is_some();
+            let period = if busy || moving || midi || self.ui.held_key.is_some() {
+                ANIMATE
+            } else {
+                POLL
+            };
+            self.next_status = now + period;
             let secs = now.duration_since(self.cpu_mark.0);
             if secs >= Duration::from_secs(2) {
                 let ticks = own_cpu_ticks();
@@ -1322,11 +1392,27 @@ impl Running {
                     ((ticks - self.cpu_mark.1) as f64 / ticks_per_second() / secs.as_secs_f64()
                         * 100.0) as f32;
                 self.cpu_mark = (now, ticks);
+                self.ui.status.frames_per_s =
+                    (self.frames - self.frames_mark) as f64 / secs.as_secs_f64();
+                self.frames_mark = self.frames;
                 let up = self.started.elapsed().as_secs_f64().max(0.001);
-                self.ui.status.frames_per_s = self.frames as f64 / up;
                 self.ui.status.wakeups_per_s = self.wakeups as f64 / up;
             }
-            self.ask_redraw();
+            // A frame when the meters show something new, while something else moves, and once
+            // a second for the readings. Not when one is coming anyway before the next tick:
+            // two clocks at slightly different rates would otherwise each add their frames.
+            let changed = shown != self.meters_shown;
+            let due = busy || changed || now >= self.last_frame + IDLE;
+            let coming = self
+                .requested
+                .is_some_and(|t| t.elapsed() < Duration::from_millis(250))
+                || self.repaint_at.is_some_and(|t| t <= now + period);
+            if due || coming {
+                self.meters_shown = shown;
+            }
+            if due && !coming {
+                self.ask_redraw();
+            }
         }
         self.session.poll_midi_hotplug();
         self.session.poll_touch_learn(now);
@@ -1378,9 +1464,11 @@ impl ApplicationHandler<UserEvent> for App {
     fn user_event(&mut self, _: &ActiveEventLoop, event: UserEvent) {
         let Some(run) = self.run.as_mut() else { return };
         run.wakeups += 1;
-        run.session.handle_event(event);
+        let changed = run.session.handle_event(event);
         run.service_at = run.session.service();
-        run.ask_redraw();
+        if changed {
+            run.ask_redraw();
+        }
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
@@ -1414,7 +1502,7 @@ impl ApplicationHandler<UserEvent> for App {
                 run.ask_redraw();
             }
             WindowEvent::RedrawRequested => {
-                run.requested = false;
+                run.requested = None;
                 run.redraw();
             }
             WindowEvent::HoveredFile(path) => {

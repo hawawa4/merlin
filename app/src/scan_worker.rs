@@ -73,22 +73,35 @@ pub fn spawn(
             for f in &forget {
                 cache.forget(f);
             }
-            let send = |m: ScanMsg| {
-                let _ = tx.send(m);
+            // The main thread is woken for news it should show: a file about to be probed, a
+            // probed file's result, the end. Files answered from the cache (nearly all of them,
+            // usually) ride along with the next wake-up instead of waking it one by one.
+            let wake = || {
                 let _ = proxy.send_event(UserEvent::Scan);
             };
+            let probing = std::cell::Cell::new(false);
             scan_ignoring(
                 &dirs,
                 &ignored,
                 &mut cache,
                 &|file, windows| probe(&exe, file, windows, &env),
-                |file| send(ScanMsg::Started(file.to_owned())),
-                |entry| send(ScanMsg::Entry(entry.clone())),
+                |file| {
+                    probing.set(true);
+                    let _ = tx.send(ScanMsg::Started(file.to_owned()));
+                    wake();
+                },
+                |entry| {
+                    let _ = tx.send(ScanMsg::Entry(entry.clone()));
+                    if probing.replace(false) {
+                        wake();
+                    }
+                },
             );
             if let Err(e) = cache.save(&cache_file) {
                 eprintln!("could not save the plugin cache: {e:#}");
             }
-            send(ScanMsg::Finished);
+            let _ = tx.send(ScanMsg::Finished);
+            wake();
         })
         .expect("spawn scan thread");
     rx

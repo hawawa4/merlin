@@ -154,6 +154,8 @@ pub struct RemotePlugin {
     values: Option<(Instant, HashMap<u32, f64>)>,
     has_editor: bool,
     editor: EditorCache,
+    /// [`PluginHandle::begin_close`] took over the end of the process: drop has nothing to do.
+    closed: bool,
 }
 
 #[derive(Default)]
@@ -279,6 +281,7 @@ impl RemotePlugin {
             values: None,
             has_editor: false,
             editor: EditorCache::default(),
+            closed: false,
         };
         let load = Request::Load {
             path: path.to_owned(),
@@ -380,18 +383,32 @@ impl RemotePlugin {
     }
 }
 
-impl Drop for RemotePlugin {
-    fn drop(&mut self) {
+impl RemotePlugin {
+    /// Tells the host to shut down; what is left is waiting for it to go.
+    fn ask_shutdown(&mut self) {
         self.shared.closing.store(true, Ordering::SeqCst);
         if !self.shared.is_dead() {
             self.next_id += 1;
             let _ = self.send(self.next_id, Request::Shutdown, &[]);
         }
-        // A plugin that hangs while it is destroyed does not hold the app up.
-        if !self.shared.wait_exited(Duration::from_secs(2)) {
-            self.shared.kill();
-            self.shared.wait_exited(Duration::from_secs(1));
+    }
+}
+
+/// Waits for a host that was asked to shut down; one that hangs while it is destroyed is killed.
+fn await_exit(shared: &Shared) {
+    if !shared.wait_exited(Duration::from_secs(2)) {
+        shared.kill();
+        shared.wait_exited(Duration::from_secs(1));
+    }
+}
+
+impl Drop for RemotePlugin {
+    fn drop(&mut self) {
+        if self.closed {
+            return;
         }
+        self.ask_shutdown();
+        await_exit(&self.shared);
     }
 }
 
@@ -436,6 +453,16 @@ impl PluginHandle for RemotePlugin {
 
     fn deactivate(&mut self) {
         let _ = self.call_ok(Request::Deactivate, "shutting down");
+    }
+
+    fn begin_close(&mut self) -> Option<Box<dyn FnOnce() + Send>> {
+        if self.closed {
+            return None;
+        }
+        self.closed = true;
+        self.ask_shutdown();
+        let shared = self.shared.clone();
+        Some(Box::new(move || await_exit(&shared)))
     }
 
     fn params(&mut self) -> Vec<ParamInfo> {

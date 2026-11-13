@@ -83,28 +83,20 @@ pub fn panel(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec
             ui.separator();
 
             let q = st.query.to_lowercase();
-            let matches = |k: usize| {
-                let f = &s.found[k];
-                (q.is_empty()
-                    || f.info.name.to_lowercase().contains(&q)
-                    || f.info.vendor.to_lowercase().contains(&q)
-                    || f.info
-                        .features
-                        .iter()
-                        .any(|x| x.to_lowercase().contains(&q))
-                    || s.tags_of(f)
-                        .list
-                        .iter()
-                        .any(|t| t.label().to_lowercase().contains(&q)))
-                    && (!st.favs_only || s.is_favorite(f))
-                    && st.tag_filter.matches(s.tags_of(f).list)
-            };
-            let shown: Vec<usize> = (0..s.found.len()).filter(|&k| matches(k)).collect();
             // Narrowed by a search, a filter or favourites: show everything that is left rather
             // than make the user open branches to find it.
             let force_open =
                 (!q.is_empty() || st.favs_only || st.tag_filter != Filter::Any).then_some(true);
-            let tree = build_tree(s, &shown);
+            // Worked out again only when the plugins, their tags or the search change, not for
+            // every frame.
+            let key = (s.browser_rev, q, st.favs_only, st.tag_filter);
+            if st.browser_cache.key.as_ref() != Some(&key) {
+                let shown = filter(s, &key.1, key.2, key.3);
+                st.browser_cache.tree = build_tree(s, &shown);
+                st.browser_cache.shown = shown;
+                st.browser_cache.key = Some(key);
+            }
+            let (shown, tree) = (&st.browser_cache.shown, &st.browser_cache.tree);
 
             egui::ScrollArea::vertical()
                 .auto_shrink(false)
@@ -115,7 +107,7 @@ pub fn panel(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec
                     // The Favourites view is a plain list; in All, a favourite stays where it is
                     // and only its star changes.
                     if st.favs_only {
-                        for &k in &shown {
+                        for &k in shown {
                             row(ui, s, k, true, actions);
                         }
                         return;
@@ -177,8 +169,34 @@ pub fn panel(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec
         });
 }
 
+/// The browser's filtered list and tree, kept between frames.
+#[derive(Default)]
+pub struct Cache {
+    key: Option<(u64, String, bool, Filter)>,
+    shown: Vec<usize>,
+    tree: Tree,
+}
+
+/// The browser entries that match the search, the favourites switch and the tag filter.
+fn filter(s: &Session, q: &str, favs_only: bool, tag_filter: Filter) -> Vec<usize> {
+    (0..s.found.len())
+        .filter(|&k| {
+            let f = &s.found[k];
+            let tags = s.tags_at(k).list;
+            (q.is_empty()
+                || f.info.name.to_lowercase().contains(q)
+                || f.info.vendor.to_lowercase().contains(q)
+                || f.info.features.iter().any(|x| x.to_lowercase().contains(q))
+                || tags.iter().any(|t| t.label().to_lowercase().contains(q)))
+                && (!favs_only || s.favorite_at(k))
+                && tag_filter.matches(tags)
+        })
+        .collect()
+}
+
 /// What the tree shows: the plugins under each family and instrument they are tagged with (a
 /// plugin with two tags is under both), and those no tag places.
+#[derive(Default)]
 struct Tree {
     families: Vec<Family>,
     untagged: Vec<usize>,
@@ -212,7 +230,7 @@ fn build_tree(s: &Session, shown: &[usize]) -> Tree {
             instruments: Vec::new(),
         };
         for &k in shown {
-            let list = s.tags_of(&s.found[k]).list;
+            let list = s.tags_at(k).list;
             if list
                 .iter()
                 .any(|t| t.family == *name && t.instrument.is_none())
@@ -226,7 +244,7 @@ fn build_tree(s: &Session, shown: &[usize]) -> Tree {
                 .iter()
                 .copied()
                 .filter(|&k| {
-                    s.tags_of(&s.found[k])
+                    s.tags_at(k)
                         .list
                         .iter()
                         .any(|t| t.family == *name && t.instrument.as_deref() == Some(instrument))
@@ -305,7 +323,7 @@ fn row(ui: &mut egui::Ui, s: &Session, k: usize, show_tags: bool, actions: &mut 
     let unsupported = quirks::lookup(&f.info.id, f.windows).unsupported;
     let crashed = s.quarantine.get(&f.path, &f.info.id).is_some();
     ui.horizontal(|ui| {
-        let fav = s.is_favorite(f);
+        let fav = s.favorite_at(k);
         if crate::hw::star(ui, fav)
             .on_hover_text(if fav {
                 "Favourite (click to remove)"
@@ -317,7 +335,7 @@ fn row(ui: &mut egui::Ui, s: &Session, k: usize, show_tags: bool, actions: &mut 
             actions.push(Action::ToggleFavorite(k));
         }
         // The picture of the first tag, so a list of plugins says what each one is.
-        match s.tags_of(f).list.first() {
+        match s.tags_at(k).list.first() {
             Some(tag) => {
                 icons::show(
                     ui,
@@ -348,7 +366,7 @@ fn row(ui: &mut egui::Ui, s: &Session, k: usize, show_tags: bool, actions: &mut 
                 name.clone().on_hover_cursor(egui::CursorIcon::Grab);
             }
             label = Some(name);
-            let tags = s.tags_of(f);
+            let tags = s.tags_at(k);
             if show_tags && !tags.list.is_empty() {
                 let line: Vec<String> = tags.list.iter().map(Tag::label).collect();
                 let text = RichText::new(line.join(", ")).small().weak();

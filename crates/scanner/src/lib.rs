@@ -373,6 +373,20 @@ pub fn cached_entries(dirs: &[PathBuf], ignored: &[PathBuf], cache: &Cache) -> V
         .collect()
 }
 
+/// The cache's entries for files in `dirs` (minus the `ignored` ones), without asking the disk
+/// whether they are still there: instant even when a folder is on a network share or a disk
+/// that has to spin up. A scan then confirms them.
+pub fn remembered_entries(dirs: &[PathBuf], ignored: &[PathBuf], cache: &Cache) -> Vec<Entry> {
+    let mut v: Vec<Entry> = cache
+        .entries
+        .values()
+        .filter(|e| dirs.iter().any(|d| e.path.starts_with(d)) && !ignored.contains(&e.path))
+        .cloned()
+        .collect();
+    v.sort_by(|a, b| a.path.cmp(&b.path));
+    v
+}
+
 /// [`scan_with`] using the real loaders.
 pub fn scan(dirs: &[PathBuf], cache: &mut Cache, progress: impl FnMut(&Path)) -> Vec<Entry> {
     scan_with(dirs, cache, &load_any, progress, |_| {})

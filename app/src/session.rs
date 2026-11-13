@@ -14,13 +14,14 @@ use merlin_hosting::{EditorSize, HostEvent, MidiEvent, PluginHandle, Waker};
 use merlin_model::{
     Format, FxSettings, Insert, MAX_INSERTS, MAX_SLOTS, PluginRef, Rig, SelectMode, Slot,
 };
-use merlin_sandbox::{PluginFailed, RemotePlugin};
+use merlin_sandbox::PluginFailed;
 use merlin_scanner::{Cache, Entry, Found, Quarantine, Quarantined};
 use std::sync::mpsc;
 
 mod backing;
 mod capture;
 mod controls;
+mod loader;
 mod looper;
 mod macros;
 mod outputs;
@@ -62,8 +63,8 @@ pub enum UserEvent {
     Host(usize, HostEvent),
     /// The scan worker has news.
     Scan,
-    /// A SoundFont finished decoding on a worker thread.
-    Font,
+    /// A plugin finished loading on a worker thread.
+    Loaded,
     /// The Windows plugin installer or sync has news.
     Windows,
     /// A control message arrived from a MIDI device.
@@ -147,11 +148,36 @@ pub struct SlotCpu {
     pub wine: Option<f32>,
 }
 
-/// A decoded SoundFont (or why not) for the slot that asked for it.
-struct FontMsg {
-    slot: usize,
-    found: Found,
-    fonts: Result<Vec<Arc<merlin_hosting::soundfont::Font>>>,
+/// A plugin being created on a worker thread (see [`loader`]).
+pub struct Pending {
+    pub name: String,
+    pub since: Instant,
+    generation: u64,
+    path: PathBuf,
+    plugin_id: String,
+    vendor: String,
+    then: AfterLoad,
+    /// Tells the worker to give up: set when this is dropped (the slot was given something else,
+    /// emptied, or the rig replaced), so an abandoned load does not hold a place in the queue.
+    cancelled: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for Pending {
+    fn drop(&mut self) {
+        self.cancelled.store(true, Ordering::Relaxed);
+    }
+}
+
+/// What a finished load goes on to do.
+enum AfterLoad {
+    /// Chosen in the browser: the slot takes it on.
+    Browser(Found),
+    /// The rig's own plugin (opening the rig, or Retry): the slot already names it.
+    Restore { retry: bool },
+    /// An effect chosen for an insert.
+    InsertBrowser(Found),
+    /// The rig's own insert.
+    InsertRestore,
 }
 
 struct SlotWaker {
@@ -230,6 +256,10 @@ pub struct Session {
     /// What to tell the user instead of, or beside, a slot's editor (see `quirks`).
     pub notes: Vec<Option<String>>,
     pub found: Vec<Found>,
+    /// [`Session::favorite_key`] of each of `found` (the browser asks for it many times a frame).
+    found_keys: Vec<String>,
+    /// Bumped whenever what the browser shows may have changed (plugins, tags, favourites).
+    pub browser_rev: u64,
     /// Plugins the user hid from the browser (still known, so saved rigs keep loading them).
     pub hidden: Vec<Found>,
     /// What the scanner tags each of `found` as (by `favorite_key`); the user's own tags win.
@@ -316,10 +346,22 @@ pub struct Session {
     windows_sync_again: bool,
     /// The Updates tab: what a check found and how an install is going.
     pub update: update::UpdateState,
-    font_tx: mpsc::Sender<FontMsg>,
-    font_rx: mpsc::Receiver<FontMsg>,
-    /// Per slot: the SoundFont being decoded for it (path and name).
-    pub loading: Vec<Option<(PathBuf, String)>>,
+    loader: loader::Loader,
+    apps_tx: mpsc::Sender<Vec<merlin_wine::WindowsApp>>,
+    apps_rx: mpsc::Receiver<Vec<merlin_wine::WindowsApp>>,
+    /// The Windows apps were listed again since the startup thread began.
+    apps_superseded: bool,
+    /// The files the running scan has reported: when it ends, entries not among them are gone.
+    scan_seen: std::collections::HashSet<PathBuf>,
+    /// Plugins being created on worker threads, by editor id (slot, or insert id).
+    pub pending: std::collections::HashMap<usize, Pending>,
+    load_generation: u64,
+    /// The selection of the rig being opened: its slots are selected as they finish loading.
+    restore_selection: Vec<usize>,
+    /// When the rig being opened started loading its plugins.
+    restore_started: Option<Instant>,
+    /// Plugin processes being waited for on other threads after they were removed.
+    closing: Vec<std::thread::JoinHandle<()>>,
     /// The file the scanner is probing right now.
     pub scan_current: Option<PathBuf>,
     pub quarantine: Quarantine,
@@ -370,7 +412,7 @@ impl Session {
         );
         let outputs = backend.connect_outputs(outputs::as_strs(&wanted));
         let midi_sources = backend.connect_midi_sources(&midi_policy(&settings.midi_devices));
-        let (font_tx, font_rx) = mpsc::channel();
+        let (apps_tx, apps_rx) = mpsc::channel();
         let mut s = Self {
             rig: new_rig("Untitled"),
             rig_path: None,
@@ -385,6 +427,8 @@ impl Session {
             view_id: None,
             notes: vec![None; UI_SLOTS],
             found: Vec::new(),
+            found_keys: Vec::new(),
+            browser_rev: 0,
             hidden: Vec::new(),
             auto_tags: Default::default(),
             effects: Vec::new(),
@@ -431,9 +475,16 @@ impl Session {
             windows_apps: Vec::new(),
             windows_sync_again: false,
             update: Default::default(),
-            font_tx,
-            font_rx,
-            loading: vec![None; UI_SLOTS],
+            loader: loader::Loader::new(proxy.clone()),
+            apps_tx,
+            apps_rx,
+            apps_superseded: false,
+            scan_seen: Default::default(),
+            pending: Default::default(),
+            load_generation: 0,
+            restore_selection: Vec::new(),
+            restore_started: None,
+            closing: Vec::new(),
             scan_current: None,
             quarantine: Quarantine::load(&crate::paths::quarantine_file()),
             guard,
@@ -451,8 +502,10 @@ impl Session {
             autosave_after: None,
         };
         s.rebuild_dirs();
-        // Start from what the cache knows, then let the background scan catch up.
-        s.entries = merlin_scanner::cached_entries(
+        // Start from what the cache knows, without touching the folders (a network share or a
+        // sleeping disk can take seconds to answer); the background scan then checks every file
+        // and drops the ones that are gone.
+        s.entries = merlin_scanner::remembered_entries(
             &s.plugin_dirs,
             &s.settings.ignored_files,
             &Cache::load(&crate::paths::plugin_cache_file()),
@@ -463,7 +516,7 @@ impl Session {
         if s.windows_runtime().is_some() {
             let _ = s.sync_windows_plugins();
         }
-        s.refresh_windows_apps();
+        s.refresh_windows_apps_later();
         s.say(format!(
             "JACK at {sample_rate} Hz, outputs {outputs:?}, MIDI {:?}",
             s.midi_sources
@@ -741,7 +794,24 @@ impl Session {
     }
 
     /// Looks again for the programs installed in the Windows prefix.
+    /// [`Self::refresh_windows_apps`] on a worker thread (at startup: it reads the prefix).
+    fn refresh_windows_apps_later(&mut self) {
+        let Some(rt) = self.windows_runtime() else {
+            return;
+        };
+        let (tx, proxy) = (self.apps_tx.clone(), self.proxy.clone());
+        let _ = std::thread::Builder::new()
+            .name("windows-apps".into())
+            .spawn(move || {
+                let _ = tx.send(rt.installed_apps());
+                let _ = proxy.send_event(UserEvent::Windows);
+            });
+    }
+
     pub fn refresh_windows_apps(&mut self) {
+        // Fresher than what the startup thread may still bring.
+        self.apps_rx.try_iter().for_each(drop);
+        self.apps_superseded = true;
         self.windows_apps = self
             .windows_runtime()
             .map(|rt| rt.installed_apps())
@@ -785,6 +855,11 @@ impl Session {
 
     /// Takes in what the Windows job reported.
     pub fn poll_windows(&mut self) {
+        if let Some(apps) = self.apps_rx.try_iter().last()
+            && !self.apps_superseded
+        {
+            self.windows_apps = apps;
+        }
         let Some(rx) = self.windows_rx.as_ref() else {
             return;
         };
@@ -825,6 +900,7 @@ impl Session {
     }
 
     pub fn save_settings(&mut self) {
+        self.browser_rev += 1;
         if let Err(e) = self.settings.save(&crate::paths::settings_file()) {
             self.say(format!("could not save the settings: {e:#}"));
         }
@@ -994,6 +1070,24 @@ impl Session {
         self.save_settings();
     }
 
+    /// [`Self::tags_of`] browser entry `k`, without working out its key again.
+    pub fn tags_at(&self, k: usize) -> crate::tags::Tags<'_> {
+        match self.found_keys.get(k) {
+            Some(key) => {
+                crate::tags::effective(self.settings.tags.get(key), self.auto_tags.get(key))
+            }
+            None => self.tags_of(&self.found[k]),
+        }
+    }
+
+    /// [`Self::is_favorite`] for browser entry `k`.
+    pub fn favorite_at(&self, k: usize) -> bool {
+        match self.found_keys.get(k) {
+            Some(key) => self.settings.favorites.contains(key),
+            None => self.is_favorite(&self.found[k]),
+        }
+    }
+
     /// The tags of this plugin: the user's if they ever set any (even none), else the scanner's.
     pub fn tags_of(&self, f: &Found) -> crate::tags::Tags<'_> {
         let key = Self::favorite_key(f);
@@ -1027,7 +1121,7 @@ impl Session {
     pub fn load_into_free_slot(&mut self, k: usize) -> Result<()> {
         let found = self.found.get(k).cloned().context("no such plugin")?;
         let free = (0..UI_SLOTS)
-            .find(|&i| self.rig.slots[i].instrument.is_none() && self.loading[i].is_none())
+            .find(|&i| self.rig.slots[i].instrument.is_none() && !self.pending.contains_key(&i))
             .context("all slots are in use: drop it on one to replace it")?;
         self.load(free, &found)
     }
@@ -1045,10 +1139,11 @@ impl Session {
         };
         let free = self
             .viewing
-            .filter(|&i| self.rig.slots[i].instrument.is_none() && self.loading[i].is_none())
+            .filter(|&i| self.rig.slots[i].instrument.is_none() && !self.pending.contains_key(&i))
             .or_else(|| {
-                (0..UI_SLOTS)
-                    .find(|&i| self.rig.slots[i].instrument.is_none() && self.loading[i].is_none())
+                (0..UI_SLOTS).find(|&i| {
+                    self.rig.slots[i].instrument.is_none() && !self.pending.contains_key(&i)
+                })
             })
             .context("all slots are in use: remove one first")?;
         self.load(free, &found)
@@ -1215,6 +1310,8 @@ impl Session {
             .filter(|(_, tags)| !tags.is_empty())
             .collect();
         self.effects = merlin_scanner::with_feature(&self.entries, "audio-effect");
+        self.found_keys = self.found.iter().map(Self::favorite_key).collect();
+        self.browser_rev += 1;
     }
 
     pub fn scanning(&self) -> bool {
@@ -1233,6 +1330,7 @@ impl Session {
         }
         self.scan_quiet = false;
         self.scan_probed = false;
+        self.scan_seen.clear();
         self.scan_rx = Some(scan_worker::spawn(
             self.plugin_dirs.clone(),
             self.settings.ignored_files.clone(),
@@ -1250,6 +1348,7 @@ impl Session {
         };
         let mut finished = false;
         let mut changed = false;
+        let mut index: Option<std::collections::HashMap<PathBuf, usize>> = None;
         while let Ok(msg) = rx.try_recv() {
             match msg {
                 ScanMsg::Started(p) => {
@@ -1257,14 +1356,37 @@ impl Session {
                     self.scan_probed = true;
                 }
                 ScanMsg::Entry(e) => {
-                    match self.entries.iter_mut().find(|x| x.path == e.path) {
-                        Some(slot) => *slot = e,
-                        None => self.entries.push(e),
+                    let index = index.get_or_insert_with(|| {
+                        self.entries
+                            .iter()
+                            .enumerate()
+                            .map(|(k, x)| (x.path.clone(), k))
+                            .collect()
+                    });
+                    self.scan_seen.insert(e.path.clone());
+                    match index.get(&e.path) {
+                        Some(&k) => {
+                            if self.entries[k] != e {
+                                self.entries[k] = e;
+                                changed = true;
+                            }
+                        }
+                        None => {
+                            index.insert(e.path.clone(), self.entries.len());
+                            self.entries.push(e);
+                            changed = true;
+                        }
                     }
-                    changed = true;
                 }
                 ScanMsg::Finished => finished = true,
             }
+        }
+        if finished {
+            // What the cache knew but the folders no longer have.
+            let before = self.entries.len();
+            let seen = std::mem::take(&mut self.scan_seen);
+            self.entries.retain(|e| seen.contains(&e.path));
+            changed |= self.entries.len() != before;
         }
         if changed {
             self.refresh_found();
@@ -1344,25 +1466,106 @@ impl Session {
         });
     }
 
-    fn create_plugin(&mut self, i: usize, path: &Path, id: &str, windows: bool) -> Result<Loaded> {
-        let (name, vendor) = self
+    /// Starts creating a plugin for editor id `id` (a slot or an insert), on a worker thread.
+    /// The slot shows it as loading until [`Session::finish_load`] installs it.
+    #[allow(clippy::too_many_arguments)]
+    fn start_load(
+        &mut self,
+        id: usize,
+        path: PathBuf,
+        plugin_id: String,
+        name: String,
+        windows: bool,
+        state: Option<Vec<u8>>,
+        then: AfterLoad,
+    ) {
+        self.load_generation += 1;
+        let generation = self.load_generation;
+        let vendor = self
             .found
             .iter()
             .chain(&self.hidden)
             .chain(&self.effects)
-            .find(|f| f.info.id == id)
-            .map(|f| (f.info.name.clone(), f.info.vendor.clone()))
-            .unwrap_or_else(|| (id.to_owned(), String::new()));
+            .find(|f| f.info.id == plugin_id)
+            .map(|f| f.info.vendor.clone())
+            .unwrap_or_default();
         self.guard.register_plugin(HostInfo {
-            slot: i,
-            path: path.to_owned(),
-            id: id.to_owned(),
+            slot: id,
+            path: path.clone(),
+            id: plugin_id.clone(),
             name: name.clone(),
         });
-        // Without isolation a bridged plugin starts a Wine host process of ours: remember which
-        // one, so the watchdog can tell a crash from a normal unload.
-        let in_process = crate::sandbox::disabled();
-        let before = if windows && in_process {
+        let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.pending.insert(
+            id,
+            Pending {
+                name,
+                since: Instant::now(),
+                generation,
+                path: path.clone(),
+                plugin_id: plugin_id.clone(),
+                vendor,
+                then,
+                cancelled: cancelled.clone(),
+            },
+        );
+        // Plugins in our own process (`MERLIN_NO_SANDBOX`) are made on this thread.
+        if crate::sandbox::disabled() && !merlin_hosting::soundfont::is_source(&path) {
+            let t = Instant::now();
+            let result = self.create_in_process(id, &path, &plugin_id, windows, state.as_deref());
+            self.finish_load(loader::Done {
+                id,
+                generation,
+                result,
+                elapsed: t.elapsed(),
+            });
+            return;
+        }
+        let env = self.bridge_env().for_file(&path).to_vec();
+        let job = loader::Job {
+            id,
+            generation,
+            path,
+            plugin_id,
+            windows,
+            state,
+            waker: Arc::new(SlotWaker {
+                proxy: Mutex::new(self.proxy.clone()),
+                slot: id,
+            }),
+            sample_rate: f64::from(self.sample_rate),
+            max_block: max_block() as u32,
+            host: crate::sandbox::plugin_host_exe(),
+            env,
+            cancelled,
+        };
+        if let Err(e) = self.loader.start(job) {
+            self.finish_load(loader::Done {
+                id,
+                generation,
+                result: Err(e),
+                elapsed: Duration::ZERO,
+            });
+        }
+    }
+
+    /// Creates, restores and activates a plugin in our own process (`MERLIN_NO_SANDBOX`).
+    fn create_in_process(
+        &mut self,
+        id: usize,
+        path: &Path,
+        plugin_id: &str,
+        windows: bool,
+        state: Option<&[u8]>,
+    ) -> Result<loader::Ready> {
+        let name = self
+            .pending
+            .get(&id)
+            .map_or_else(|| plugin_id.to_owned(), |p| p.name.clone());
+        let _loading = crate::marker::Loading::begin(path, plugin_id, &name);
+        // A bridged plugin starts a Wine host process of ours: remember which one, so the
+        // watchdog can tell a crash from a normal unload.
+        let before = if windows {
             guard::host_children()
         } else {
             Default::default()
@@ -1370,46 +1573,282 @@ impl Session {
         // A cold Wine start is slow; a native plugin that takes this long is stuck.
         let limit = Duration::from_secs(if windows { 120 } else { 40 });
         let guard = self.guard.clone();
-        let loaded = {
-            let _call = guard.call(i, "loading", limit);
-            self.create_plugin_inner(i, path, id, windows)
+        let mut plugin = {
+            let _call = guard.call(id, "loading", limit);
+            let waker = Arc::new(SlotWaker {
+                proxy: Mutex::new(self.proxy.clone()),
+                slot: id,
+            });
+            merlin_hosting::open_plugin(
+                path,
+                plugin_id,
+                waker,
+                f64::from(self.sample_rate),
+                max_block() as u32,
+            )?
         };
-        let loaded = match loaded {
-            Ok(l) => l,
-            Err(e) => {
-                // A plugin that crashes or hangs while it loads would do it at every start.
-                if e.downcast_ref::<PluginFailed>().is_some() {
-                    self.quarantine_plugin(path, id, &name, &format!("{e}"));
-                }
-                return Err(e);
-            }
-        };
-        // NI products from Cabinet are activated by NI's background service, which runs while
-        // Native Access does; loaded without it, Kontakt opens as a demo.
-        if crate::cabinet::is_bridge(path)
-            && vendor.to_lowercase().contains("native instruments")
-            && !std::mem::replace(&mut self.cabinet_hint_shown, true)
-        {
-            self.say(format!(
-                "{name} comes from Cabinet: if it opens as a demo, open Native Access in Cabinet \
-                 (it activates Native Instruments products while it runs), then load {name} again"
-            ));
-        }
-        if windows && in_process {
+        if windows {
             guard::install_socket_hook();
             for pid in guard::host_children().difference(&before) {
                 self.guard.register(
                     *pid,
                     HostInfo {
-                        slot: i,
+                        slot: id,
                         path: path.to_owned(),
-                        id: id.to_owned(),
+                        id: plugin_id.to_owned(),
                         name: name.clone(),
                     },
                 );
             }
         }
-        Ok(loaded)
+        if let Some(state) = state {
+            plugin
+                .load_state(state)
+                .context("restoring the saved state")?;
+        }
+        let processor = {
+            let _call = guard.call(id, "starting up", Duration::from_secs(30));
+            plugin.activate(f64::from(self.sample_rate), max_block() as u32)?
+        };
+        Ok(loader::Ready { plugin, processor })
+    }
+
+    /// Installs the plugins whose loads finished.
+    pub fn poll_loads(&mut self) {
+        for done in self.loader.take() {
+            self.finish_load(done);
+        }
+        self.closing.retain(|h| !h.is_finished());
+    }
+
+    /// Puts a finished plugin where it was asked for, or says why it could not load.
+    fn finish_load(&mut self, done: loader::Done) {
+        let current = self
+            .pending
+            .get(&done.id)
+            .is_some_and(|p| p.generation == done.generation);
+        if !current {
+            // The slot was given something else, or emptied, meanwhile.
+            if let Ok(r) = done.result {
+                self.closing
+                    .extend(loader::discard(Some(r.processor), r.plugin));
+            }
+            return;
+        }
+        let Some(p) = self.pending.remove(&done.id) else {
+            return;
+        };
+        let id = done.id;
+        let (slot, insert) = if id < UI_SLOTS {
+            (id, None)
+        } else {
+            let k = id - UI_SLOTS;
+            (k / MAX_INSERTS, Some(k % MAX_INSERTS))
+        };
+        // A plugin that died between being made and being installed (its crash report came
+        // while it was in nobody's hands) is a failed load, not a silent slot.
+        let result = done.result.and_then(|r| match r.plugin.failure() {
+            Some(why) => {
+                drop(r.processor);
+                self.closing.extend(loader::close(r.plugin));
+                Err(PluginFailed(why).into())
+            }
+            None => Ok(r),
+        });
+        let ready = match result {
+            Ok(r) => r,
+            Err(e) => {
+                // A plugin that crashes or hangs while it loads would do it at every start.
+                if e.downcast_ref::<PluginFailed>().is_some() {
+                    self.quarantine_plugin(&p.path, &p.plugin_id, &p.name, &format!("{e}"));
+                }
+                self.load_failed(slot, insert, &p, &e);
+                self.restore_finished();
+                return;
+            }
+        };
+        // NI products from Cabinet are activated by NI's background service, which runs while
+        // Native Access does; loaded without it, Kontakt opens as a demo.
+        if crate::cabinet::is_bridge(&p.path)
+            && p.vendor.to_lowercase().contains("native instruments")
+            && !std::mem::replace(&mut self.cabinet_hint_shown, true)
+        {
+            self.say(format!(
+                "{} comes from Cabinet: if it opens as a demo, open Native Access in Cabinet \
+                 (it activates Native Instruments products while it runs), then load {} again",
+                p.name, p.name
+            ));
+        }
+        let loader::Ready { plugin, processor } = ready;
+        // Whatever ran there before is gone first; then the watchdog knows the new plugin.
+        match insert {
+            None => self.remove_runtime(slot),
+            Some(index) => self.remove_insert_runtime(slot, index),
+        };
+        self.guard.register_plugin(HostInfo {
+            slot: id,
+            path: p.path.clone(),
+            id: p.plugin_id.clone(),
+            name: p.name.clone(),
+        });
+        let sent = match insert {
+            None => {
+                self.plugins[slot] = Some(Loaded { plugin });
+                self.push_slot_settings(slot);
+                self.engine.send(Command::SetProcessor { slot, processor })
+            }
+            Some(index) => {
+                self.inserts[slot][index] = Some(Loaded { plugin });
+                self.engine.send(Command::SetInsert {
+                    slot,
+                    index,
+                    processor,
+                })
+            }
+        };
+        if sent.is_err() {
+            self.say(format!("error: {}: engine command queue full", p.name));
+        }
+        let took = format!("{:.1?}", done.elapsed);
+        match &p.then {
+            AfterLoad::Browser(found) => {
+                let s = &mut self.rig.slots[slot];
+                s.instrument = Some(PluginRef {
+                    format: found.info.format,
+                    id: found.info.id.clone(),
+                    name: found.info.name.clone(),
+                    path: Some(found.path.clone()),
+                    windows: found.windows,
+                });
+                s.state = None;
+                if s.name.is_empty() {
+                    s.name = found.info.name.clone();
+                }
+                self.missing[slot] = None;
+                self.dirty = true;
+                self.say(format!(
+                    "slot {} <- {}{} in {took}",
+                    slot + 1,
+                    found.info.name,
+                    if found.windows { " (Windows)" } else { "" },
+                ));
+                if self.targets.is_empty() {
+                    self.select(slot, false);
+                }
+                // Structural change: save soon, so a crash restarts from this rig.
+                self.autosave_soon();
+            }
+            AfterLoad::Restore { retry } => {
+                self.missing[slot] = None;
+                if *retry {
+                    self.say(format!("slot {}: {} loaded again", slot + 1, p.name));
+                    if self.targets.is_empty() {
+                        self.select(slot, false);
+                    }
+                } else if self.restore_selection.contains(&slot) {
+                    // The rig's selection comes back slot by slot, as they load. (Any other
+                    // selection meanwhile, by the user, a controller or a scene, ends that.)
+                    let dirty = self.dirty;
+                    let layer = !self.targets.is_empty();
+                    self.select_slot(slot, layer);
+                    if self
+                        .restore_selection
+                        .iter()
+                        .any(|i| self.pending.contains_key(i))
+                    {
+                        self.rig.selected = self.restore_selection.clone();
+                    }
+                    self.dirty = dirty;
+                }
+            }
+            AfterLoad::InsertBrowser(found) => {
+                let index = insert.unwrap_or_default();
+                self.rig.slots[slot].inserts.resize(MAX_INSERTS, None);
+                self.rig.slots[slot].inserts[index] = Some(Insert {
+                    plugin: PluginRef {
+                        format: found.info.format,
+                        id: found.info.id.clone(),
+                        name: found.info.name.clone(),
+                        path: Some(found.path.clone()),
+                        windows: found.windows,
+                    },
+                    state: None,
+                    bypass: false,
+                });
+                self.dirty = true;
+                self.say(format!(
+                    "slot {} insert {} <- {} in {took}",
+                    slot + 1,
+                    index + 1,
+                    found.info.name,
+                ));
+                self.autosave_soon();
+            }
+            AfterLoad::InsertRestore => {
+                // As the rig says now (it can have been switched while the effect loaded).
+                let index = insert.unwrap_or_default();
+                let bypass = self.rig.slots[slot]
+                    .inserts
+                    .get(index)
+                    .and_then(Option::as_ref)
+                    .is_some_and(|ins| ins.bypass);
+                let _ = self.engine.send(Command::SetInsertBypass {
+                    slot,
+                    index,
+                    bypass,
+                });
+            }
+        }
+        self.restore_finished();
+    }
+
+    /// Says why a load failed; a rig's plugin stays in the rig as a "missing" slot.
+    fn load_failed(&mut self, slot: usize, insert: Option<usize>, p: &Pending, e: &anyhow::Error) {
+        match (&p.then, insert) {
+            (AfterLoad::Restore { .. }, _) => {
+                let why = format!("{e:#}");
+                self.say(format!("slot {}: {} is missing: {why}", slot + 1, p.name));
+                self.missing[slot] = Some(why);
+            }
+            (AfterLoad::InsertRestore, Some(k)) => self.say(format!(
+                "slot {} insert {}: {} is missing: {e:#}",
+                slot + 1,
+                k + 1,
+                p.name
+            )),
+            (_, Some(k)) => self.say(format!(
+                "error: slot {} insert {}: {}: {e:#}",
+                slot + 1,
+                k + 1,
+                p.name
+            )),
+            (_, None) => self.say(format!("error: slot {}: {}: {e:#}", slot + 1, p.name)),
+        }
+    }
+
+    /// Once the last plugin of an opened rig is in, says how long the rig took.
+    fn restore_finished(&mut self) {
+        let restoring = self.pending.values().any(|p| {
+            matches!(
+                p.then,
+                AfterLoad::Restore { retry: false } | AfterLoad::InsertRestore
+            )
+        });
+        if !restoring && let Some(t) = self.restore_started.take() {
+            self.restore_selection.clear();
+            if t.elapsed() > Duration::from_millis(500) {
+                self.say(format!(
+                    "{}: everything loaded in {:.1?}",
+                    self.rig.name,
+                    t.elapsed()
+                ));
+            }
+        }
+    }
+
+    /// Is a plugin being loaded for this editor id (a slot, or an insert's id)?
+    pub fn loading(&self, id: usize) -> Option<&Pending> {
+        self.pending.get(&id)
     }
 
     fn quarantine_plugin(&mut self, path: &Path, id: &str, name: &str, reason: &str) {
@@ -1427,135 +1866,9 @@ impl Session {
         }
     }
 
-    /// Creates the plugin: in a process of its own, except SoundFonts (our own code) and when
-    /// isolation is switched off.
-    fn create_plugin_inner(
-        &mut self,
-        i: usize,
-        path: &Path,
-        id: &str,
-        windows: bool,
-    ) -> Result<Loaded> {
-        let waker = Arc::new(SlotWaker {
-            proxy: Mutex::new(self.proxy.clone()),
-            slot: i,
-        });
-        let sample_rate = f64::from(self.sample_rate);
-        let plugin: Box<dyn PluginHandle> = if merlin_hosting::soundfont::is_source(path)
-            || crate::sandbox::disabled()
-        {
-            merlin_hosting::open_plugin(path, id, waker, sample_rate, max_block() as u32)?
-        } else {
-            // Shorter than the watchdog's limits, so a stuck load ends here first.
-            let limit = Duration::from_secs(if windows { 100 } else { 30 });
-            let host = crate::sandbox::plugin_host_exe();
-            let env = self.bridge_env();
-            Box::new(
-                    RemotePlugin::spawn(&host, path, id, waker, sample_rate, max_block() as u32, limit, env.for_file(path))
-                        .map_err(|e| match host.exists() {
-                            true => e,
-                            false => e.context(format!(
-                                "{} is missing (it belongs next to the app; `cargo build -p merlin` makes it)",
-                                host.display()
-                            )),
-                        })?,
-                )
-        };
-        Ok(Loaded { plugin })
-    }
-
-    /// Installs a created plugin in a slot: activate and hand its processor to the engine.
-    fn install(&mut self, i: usize, mut loaded: Loaded) -> Result<()> {
-        let guard = self.guard.clone();
-        let processor = {
-            let _call = guard.call(i, "starting up", Duration::from_secs(30));
-            loaded
-                .plugin
-                .activate(self.sample_rate as f64, max_block() as u32)?
-        };
-        self.plugins[i] = Some(loaded);
-        self.push_slot_settings(i);
-        self.engine
-            .send(Command::SetProcessor { slot: i, processor })
-            .map_err(|_| anyhow!("engine command queue full"))?;
-        Ok(())
-    }
-
-    /// Loads a plugin chosen in the browser into a slot (replacing what is there). A SoundFont
-    /// that has to be decoded first (seconds for an SF3) is decoded on a worker thread, and the
-    /// slot says "loading" until it is ready.
+    /// Loads a plugin chosen in the browser into a slot (replacing what is there). It is
+    /// created on a worker thread; the slot says "loading" until it is ready.
     pub fn load(&mut self, i: usize, found: &Found) -> Result<()> {
-        use merlin_hosting::soundfont::{Font, files_of, is_source};
-        self.loading[i] = None;
-        if is_source(&found.path) && !files_of(&found.path).iter().all(|f| Font::is_cached(f)) {
-            self.loading[i] = Some((found.path.clone(), found.info.name.clone()));
-            let (tx, owned, proxy) = (self.font_tx.clone(), found.clone(), self.proxy.clone());
-            std::thread::Builder::new()
-                .name("soundfont-load".into())
-                .spawn(move || {
-                    // A folder's fonts decode side by side.
-                    let files = files_of(&owned.path);
-                    let fonts = std::thread::scope(|scope| {
-                        let jobs: Vec<_> = files
-                            .iter()
-                            .map(|f| scope.spawn(move || Font::load(f)))
-                            .collect();
-                        let loaded: Vec<_> =
-                            jobs.into_iter().filter_map(|j| j.join().ok()).collect();
-                        let ok: Vec<_> = loaded
-                            .iter()
-                            .filter_map(|r| r.as_ref().ok().cloned())
-                            .collect();
-                        match (ok.is_empty(), loaded.into_iter().find_map(Result::err)) {
-                            (true, Some(e)) => Err(e),
-                            (true, None) => {
-                                Err(anyhow!("{} has no SoundFonts", owned.path.display()))
-                            }
-                            _ => Ok(ok),
-                        }
-                    });
-                    let _ = tx.send(FontMsg {
-                        slot: i,
-                        found: owned,
-                        fonts,
-                    });
-                    let _ = proxy.send_event(UserEvent::Font);
-                })
-                .context("cannot start the SoundFont loader")?;
-            self.say(format!("slot {}: decoding {}...", i + 1, found.info.name));
-            return Ok(());
-        }
-        self.load_now(i, found)
-    }
-
-    /// Finishes the SoundFont loads that were waiting for a worker.
-    pub fn poll_fonts(&mut self) {
-        while let Ok(msg) = self.font_rx.try_recv() {
-            let current = self.loading[msg.slot]
-                .as_ref()
-                .is_some_and(|(p, _)| *p == msg.found.path);
-            if !current {
-                continue; // the slot was given something else meanwhile
-            }
-            self.loading[msg.slot] = None;
-            match msg.fonts {
-                // The fonts stay alive until the plugin holds its own copies.
-                Ok(fonts) => {
-                    if let Err(e) = self.load_now(msg.slot, &msg.found) {
-                        self.say(format!("error: {e:#}"));
-                    }
-                    drop(fonts);
-                }
-                Err(e) => self.say(format!(
-                    "slot {}: {}: {e:#}",
-                    msg.slot + 1,
-                    msg.found.info.name
-                )),
-            }
-        }
-    }
-
-    fn load_now(&mut self, i: usize, found: &Found) -> Result<()> {
         if let Some(why) = crate::quirks::lookup(&found.info.id, found.windows).unsupported {
             return Err(anyhow!("{} is not supported: {why}", found.info.name));
         }
@@ -1564,37 +1877,15 @@ impl Session {
             let _ = self.quarantine.save(&crate::paths::quarantine_file());
         }
         self.unload(i);
-        let t = Instant::now();
-        let loading = crate::marker::Loading::begin(&found.path, &found.info.id, &found.info.name);
-        let loaded = self.create_plugin(i, &found.path, &found.info.id, found.windows)?;
-        self.install(i, loaded)?;
-        drop(loading);
-        let slot = &mut self.rig.slots[i];
-        slot.instrument = Some(PluginRef {
-            format: found.info.format,
-            id: found.info.id.clone(),
-            name: found.info.name.clone(),
-            path: Some(found.path.clone()),
-            windows: found.windows,
-        });
-        slot.state = None;
-        if slot.name.is_empty() {
-            slot.name = found.info.name.clone();
-        }
-        self.missing[i] = None;
-        self.dirty = true;
-        self.say(format!(
-            "slot {} <- {}{} in {:?}",
-            i + 1,
-            found.info.name,
-            if found.windows { " (Windows)" } else { "" },
-            t.elapsed()
-        ));
-        if self.targets.is_empty() {
-            self.select(i, false);
-        }
-        // Structural change: save soon, so a crash restarts from this rig.
-        self.autosave_soon();
+        self.start_load(
+            i,
+            found.path.clone(),
+            found.info.id.clone(),
+            found.info.name.clone(),
+            found.windows,
+            None,
+            AfterLoad::Browser(found.clone()),
+        );
         Ok(())
     }
 
@@ -1615,18 +1906,26 @@ impl Session {
     /// Takes the plugin out of a slot: editor first, then the engine lets go of the processor,
     /// then the plugin is deactivated and destroyed. The rig slot is cleared.
     pub fn unload(&mut self, i: usize) {
-        self.loading[i] = None;
-        if self.remove_runtime(i) {
+        // A rig's plugin still loading is replaced like a loaded one: the slot keeps its
+        // settings and inserts.
+        let was_loading = self.pending.remove(&i).is_some();
+        if self.remove_runtime(i) || (was_loading && self.rig.slots[i].instrument.is_some()) {
             let slot = &mut self.rig.slots[i];
             slot.instrument = None;
             slot.state = None;
             slot.name.clear();
             self.dirty = true;
         } else if self.rig.slots[i].instrument.is_some() {
-            // A missing plugin's placeholder: clearing it is the user's explicit choice.
+            // A missing plugin's placeholder: clearing it is the user's explicit choice. Its
+            // inserts go with it, running or loading.
+            for k in 0..MAX_INSERTS {
+                self.pending.remove(&insert_id(i, k));
+                self.remove_insert_runtime(i, k);
+            }
             self.rig.slots[i] = Slot::default();
             self.dirty = true;
         }
+        self.restore_finished();
         self.missing[i] = None;
         self.targets.retain(|&t| t != i);
         self.rig.selected = self.targets.clone();
@@ -1653,6 +1952,7 @@ impl Session {
         self.wait_for_retired();
         if let Some(mut l) = self.plugins[i].take() {
             l.plugin.deactivate();
+            self.closing.extend(loader::close(l.plugin));
         }
         self.guard.end_close();
         true
@@ -1662,6 +1962,12 @@ impl Session {
 
     /// Exclusive selection, or toggling a layer; shows the slot's editor.
     pub fn select(&mut self, i: usize, layer: bool) {
+        // A selection made while a rig is still loading wins over the rig's saved one.
+        self.restore_selection.clear();
+        self.select_slot(i, layer);
+    }
+
+    fn select_slot(&mut self, i: usize, layer: bool) {
         if self.plugins[i].is_none() {
             return;
         }
@@ -1897,9 +2203,6 @@ impl Session {
     pub fn set_master_volume(&mut self, volume: f32) {
         self.rig.master_volume = volume.clamp(0.0, 1.5);
         self.dirty = true;
-        // Decode the rig's SoundFonts side by side (an SF3 takes seconds); the slots below
-        // then find them ready. Held until the rig is up.
-        let _fonts = self.decode_soundfonts();
         let _ = self
             .engine
             .send(Command::SetMasterVolume(self.rig.master_volume));
@@ -1930,28 +2233,31 @@ impl Session {
 
     // ---- host events and housekeeping ----------------------------------------------
 
-    pub fn handle_event(&mut self, event: UserEvent) {
+    /// Takes in what a plugin or a background thread reported. Returns whether the window has
+    /// to be drawn again: plugin housekeeping (timers, fds, edits that only mark the rig dirty
+    /// again) changes nothing on screen, and some plugins ask for it many times a second.
+    pub fn handle_event(&mut self, event: UserEvent) -> bool {
         let (i, e) = match event {
             UserEvent::Host(i, e) => (i, e),
             UserEvent::Scan => {
                 self.poll_scan();
-                return;
+                return true;
             }
-            UserEvent::Font => {
-                self.poll_fonts();
-                return;
+            UserEvent::Loaded => {
+                self.poll_loads();
+                return true;
             }
             UserEvent::Windows => {
                 self.poll_windows();
-                return;
+                return true;
             }
             UserEvent::Control => {
                 self.poll_control();
-                return;
+                return true;
             }
             UserEvent::Update => {
                 self.poll_update();
-                return;
+                return true;
             }
         };
         match e {
@@ -1959,11 +2265,13 @@ impl Session {
                 if let Some(l) = self.plugin_by_id(i) {
                     l.plugin.on_main_thread();
                 }
+                false
             }
             HostEvent::FdReady => {
                 if let Some(l) = self.plugin_by_id(i) {
                     l.plugin.on_fd_ready();
                 }
+                false
             }
             HostEvent::EditorResize { width, height } => {
                 let _ = self.editors.plugin_resized(
@@ -1971,14 +2279,18 @@ impl Session {
                     EditorSize { width, height },
                     &mut lookup(&mut self.plugins, &mut self.inserts),
                 );
+                true
             }
             HostEvent::EditorClosed => {
-                self.say(format!("editor {}: plugin closed its editor", i + 1))
+                self.say(format!("editor {}: plugin closed its editor", i + 1));
+                true
             }
-            HostEvent::StateDirty => self.dirty = true,
-            HostEvent::Crashed => self.plugin_crashed(i),
+            HostEvent::StateDirty => !std::mem::replace(&mut self.dirty, true),
+            HostEvent::Crashed => {
+                self.plugin_crashed(i);
+                true
+            }
         }
-        self.service();
     }
 
     /// A plugin's process died or stopped answering. Its slot goes quiet and shows "crashed" with
@@ -2163,6 +2475,10 @@ impl Session {
         let _ = self
             .editors
             .hide(&mut lookup(&mut self.plugins, &mut self.inserts));
+        // Loads still under way are dropped when they finish.
+        self.pending.clear();
+        self.restore_selection.clear();
+        self.restore_started = None;
         self.missing = vec![None; UI_SLOTS];
         self.notes = vec![None; UI_SLOTS];
         self.targets.clear();
@@ -2199,18 +2515,25 @@ impl Session {
         let _ = self
             .engine
             .send(Command::SetInheritPedal(self.rig.inherit_pedal));
-        for i in 0..UI_SLOTS {
+        // Every plugin loads on a worker thread, a few side by side; the window stays live and
+        // each slot shows it is loading. The selected slots go first.
+        self.restore_selection = self.rig.selected.clone();
+        self.restore_selection.retain(|&i| i < UI_SLOTS);
+        // Set once every load has started (a plugin in our own process is done at once, and the
+        // rig must not count as loaded after the first).
+        self.restore_started = None;
+        let started = Instant::now();
+        let mut order: Vec<usize> = self.restore_selection.clone();
+        order.extend((0..UI_SLOTS).filter(|i| !self.restore_selection.contains(i)));
+        for i in order {
             let Some(r) = self.rig.slots[i].instrument.clone() else {
                 continue;
             };
             let state = self.rig.slots[i].state.clone();
-            match self.restore_slot(i, &r, state.as_deref()) {
-                Ok(()) => self.missing[i] = None,
-                Err(e) => {
-                    let why = format!("{e:#}");
-                    self.say(format!("slot {}: {} is missing: {why}", i + 1, r.name));
-                    self.missing[i] = Some(why);
-                }
+            if let Err(e) = self.restore_slot(i, &r, state, false) {
+                let why = format!("{e:#}");
+                self.say(format!("slot {}: {} is missing: {why}", i + 1, r.name));
+                self.missing[i] = Some(why);
             }
         }
         for i in 0..UI_SLOTS {
@@ -2228,40 +2551,9 @@ impl Session {
                 }
             }
         }
-        let selected = self.rig.selected.clone();
-        for (n, &i) in selected.iter().enumerate() {
-            if i < UI_SLOTS {
-                self.select(i, n > 0);
-            }
-        }
+        self.restore_started = Some(started);
+        self.restore_finished();
         self.dirty = false;
-    }
-
-    /// Decodes every SoundFont the rig uses, one thread per file.
-    fn decode_soundfonts(&self) -> Vec<Arc<merlin_hosting::soundfont::Font>> {
-        use merlin_hosting::soundfont::{Font, files_of, is_source};
-        let mut paths: Vec<PathBuf> = self
-            .rig
-            .slots
-            .iter()
-            .filter_map(|s| s.instrument.as_ref())
-            .filter_map(|r| self.locate(r).ok())
-            .map(|(p, _)| p)
-            .filter(|p| is_source(p))
-            .flat_map(|p| files_of(&p))
-            .filter(|p| !Font::is_cached(p))
-            .collect();
-        paths.sort();
-        paths.dedup();
-        std::thread::scope(|scope| {
-            let jobs: Vec<_> = paths
-                .iter()
-                .map(|p| scope.spawn(move || Font::load(p)))
-                .collect();
-            jobs.into_iter()
-                .filter_map(|j| j.join().ok()?.ok())
-                .collect()
-        })
     }
 
     /// Finds the file for a saved plugin: by id in what was scanned (a path alone can go stale
@@ -2289,22 +2581,31 @@ impl Session {
         Ok((path, found.map_or(r.windows, |f| f.windows)))
     }
 
-    fn restore_slot(&mut self, i: usize, r: &PluginRef, state: Option<&[u8]>) -> Result<()> {
+    /// Starts loading a slot's saved plugin with its saved state.
+    fn restore_slot(
+        &mut self,
+        i: usize,
+        r: &PluginRef,
+        state: Option<Vec<u8>>,
+        retry: bool,
+    ) -> Result<()> {
         let (path, windows) = self.locate(r)?;
-        let _loading = crate::marker::Loading::begin(&path, &r.id, &r.name);
-        let mut loaded = self.create_plugin(i, &path, &r.id, windows)?;
-        if let Some(state) = state {
-            loaded
-                .plugin
-                .load_state(state)
-                .context("restoring the saved state")?;
-        }
-        self.install(i, loaded)
+        self.start_load(
+            i,
+            path,
+            r.id.clone(),
+            r.name.clone(),
+            windows,
+            state,
+            AfterLoad::Restore { retry },
+        );
+        Ok(())
     }
 
     // ---- insert effects -------------------------------------------------------------
 
-    /// Puts an effect plugin into position `index` of a slot's insert chain.
+    /// Puts an effect plugin into position `index` of a slot's insert chain (on a worker
+    /// thread; the insert says "loading" until it is ready).
     pub fn load_insert(&mut self, slot: usize, index: usize, found: &Found) -> Result<()> {
         if let Some(why) = crate::quirks::lookup(&found.info.id, found.windows).unsupported {
             return Err(anyhow!("{} is not supported: {why}", found.info.name));
@@ -2313,86 +2614,35 @@ impl Session {
             let _ = self.quarantine.save(&crate::paths::quarantine_file());
         }
         self.unload_insert(slot, index);
-        let t = Instant::now();
-        let loading = crate::marker::Loading::begin(&found.path, &found.info.id, &found.info.name);
-        let loaded = self.create_plugin(
+        self.start_load(
             insert_id(slot, index),
-            &found.path,
-            &found.info.id,
+            found.path.clone(),
+            found.info.id.clone(),
+            found.info.name.clone(),
             found.windows,
-        )?;
-        self.install_insert(slot, index, loaded)?;
-        drop(loading);
-        self.rig.slots[slot].inserts.resize(MAX_INSERTS, None);
-        self.rig.slots[slot].inserts[index] = Some(Insert {
-            plugin: PluginRef {
-                format: found.info.format,
-                id: found.info.id.clone(),
-                name: found.info.name.clone(),
-                path: Some(found.path.clone()),
-                windows: found.windows,
-            },
-            state: None,
-            bypass: false,
-        });
-        self.dirty = true;
-        self.say(format!(
-            "slot {} insert {} <- {} in {:?}",
-            slot + 1,
-            index + 1,
-            found.info.name,
-            t.elapsed()
-        ));
-        self.autosave_soon();
-        Ok(())
-    }
-
-    fn install_insert(&mut self, slot: usize, index: usize, mut loaded: Loaded) -> Result<()> {
-        let guard = self.guard.clone();
-        let processor = {
-            let _call = guard.call(
-                insert_id(slot, index),
-                "starting up",
-                Duration::from_secs(30),
-            );
-            loaded
-                .plugin
-                .activate(self.sample_rate as f64, max_block() as u32)?
-        };
-        self.inserts[slot][index] = Some(loaded);
-        self.engine
-            .send(Command::SetInsert {
-                slot,
-                index,
-                processor,
-            })
-            .map_err(|_| anyhow!("engine command queue full"))?;
+            None,
+            AfterLoad::InsertBrowser(found.clone()),
+        );
         Ok(())
     }
 
     fn restore_insert(&mut self, slot: usize, index: usize, ins: &Insert) -> Result<()> {
         let (path, windows) = self.locate(&ins.plugin)?;
-        let _loading = crate::marker::Loading::begin(&path, &ins.plugin.id, &ins.plugin.name);
-        let mut loaded =
-            self.create_plugin(insert_id(slot, index), &path, &ins.plugin.id, windows)?;
-        if let Some(state) = &ins.state {
-            loaded
-                .plugin
-                .load_state(state)
-                .context("restoring the saved state")?;
-        }
-        self.install_insert(slot, index, loaded)?;
-        if ins.bypass {
-            let _ = self.engine.send(Command::SetInsertBypass {
-                slot,
-                index,
-                bypass: true,
-            });
-        }
+        self.start_load(
+            insert_id(slot, index),
+            path,
+            ins.plugin.id.clone(),
+            ins.plugin.name.clone(),
+            windows,
+            ins.state.clone(),
+            AfterLoad::InsertRestore,
+        );
         Ok(())
     }
 
     pub fn unload_insert(&mut self, slot: usize, index: usize) {
+        self.pending.remove(&insert_id(slot, index));
+        self.restore_finished();
         self.remove_insert_runtime(slot, index);
         if let Some(entry) = self.rig.slots[slot].inserts.get_mut(index)
             && entry.take().is_some()
@@ -2419,6 +2669,7 @@ impl Session {
         self.wait_for_retired();
         if let Some(mut l) = self.inserts[slot][index].take() {
             l.plugin.deactivate();
+            self.closing.extend(loader::close(l.plugin));
         }
         self.guard.end_close();
         true
@@ -2467,12 +2718,9 @@ impl Session {
             let _ = self.quarantine.save(&crate::paths::quarantine_file());
         }
         let state = self.rig.slots[i].state.clone();
-        self.restore_slot(i, &r, state.as_deref())?;
+        self.remove_runtime(i);
+        self.restore_slot(i, &r, state, true)?;
         self.missing[i] = None;
-        self.say(format!("slot {}: {} loaded again", i + 1, r.name));
-        if self.targets.is_empty() {
-            self.select(i, false);
-        }
         Ok(())
     }
 
@@ -2491,16 +2739,24 @@ impl Session {
         }
         // The engine (and the processors inside) is gone; the plugins can be deactivated.
         drop(self.engine.take_retired());
-        for l in self.plugins.iter_mut().flatten() {
-            l.plugin.deactivate();
-        }
-        for l in self.inserts.iter_mut().flatten().flatten() {
-            l.plugin.deactivate();
-        }
-        self.plugins.iter_mut().for_each(|p| *p = None);
-        self.inserts
+        // Loads under way are told to stop; the ones that finished go with the rest.
+        self.pending.clear();
+        self.poll_loads();
+        // Every host is told at once and waited for side by side: quitting takes as long as the
+        // slowest plugin, not all of them in turn.
+        let all = self
+            .plugins
             .iter_mut()
-            .for_each(|row| row.iter_mut().for_each(|p| *p = None));
+            .chain(self.inserts.iter_mut().flatten())
+            .filter_map(Option::take);
+        let mut closing = std::mem::take(&mut self.closing);
+        for mut l in all.collect::<Vec<_>>() {
+            l.plugin.deactivate();
+            closing.extend(loader::close(l.plugin));
+        }
+        for h in closing {
+            let _ = h.join();
+        }
     }
 
     /// Refreshes [`Session::slot_cpu`] (call a few times a second).
@@ -2508,7 +2764,9 @@ impl Session {
         self.update_midi_activity();
         let now = Instant::now();
         let dt = now.duration_since(self.last_load_update);
-        if dt < Duration::from_millis(250) {
+        // Once a second: the numbers are read by a person, and each reading of the Wine hosts
+        // walks `/proc`.
+        if dt < Duration::from_secs(1) {
             return;
         }
         self.last_load_update = now;
@@ -2518,7 +2776,7 @@ impl Session {
             let worst = f32::from_bits(shared.load_max[i].swap(0, Ordering::Relaxed));
             let c = &mut self.slot_cpu[i];
             c.audio = avg;
-            c.audio_worst = worst.max(c.audio_worst * 0.9);
+            c.audio_worst = worst.max(c.audio_worst * 0.65);
         }
         // Wine hosts: CPU time since the last reading, per slot (inserts count for their slot).
         let ticks_per_s = unsafe { libc::sysconf(libc::_SC_CLK_TCK) } as f32;
@@ -2551,13 +2809,15 @@ impl Session {
                 );
             }
         }
-        for (id, pid) in hosts {
+        let pids: Vec<u32> = hosts.iter().map(|&(_, pid)| pid).collect();
+        let readings = guard::tree_cpu_ticks(&pids);
+        for ((id, pid), ticks) in hosts.into_iter().zip(readings) {
             let slot = if id < UI_SLOTS {
                 id
             } else {
                 (id - UI_SLOTS) / MAX_INSERTS
             };
-            let Some(ticks) = guard::tree_cpu_ticks(pid) else {
+            let Some(ticks) = ticks else {
                 continue;
             };
             seen.insert(pid);
