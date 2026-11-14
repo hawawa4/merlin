@@ -307,8 +307,8 @@ impl Router {
                 out[s].push(MidiEvent::new(0, 0, [0x80 | ch, owner.keys[s], 0]));
             }
         }
-        for key in 0..128 {
-            self.shared.held[key].store(0, Ordering::Relaxed);
+        for held in &self.shared.held {
+            held.store(0, Ordering::Relaxed);
         }
         for s in bits(self.loaded) {
             for ch in 0..16 {

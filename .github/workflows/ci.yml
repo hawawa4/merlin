@@ -14,9 +14,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      # Installs the toolchain pinned in rust-toolchain.toml (with rustfmt and clippy), the same
+      # one `just check` uses locally.
+      - name: Rust toolchain
+        run: rustup toolchain install && rustc --version && cargo clippy --version
       - uses: Swatinem/rust-cache@v2
       - name: System libraries
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libxcb1-dev

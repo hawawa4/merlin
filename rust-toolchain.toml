@@ -1,0 +1,6 @@
+# Pinned so `just check` runs the same rustc/clippy as CI and the release build.
+# An unpinned `stable` broke v0.13.0: CI picked up a newer clippy with a new lint that the
+# local toolchain didn't have. Move this deliberately (bump, run `just check`, fix, commit).
+[toolchain]
+channel = "1.100.0"
+components = ["rustfmt", "clippy"]

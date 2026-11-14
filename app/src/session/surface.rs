@@ -156,8 +156,8 @@ impl Session {
             };
         }
         if let Some(i) = primary {
-            for k in 0..PADS {
-                v.knobs[k] = self.knob_label(i, k);
+            for (k, knob) in v.knobs.iter_mut().enumerate().take(PADS) {
+                *knob = self.knob_label(i, k);
             }
             v.drum = (i < UI_SLOTS).then(|| colour(i));
         }

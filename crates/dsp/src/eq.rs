@@ -33,8 +33,8 @@ impl Eq {
         ];
         let gains = [s.low_db, s.mid_db, s.high_db];
         for band in 0..3 {
-            for ch in 0..2 {
-                self.bands[band][ch].c = coeffs[band];
+            for biquad in &mut self.bands[band] {
+                biquad.c = coeffs[band];
             }
             // A band at 0 dB is skipped; filter memory is dropped so it starts clean when used.
             let active = gains[band].abs() > 0.01;
