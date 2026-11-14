@@ -18,4 +18,4 @@ clack-host = "0.2"
 clack-extensions = { version = "0.2", features = ["clack-host", "gui", "timer", "posix-fd", "state", "params", "note-ports", "audio-ports", "log", "latency"] }
 oxttl = "0.2.5"
 oxrdf = "0.3.5"
-x11rb = "0.13"
+x11rb = "0.14"
