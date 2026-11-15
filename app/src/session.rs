@@ -197,7 +197,7 @@ impl Waker for SlotWaker {
 }
 
 pub use backing::{TrackEdit, TrackState};
-pub use capture::{MAX_CAPTURE_MINUTES, clock};
+pub use capture::{MAX_CAPTURE_MINUTES, clock, stamp};
 pub use merlin_recorder::TakeState;
 pub use recording::MidiFileInfo;
 pub use update::{Busy as UpdateBusy, CURRENT as APP_VERSION};
@@ -2428,6 +2428,8 @@ impl Session {
     pub fn save_rig(&mut self, path: &Path) -> Result<()> {
         self.capture_states();
         self.rig.validate()?;
+        // What the file held goes to the backups first: a save never loses a rig.
+        crate::backup::before_overwrite(path);
         write_rig(&self.rig, path)?;
         self.rig_path = Some(path.to_owned());
         self.dirty = false;
@@ -2455,7 +2457,11 @@ impl Session {
             return;
         }
         self.capture_states();
-        if let Err(e) = write_rig(&self.rig, &crate::paths::autosave_file()) {
+        let about = AutosaveInfo {
+            path: self.rig_path.clone(),
+            dirty: self.dirty,
+        };
+        if let Err(e) = write_autosave(&self.rig, &about, &crate::paths::autosave_file()) {
             self.say(format!("autosave failed: {e:#}"));
         }
     }
@@ -2502,8 +2508,22 @@ impl Session {
     pub fn open_rig(&mut self, path: &Path) -> Result<()> {
         let rig = read_rig(path)?;
         self.apply_rig(rig);
-        self.rig_path = Some(path.to_owned());
-        self.dirty = false;
+        // An autosave is never the rig's own file: Save goes to the file it came from, or to a
+        // new one, never into the autosave (which the next autosave would overwrite).
+        match read_autosave_info(path) {
+            Some(about) => {
+                self.rig_path = about.path;
+                self.dirty = about.dirty;
+            }
+            None if is_autosave(path) => {
+                self.rig_path = None;
+                self.dirty = true;
+            }
+            None => {
+                self.rig_path = Some(path.to_owned());
+                self.dirty = false;
+            }
+        }
         self.say(format!("opened {}", path.display()));
         Ok(())
     }
@@ -2902,13 +2922,54 @@ pub fn read_rig(path: &Path) -> Result<Rig> {
     let (rig, migrated) =
         Rig::from_json(&bytes).with_context(|| format!("reading {}", path.display()))?;
     if migrated {
-        // Keep the old file next to the upgraded one, in case the new version is a mistake.
-        let backup = path.with_extension("mrig.bak");
-        if !backup.exists() {
-            let _ = std::fs::write(&backup, &bytes);
-        }
+        // Keep the old file as it was, in case the upgrade is a mistake.
+        crate::backup::keep_bytes(path, &bytes, "before upgrade");
     }
     Ok(rig)
+}
+
+/// What the autosave remembers besides the rig: the file the rig belongs to and whether it had
+/// changes not saved there. Written into the autosave as a `session` key the model ignores, so
+/// the two are always written together.
+#[derive(Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct AutosaveInfo {
+    pub path: Option<PathBuf>,
+    pub dirty: bool,
+}
+
+const AUTOSAVE_KEY: &str = "session";
+
+pub fn write_autosave(rig: &Rig, about: &AutosaveInfo, path: &Path) -> Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let mut value = serde_json::to_value(rig)?;
+    value[AUTOSAVE_KEY] = serde_json::to_value(about)?;
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, serde_json::to_vec_pretty(&value)?)?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+/// The [`AutosaveInfo`] in a rig file, if it is an autosave that has one.
+pub fn read_autosave_info(path: &Path) -> Option<AutosaveInfo> {
+    let bytes = std::fs::read(path).ok()?;
+    let mut value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    let about = value.get_mut(AUTOSAVE_KEY)?.take();
+    let mut about: AutosaveInfo = serde_json::from_value(about).ok()?;
+    // A rig file that is gone (deleted, renamed) is saved anew rather than recreated there.
+    let had = about.path.is_some();
+    about.path = about.path.filter(|p| p.is_file() && !is_autosave(p));
+    about.dirty |= had && about.path.is_none();
+    Some(about)
+}
+
+fn is_autosave(path: &Path) -> bool {
+    let auto = crate::paths::autosave_file();
+    path == auto
+        || std::fs::canonicalize(path)
+            .ok()
+            .is_some_and(|p| std::fs::canonicalize(&auto).is_ok_and(|a| a == p))
 }
 
 /// Makes the bridges (CLAP and VST3) for every prefix and says what happened, in a sentence.
@@ -2997,6 +3058,39 @@ const _: () = assert!(UI_SLOTS <= MAX_SLOTS);
 mod tests {
     use super::*;
     use crate::settings::{DeviceRole, MidiDevicePref};
+
+    #[test]
+    fn the_autosave_remembers_the_rigs_file_and_stays_a_rig() {
+        let d = std::env::temp_dir().join(format!("merlin-autosave-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let own = d.join("Gig.mrig");
+        std::fs::write(&own, "{}").unwrap();
+        let auto = d.join("autosave.mrig");
+        let rig = new_rig("Gig");
+        let about = AutosaveInfo {
+            path: Some(own.clone()),
+            dirty: true,
+        };
+        write_autosave(&rig, &about, &auto).unwrap();
+        assert_eq!(
+            read_rig(&auto).unwrap(),
+            rig,
+            "any version reads it as a rig"
+        );
+        assert_eq!(read_autosave_info(&auto), Some(about));
+
+        // The rig's file is gone: it is saved anew, and counts as unsaved.
+        std::fs::remove_file(&own).unwrap();
+        let gone = read_autosave_info(&auto).unwrap();
+        assert_eq!(gone.path, None);
+        assert!(gone.dirty);
+
+        // A saved rig (or an autosave from before) has none.
+        write_rig(&rig, &own).unwrap();
+        assert_eq!(read_autosave_info(&own), None);
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     fn pref(name: &str, role: DeviceRole, enabled: bool) -> MidiDevicePref {
         MidiDevicePref {

@@ -8,6 +8,7 @@
 //! Test hook: `MERLIN_SCRIPT="3:load 1 Surge XT; 5:on 60; 6:peak; 8:quit"`.
 
 mod autotag;
+mod backup;
 mod browser;
 mod cabinet;
 mod dialog;
@@ -61,7 +62,7 @@ struct Args {
     plugin_dirs: Vec<PathBuf>,
     rig: Option<PathBuf>,
     fresh: bool,
-    /// Started by the crash watchdog: restore the autosave.
+    /// Restarted by the crash watchdog or for an update: that restart says why itself.
     recover: bool,
 }
 
@@ -235,7 +236,7 @@ impl App {
             self.guard.clone(),
         )?;
 
-        // Start from the rig asked for; after a crash, from the autosave.
+        // Start from the rig asked for, else where the last session left off (the autosave).
         let marker = paths::state_dir().join("running");
         let crashed = marker.exists();
         let autosave = paths::autosave_file();
@@ -253,8 +254,8 @@ impl App {
         }
         let start_rig = match (&self.args.rig, self.args.fresh) {
             (Some(p), _) => Some(p.clone()),
-            (None, false) if (crashed || self.args.recover) && autosave.exists() => {
-                if !self.args.recover {
+            (None, false) if autosave.exists() => {
+                if crashed && !self.args.recover {
                     session.say("the last session did not end cleanly: restoring the autosave");
                 }
                 Some(autosave)
@@ -265,6 +266,12 @@ impl App {
             && let Err(e) = session.open_rig(&p)
         {
             session.say(format!("cannot open {}: {e:#}", p.display()));
+            if p == paths::autosave_file() {
+                session.say(format!(
+                    "a copy of the last session is kept in {}",
+                    backup::autosave_backups_dir().display()
+                ));
+            }
         }
         let _ = std::fs::create_dir_all(paths::state_dir());
         let _ = std::fs::write(&marker, std::process::id().to_string());
@@ -1158,7 +1165,7 @@ impl Running {
                 let path = s
                     .rig_path
                     .clone()
-                    .unwrap_or_else(|| paths::rigs_dir().join(paths::rig_file_name(&s.rig.name)));
+                    .unwrap_or_else(|| paths::new_rig_path(&paths::rigs_dir(), &s.rig.name));
                 s.save_rig(&path)
             }
             Action::SaveAs(path) => {
@@ -2102,6 +2109,9 @@ unsafe fn set_wine_environment(settings: &Settings) {
 fn main() -> Result<()> {
     let args = parse_args();
     paths::migrate_legacy_rigs();
+    // Before anything can write a rig: copies of the rigs when this is a new version, and of the
+    // autosave as this start finds it.
+    backup::on_start(session::APP_VERSION);
     let settings_file = paths::settings_file();
     let settings = match Settings::load(&settings_file) {
         Ok(s) => s,

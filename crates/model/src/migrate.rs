@@ -8,7 +8,8 @@ use crate::{RIG_VERSION, Rig, RigError};
 pub type Migration = fn(&mut Value);
 
 /// `MIGRATIONS[n]` upgrades format `n + 1` to `n + 2`. Format 1 is the first, so there are none
-/// yet: the first format change adds its step here and bumps [`RIG_VERSION`].
+/// yet: the first format change adds its step here, bumps [`RIG_VERSION`] and adds a fixture of
+/// the new format to `tests/rigs/` (the old fixtures stay, and must keep opening).
 const MIGRATIONS: &[Migration] = &[];
 
 /// Upgrades `value` to `current` with `steps`. Returns the version the file had. A file without

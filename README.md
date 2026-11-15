@@ -90,12 +90,13 @@ own Wine. Plugins bridged with `yabridgectl` work the same way.
 | Settings | `~/.config/merlin/settings.toml` |
 | Plugin cache | `~/.cache/merlin/` |
 | Rigs (`.mrig`) | `~/.local/share/merlin/rigs/` |
-| Autosave, used for crash recovery | `~/.local/state/merlin/autosave.mrig` |
+| Autosave: the app starts where the last session left off | `~/.local/state/merlin/autosave.mrig` |
+| Backups: rigs before each new version, before each save replaced them, the autosave at each start | `~/.local/share/merlin/backups/`, `~/.local/state/merlin/backups/` |
 | Windows runtime and Wine prefix | `~/.local/share/merlin/` |
 | MIDI captures and recordings | `~/Music/Merlin/` (changeable in Settings) |
 
 **Command line:** `merlin [--plugin-dir DIR]... [--rig FILE] [--fresh]`. `--plugin-dir` adds a
-plugin folder, `--rig` opens a rig, `--fresh` starts empty instead of restoring the autosave.
+plugin folder, `--rig` opens a rig, `--fresh` starts empty instead of reopening the last session.
 
 ### Windows plugins in other hosts
 

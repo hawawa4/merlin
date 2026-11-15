@@ -151,9 +151,38 @@ pub fn rig_file_name(name: &str) -> String {
     )
 }
 
+/// Where a rig that has no file yet is saved: `dir/<name>.mrig`, or `<name> (2).mrig` and on
+/// when another rig already has that name. Saving a new rig never replaces another one.
+pub fn new_rig_path(dir: &Path, name: &str) -> PathBuf {
+    let file = rig_file_name(name);
+    let stem = file.strip_suffix(&format!(".{RIG_EXT}")).unwrap_or(&file);
+    (1..)
+        .map(|n| match n {
+            1 => dir.join(&file),
+            n => dir.join(format!("{stem} ({n}).{RIG_EXT}")),
+        })
+        .find(|p| !p.exists() && !p.with_extension(LEGACY_RIG_EXT).exists())
+        .expect("some name is free")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_new_rig_never_takes_another_rigs_file() {
+        let d = std::env::temp_dir().join(format!("merlin-newrig-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        assert_eq!(new_rig_path(&d, "Gig"), d.join("Gig.mrig"));
+        std::fs::write(d.join("Gig.mrig"), "").unwrap();
+        assert_eq!(new_rig_path(&d, "Gig"), d.join("Gig (2).mrig"));
+        std::fs::write(d.join("Gig (2).mrig"), "").unwrap();
+        assert_eq!(new_rig_path(&d, "Gig"), d.join("Gig (3).mrig"));
+        std::fs::write(d.join("Old.irig"), "").unwrap();
+        assert_eq!(new_rig_path(&d, "Old"), d.join("Old (2).mrig"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     #[test]
     fn the_scan_skips_the_folder_the_bridge_tool_writes() {

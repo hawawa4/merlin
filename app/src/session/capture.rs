@@ -145,7 +145,7 @@ pub fn clock(d: Duration) -> String {
 }
 
 /// The local date and time, safe in a file name: `2026-10-23 14-05-33`.
-pub(super) fn stamp() -> String {
+pub fn stamp() -> String {
     // SAFETY: `time` takes a null pointer; `localtime_r` fills the struct we give it.
     let tm = unsafe {
         let t = libc::time(std::ptr::null_mut());
