@@ -1,5 +1,7 @@
 //! A rolling MIDI capture: the app always listens, keeps the last few minutes of what was
-//! played, and writes them out as a Standard MIDI File when asked.
+//! played, and writes them out as a Standard MIDI File when asked. Also the audio takes (see
+//! [`audio`]: what the main outputs play from Record to Stop, as a WAV file) and the reader for
+//! MIDI files that are played through the rig.
 //!
 //! Not a DAW feature: there is no transport, no tracks to arm, nothing to start. The audio
 //! thread holds a [`Tap`] and pushes every message that reaches the instruments into a
@@ -10,6 +12,8 @@
 //! Time is counted in audio frames (the tap is told how long each cycle was), so it follows the
 //! sound card's clock and not the wall clock.
 
+pub mod audio;
+mod read;
 mod smf;
 
 use std::collections::VecDeque;
@@ -18,6 +22,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+pub use audio::{Take, TakeState};
+pub use read::{MidiFile, ReadError, Timed, read_smf};
 pub use smf::{SmfOptions, TICKS_PER_BEAT};
 
 /// How many events the buffer keeps at most, whatever the window: 16 bytes each, so 16 MB. Half an
@@ -28,6 +34,8 @@ pub const MAX_EVENTS: usize = 1_000_000;
 const QUEUE: usize = 32 * 1024;
 /// How often the storing thread wakes up.
 const PUMP_INTERVAL: Duration = Duration::from_millis(250);
+/// `hold_from` when no audio take is keeping its MIDI.
+const NO_HOLD: u64 = u64::MAX;
 
 /// One channel message and the frame it arrived at (counted from when the recorder started).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,6 +55,9 @@ struct Shared {
     /// Frames the audio thread has gone through.
     frame: AtomicU64,
     window_frames: AtomicU64,
+    /// While an audio take runs, nothing from this frame on is let go, whatever the window
+    /// (so the take's MIDI can be saved with it).
+    hold_from: AtomicU64,
     /// Events the queue had no room for.
     dropped: AtomicU32,
     /// Events in the buffer, as of the last time the storing thread ran.
@@ -70,7 +81,9 @@ impl Shared {
         }
         // Read after the queue was emptied: the clock never runs behind the events.
         let now = self.frame.load(Ordering::Acquire);
-        let cutoff = now.saturating_sub(self.window_frames.load(Ordering::Relaxed));
+        let cutoff = now
+            .saturating_sub(self.window_frames.load(Ordering::Relaxed))
+            .min(self.hold_from.load(Ordering::Relaxed));
         while inner.events.front().is_some_and(|e| e.frame < cutoff) {
             inner.events.pop_front();
         }
@@ -88,13 +101,15 @@ pub struct Tap {
     /// The frame the current cycle began at.
     cycle_start: u64,
     enabled: bool,
+    audio: audio::AudioTap,
 }
 
 impl Tap {
     /// Call at the start of every cycle.
     pub fn begin_cycle(&mut self) {
         self.cycle_start = self.shared.frame.load(Ordering::Relaxed);
-        self.enabled = self.shared.window_frames.load(Ordering::Relaxed) > 0;
+        self.enabled = self.shared.window_frames.load(Ordering::Relaxed) > 0
+            || self.shared.hold_from.load(Ordering::Relaxed) != NO_HOLD;
     }
 
     /// A message that arrived `offset` frames into the cycle; `data` is padded with zeros when the
@@ -113,6 +128,12 @@ impl Tap {
         }
     }
 
+    /// What the main outputs played this cycle, for the audio take (nothing happens while no
+    /// take runs). Call between `begin_cycle` and `end_cycle`.
+    pub fn audio(&mut self, l: &[f32], r: &[f32]) {
+        self.audio.write(self.cycle_start, l, r);
+    }
+
     /// Call at the end of every cycle with its length in frames.
     pub fn end_cycle(&mut self, frames: u32) {
         // Release: the events pushed in this cycle are visible to whoever sees the new time.
@@ -126,6 +147,7 @@ impl Tap {
 pub struct Recorder {
     shared: Arc<Shared>,
     thread: Option<JoinHandle<()>>,
+    takes: audio::AudioTakes,
 }
 
 /// A copy of what the buffer held, ready to be written.
@@ -144,6 +166,7 @@ impl Recorder {
         let shared = Arc::new(Shared {
             frame: AtomicU64::new(0),
             window_frames: AtomicU64::new(0),
+            hold_from: AtomicU64::new(NO_HOLD),
             dropped: AtomicU32::new(0),
             stored: AtomicUsize::new(0),
             stop: AtomicBool::new(false),
@@ -153,11 +176,13 @@ impl Recorder {
                 events: VecDeque::new(),
             }),
         });
+        let (audio, takes) = audio::new(sample_rate);
         let tap = Tap {
             tx,
             shared: shared.clone(),
             cycle_start: 0,
             enabled: false,
+            audio,
         };
         let worker = shared.clone();
         let thread = std::thread::Builder::new()
@@ -169,7 +194,11 @@ impl Recorder {
                 }
             })
             .ok();
-        let recorder = Recorder { shared, thread };
+        let recorder = Recorder {
+            shared,
+            thread,
+            takes,
+        };
         recorder.set_window(window);
         (tap, recorder)
     }
@@ -218,6 +247,62 @@ impl Recorder {
         Capture {
             events: inner.events.iter().copied().collect(),
             now: self.shared.frame.load(Ordering::Acquire),
+            sample_rate: self.shared.sample_rate,
+        }
+    }
+
+    /// Starts an audio take into `file` (an empty file, created by the caller at `path`). From
+    /// now on the MIDI that is played is kept until the take is saved, whatever the window.
+    pub fn start_take(&self, file: std::fs::File, path: std::path::PathBuf) -> std::io::Result<()> {
+        self.shared
+            .hold_from
+            .store(self.shared.frame.load(Ordering::Acquire), Ordering::Relaxed);
+        let started = self.takes.start(file, path);
+        if started.is_err() && self.takes.state() == TakeState::Idle {
+            self.release_hold();
+        }
+        started
+    }
+
+    /// Ends the take; [`finished_take`](Self::finished_take) has it once the file is closed.
+    pub fn stop_take(&self) {
+        self.takes.stop();
+    }
+
+    pub fn take_state(&self) -> TakeState {
+        self.takes.state()
+    }
+
+    /// The loudest sample of the last cycle the take recorded (to hear when a tail has died).
+    pub fn take_peak(&self) -> f32 {
+        self.takes.last_peak()
+    }
+
+    /// The take that has been finished since the last call, if one has. Its MIDI stays kept
+    /// until [`release_hold`](Self::release_hold).
+    pub fn finished_take(&self) -> Option<std::io::Result<Take>> {
+        self.takes.finished()
+    }
+
+    /// Lets the rolling window apply again after a take.
+    pub fn release_hold(&self) {
+        self.shared.hold_from.store(NO_HOLD, Ordering::Relaxed);
+        let mut inner = self.shared.lock();
+        self.shared.pump(&mut inner);
+    }
+
+    /// What was played from frame `start` up to `end` (a take's span).
+    pub fn capture_between(&self, start: u64, end: u64) -> Capture {
+        let mut inner = self.shared.lock();
+        self.shared.pump(&mut inner);
+        Capture {
+            events: inner
+                .events
+                .iter()
+                .filter(|e| (start..end).contains(&e.frame))
+                .copied()
+                .collect(),
+            now: end,
             sample_rate: self.shared.sample_rate,
         }
     }
@@ -336,6 +421,39 @@ mod tests {
         assert_eq!(rec.capture().events.len(), 4);
         run(&mut tap, 4, |t, _| t.record(0, 1, on(62)));
         assert_eq!(rec.capture().events.len(), 8);
+    }
+
+    #[test]
+    fn a_take_keeps_its_midi_whatever_the_window() {
+        // Capture is off: nothing is kept...
+        let (mut tap, rec) = Recorder::new(SR, Duration::ZERO);
+        run(&mut tap, 4, |t, _| t.record(0, 1, on(60)));
+        assert!(rec.capture().events.is_empty());
+        // ...until a take starts.
+        let path = std::env::temp_dir().join(format!("merlin-hold-{}.wav", std::process::id()));
+        rec.start_take(std::fs::File::create(&path).unwrap(), path.clone())
+            .unwrap();
+        let block = [0.1f32; 128];
+        run(&mut tap, 4, |t, c| {
+            t.record(c, 1, on(62));
+            t.audio(&block, &block);
+        });
+        rec.stop_take();
+        let take = loop {
+            run(&mut tap, 1, |t, _| t.audio(&block, &block));
+            if let Some(t) = rec.finished_take() {
+                break t.unwrap();
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        let cap = rec.capture_between(take.start, take.end);
+        assert_eq!(cap.events.len(), 4);
+        assert!(cap.events.iter().all(|e| e.data[1] == 62));
+        assert_eq!(take.frames, 4 * 128);
+        // Afterwards the window applies again.
+        rec.release_hold();
+        assert!(rec.capture().events.is_empty());
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

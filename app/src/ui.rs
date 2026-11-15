@@ -28,6 +28,10 @@ pub fn drop_hint(path: &std::path::Path) -> (String, bool) {
     match ext.as_deref() {
         Some("exe" | "msi") => ("Drop to install this Windows plugin".into(), true),
         Some("sf2" | "sf3") => ("Drop to load this SoundFont into a free slot".into(), true),
+        Some("mid" | "midi" | "rmi" | "kar") => (
+            "Drop to load this MIDI file (Perform view: play it or render it)".into(),
+            true,
+        ),
         _ if paths::is_rig_file(path) => ("Drop to open this rig".into(), true),
         _ => ("This kind of file can't be used here".into(), false),
     }
@@ -111,6 +115,14 @@ pub enum Action {
     Panic,
     /// Save the last minutes of MIDI as a file.
     CaptureMidi,
+    /// Record what the main outputs play to a WAV file, or stop recording.
+    ToggleRecording,
+    /// The MIDI file that plays through the rig: load one, play / stop it, record it played
+    /// (render), take it out.
+    LoadMidiFile(PathBuf),
+    ToggleMidiFile,
+    RenderMidiFile,
+    UnloadMidiFile,
     /// Minutes of MIDI the capture keeps (0: off).
     SetCaptureMinutes(u32),
     /// Where captures are saved (`None`: the default folder).
@@ -700,6 +712,7 @@ fn poll_dialog(ui: &egui::Ui, s: &mut Session, st: &mut UiState, actions: &mut V
                         actions.push(Action::AddTrack(song, p));
                     }
                 }
+                Want::MidiFile => actions.push(Action::LoadMidiFile(path)),
             }
         }
         Poll::Cancelled => {}

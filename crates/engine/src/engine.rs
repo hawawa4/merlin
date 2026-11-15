@@ -10,6 +10,7 @@ use crate::Shared;
 use crate::events::EventBuf;
 use crate::looper::{LoopCommand, Looper, PPQ};
 use crate::router::{Filter, Router};
+use crate::sequence::{self, Player, Sequence};
 use merlin_backing::StemReader;
 
 use crate::transport::{EngineMarker, MidiOutEvent, Transport, TransportEvents};
@@ -83,6 +84,14 @@ pub enum Command {
         mute: bool,
         cue: bool,
     },
+    /// The MIDI file that plays as the on-screen keyboard (see [`crate::sequence`]); `None`
+    /// takes it out. The one it replaces comes back through
+    /// [`EngineHandle::take_retired_sequences`].
+    SetSequence(Option<Box<Sequence>>),
+    /// Plays the MIDI file from its start.
+    PlaySequence,
+    /// Stops it, letting go of every note it holds.
+    StopSequence,
     /// Timeline markers of the entered song (ticks since the run started).
     AddMarker(EngineMarker),
     ClearMarkers,
@@ -135,6 +144,7 @@ pub struct EngineHandle {
     commands: rtrb::Producer<Command>,
     retired: rtrb::Consumer<Retired>,
     retired_stems: rtrb::Consumer<Stem>,
+    retired_sequences: rtrb::Consumer<Box<Sequence>>,
     pub shared: Arc<Shared>,
 }
 
@@ -150,6 +160,15 @@ impl EngineHandle {
     pub fn take_retired_stems(&mut self) -> Vec<Stem> {
         let mut v = Vec::new();
         while let Ok(s) = self.retired_stems.pop() {
+            v.push(s);
+        }
+        v
+    }
+
+    /// MIDI files the engine has let go of since the last call.
+    pub fn take_retired_sequences(&mut self) -> Vec<Box<Sequence>> {
+        let mut v = Vec::new();
+        while let Ok(s) = self.retired_sequences.pop() {
             v.push(s);
         }
         v
@@ -256,6 +275,10 @@ pub struct Engine {
     click_r: Vec<f32>,
     clock: Vec<MidiOutEvent>,
     fired: Vec<u16>,
+    player: Player,
+    /// The MIDI file's messages for the block being rendered.
+    sequence_events: Vec<MidiEvent>,
+    retired_sequences: rtrb::Producer<Box<Sequence>>,
 }
 
 /// Where the click and the MIDI clock go when they are not mixed into the main output.
@@ -272,6 +295,7 @@ pub fn new(sample_rate: f32, max_block: usize) -> (Engine, EngineHandle) {
     let (cmd_tx, cmd_rx) = rtrb::RingBuffer::new(COMMAND_QUEUE);
     let (ret_tx, ret_rx) = rtrb::RingBuffer::new(RETIRED_QUEUE);
     let (stem_tx, stem_rx) = rtrb::RingBuffer::new(MAX_STEMS * 2);
+    let (seq_tx, seq_rx) = rtrb::RingBuffer::new(8);
     let engine = Engine {
         max_block,
         router: Router::new(shared.clone()),
@@ -304,11 +328,16 @@ pub fn new(sample_rate: f32, max_block: usize) -> (Engine, EngineHandle) {
         click_r: vec![0.0; max_block],
         clock: Vec::with_capacity(512),
         fired: Vec::with_capacity(crate::transport::MAX_MARKERS),
+        player: Player::new(),
+        // Room for a full block and for letting go of every note on every channel.
+        sequence_events: Vec::with_capacity(sequence::MAX_PER_BLOCK + 16 * 129),
+        retired_sequences: seq_tx,
     };
     let handle = EngineHandle {
         commands: cmd_tx,
         retired: ret_rx,
         retired_stems: stem_rx,
+        retired_sequences: seq_rx,
         shared,
     };
     (engine, handle)
@@ -420,11 +449,30 @@ impl Engine {
                     (s.gain, s.mute, s.cue) = (gain, mute, cue);
                 }
             }
+            Command::SetSequence(new) => {
+                let old = self.player.replace(new, &mut self.sequence_events);
+                if let Some(old) = old
+                    && let Err(rtrb::PushError::Full(s)) = self.retired_sequences.push(old)
+                {
+                    // Leaked rather than freed on the audio thread.
+                    std::mem::forget(s);
+                }
+            }
+            Command::PlaySequence => {
+                self.player.play(&mut self.sequence_events);
+                if self.player.playing() {
+                    self.shared.sequence_runs.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            Command::StopSequence => self.player.stop(&mut self.sequence_events),
             Command::AddMarker(m) => self.transport.add_marker(m),
             Command::ClearMarkers => self.transport.clear_markers(),
             Command::SetMasterVolume(v) => self.master_volume = v,
             Command::Loop(cmd) => self.looper.apply(cmd, &mut self.events),
             Command::Panic => {
+                // The file stops too (the router's panic lets go of its notes).
+                self.player.stop(&mut self.sequence_events);
+                self.sequence_events.clear();
                 self.looper.forget_sounding();
                 self.router.panic(&mut self.events);
                 self.fade = Fade::Out(0);
@@ -521,13 +569,30 @@ impl Engine {
         transport: TransportEvents,
     ) {
         let frames = out_l.len();
+        // Commands can add note-offs for the file (a stop): those go first in this block.
+        self.sequence_events.clear();
         while let Ok(command) = self.commands.pop() {
             self.apply(command);
         }
+        self.player.render(frames, &mut self.sequence_events);
+        self.shared
+            .sequence_playing
+            .store(self.player.playing(), Ordering::Relaxed);
+        self.shared
+            .sequence_position
+            .store(self.player.position(), Ordering::Relaxed);
+        // What was played and what the file plays, merged in time order.
+        let mut file = self.sequence_events.iter().peekable();
         for ev in midi {
             let mut local = *ev;
             local.time = ev.time.saturating_sub(start as u32);
+            while let Some(f) = file.next_if(|f| f.time < local.time) {
+                self.router.route(f, &mut self.events);
+            }
             self.router.route(&local, &mut self.events);
+        }
+        for f in file {
+            self.router.route(f, &mut self.events);
         }
 
         // The loop station: it ends with the run, and adds what it plays to the slots' events.

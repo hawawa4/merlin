@@ -10,6 +10,7 @@ mod engine;
 mod events;
 pub mod looper;
 pub mod router;
+pub mod sequence;
 pub mod transport;
 
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64};
@@ -17,6 +18,7 @@ use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64};
 pub use engine::{ClickOut, Command, Engine, EngineHandle, MAX_STEMS, Retired, Stem, new};
 pub use merlin_model::{MAX_SLOTS, SelectMode};
 pub use router::{Filter, MAX_INPUTS, Router};
+pub use sequence::{SEQUENCE_INPUT, SeqEvent, Sequence};
 pub use transport::{
     EngineMarker, MAX_MARKERS, MIDI_CLOCK, MIDI_START, MIDI_STOP, MidiOutEvent, Transport,
     TransportShared,
@@ -53,6 +55,11 @@ pub struct Shared {
     /// Backing tracks are playing; and how often one ran dry (the decoder fell behind).
     pub stems_playing: AtomicBool,
     pub backing_underruns: AtomicU32,
+    /// The MIDI file is playing; how far it is (frames from its start); and how many times it
+    /// has been started (so the main thread can tell a start it asked for has happened).
+    pub sequence_playing: AtomicBool,
+    pub sequence_position: AtomicU64,
+    pub sequence_runs: AtomicU32,
 }
 
 impl Shared {
@@ -73,6 +80,9 @@ impl Shared {
             looper: looper::LoopShared::new(),
             stems_playing: AtomicBool::new(false),
             backing_underruns: AtomicU32::new(0),
+            sequence_playing: AtomicBool::new(false),
+            sequence_position: AtomicU64::new(0),
+            sequence_runs: AtomicU32::new(0),
         }
     }
 }

@@ -122,7 +122,83 @@ fn processing_does_not_allocate() {
             engine.process(if round % 2 == 0 { &notes } else { &offs }, &mut l, &mut r);
         });
     }
+    // A MIDI file: playing, stopping, being replaced (the old one is handed back, not freed).
+    let file = |n: u64| {
+        merlin_engine::Sequence::new(
+            (0..n)
+                .flat_map(|i| {
+                    [
+                        merlin_engine::SeqEvent {
+                            frame: i * 40,
+                            data: [0x90, 40 + (i % 40) as u8, 100],
+                        },
+                        merlin_engine::SeqEvent {
+                            frame: i * 40 + 30,
+                            data: [0x80, 40 + (i % 40) as u8, 0],
+                        },
+                    ]
+                })
+                .collect(),
+            n * 40,
+        )
+    };
+    handle
+        .send(Command::SetSequence(Some(Box::new(file(200)))))
+        .ok();
+    handle.send(Command::PlaySequence).ok();
+    for round in 0..40 {
+        match round {
+            10 => {
+                handle.send(Command::StopSequence).ok();
+                handle.send(Command::PlaySequence).ok();
+            }
+            20 => {
+                handle
+                    .send(Command::SetSequence(Some(Box::new(file(50)))))
+                    .ok();
+                handle.send(Command::PlaySequence).ok();
+            }
+            _ => {}
+        }
+        assert_no_alloc(|| engine.process(&notes, &mut l, &mut r));
+    }
+    assert_eq!(handle.take_retired_sequences().len(), 1);
+
     // A block longer than the engine's maximum is split without allocating too.
     let (mut l, mut r) = (vec![0.0; 1000], vec![0.0; 1000]);
     assert_no_alloc(|| engine.process(&notes, &mut l, &mut r));
+}
+
+/// The backend's recorder on the audio thread: the MIDI capture and an audio take.
+#[test]
+fn recording_does_not_allocate() {
+    use std::time::Duration;
+    let (mut tap, recorder) = merlin_recorder::Recorder::new(48_000, Duration::from_secs(60));
+    let dir = std::env::temp_dir().join(format!("merlin-rt-take-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("take.wav");
+    recorder
+        .start_take(std::fs::File::create(&path).unwrap(), path.clone())
+        .unwrap();
+    let block = vec![0.25f32; 128];
+    for round in 0..200 {
+        if round == 150 {
+            recorder.stop_take();
+        }
+        assert_no_alloc(|| {
+            tap.begin_cycle();
+            tap.record(5, 1, [0x90, 60, 100]);
+            tap.audio(&block, &block);
+            tap.end_cycle(128);
+        });
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let take = loop {
+        if let Some(t) = recorder.finished_take() {
+            break t.unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    assert_eq!(take.frames, 150 * 128);
+    let _ = std::fs::remove_dir_all(&dir);
 }

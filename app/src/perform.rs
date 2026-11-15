@@ -9,8 +9,9 @@ use std::time::{Duration, Instant};
 use egui::{Color32, RichText};
 use merlin_model::ControlAction;
 
+use crate::hw;
 use crate::keyboard::COLORS;
-use crate::session::{Session, TrackState, UI_SLOTS};
+use crate::session::{Session, TakeState, TrackState, UI_SLOTS};
 use crate::ui::{Action, UiState};
 
 /// How long Unlock has to be held: long enough that a brush against a touch screen does nothing.
@@ -19,6 +20,7 @@ pub const UNLOCK_HOLD: Duration = Duration::from_millis(1200);
 pub fn show(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
     egui::Panel::top("perform-stage").show(ui, |ui| stage_strip(ui, st, actions));
     egui::Panel::top("perform-transport").show(ui, |ui| transport(ui, s, actions));
+    egui::Panel::top("perform-recorder").show(ui, |ui| recorder(ui, s, st, actions));
     egui::Panel::bottom("perform-master").show(ui, |ui| master(ui, s, actions));
     egui::CentralPanel::default().show(ui, |ui| {
         egui::ScrollArea::vertical().show(ui, |ui| {
@@ -186,6 +188,179 @@ fn transport(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
         }
     });
     backing_row(ui, s, actions);
+    ui.add_space(4.0);
+}
+
+/// The recorder: a Record button for what the main outputs play, and the MIDI file that plays
+/// through the rig (dropped on the window or opened here), with Play and Render.
+fn recorder(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
+    ui.add_space(4.0);
+    let take = s.recording();
+    let rendering = s.rendering();
+    let file = s.midi_file();
+    let playing = s.midi_file_playing() || rendering;
+    if take != TakeState::Idle || playing {
+        // The clocks move once a second; the lamp blinks twice as fast.
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(250));
+    }
+    // Where the files go, short (what was saved is said in the notice bar above).
+    let dir = s.capture_dir();
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let dir = match home.as_deref().and_then(|h| dir.strip_prefix(h).ok()) {
+        Some(rest) => std::path::Path::new("~").join(rest),
+        None => dir.clone(),
+    };
+    let subtitle = format!("WAV files go to {}", dir.display());
+    hw::rack(ui, "Recorder", &subtitle, |ui| {
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            // ---- the audio take ----
+            let blink = ui.input(|i| i.time).fract() < 0.5;
+            let (lamp, label, clock) = match take {
+                TakeState::Idle => (false, "RECORD", "--:--".to_owned()),
+                TakeState::Recording(d) => (blink, "STOP", crate::session::clock(d)),
+                TakeState::Finishing => (true, "SAVING", "--:--".to_owned()),
+            };
+            hw::led(ui, lamp, hw::RED);
+            let audio = s.backend().is_some();
+            let rec = ui
+                .add_enabled_ui(audio && take != TakeState::Finishing && !rendering, |ui| {
+                    hw::Cap::new(label)
+                        .min_width(86.0)
+                        .lit((take != TakeState::Idle).then_some(hw::RED))
+                        .show(ui)
+                })
+                .inner
+                .on_hover_text(match take {
+                    TakeState::Idle if !audio => "Audio is not running".to_owned(),
+                    TakeState::Idle => format!(
+                        "Record what the main outputs play into a WAV file in {}. What you play \
+                         on the keyboards meanwhile is saved beside it as a MIDI file.",
+                        s.capture_dir().display()
+                    ),
+                    TakeState::Recording(_) if rendering => {
+                        "Rendering the MIDI file: press STOP beside it to end early".to_owned()
+                    }
+                    TakeState::Recording(_) => "Stop recording and save the file".to_owned(),
+                    TakeState::Finishing => "Saving the file\u{2026}".to_owned(),
+                });
+            if rec.clicked() {
+                actions.push(Action::ToggleRecording);
+            }
+            hw::display(
+                ui,
+                &clock,
+                64.0,
+                if take == TakeState::Idle {
+                    hw::TEXT_DIM
+                } else {
+                    hw::RED
+                },
+            );
+
+            ui.add_space(14.0);
+            ui.separator();
+            ui.add_space(6.0);
+
+            // ---- the MIDI file ----
+            hw::engraved(ui, "MIDI file");
+            let name = file.map_or("drop a .mid file on the window".to_owned(), |f| {
+                f.name.clone()
+            });
+            let shown = hw::display(
+                ui,
+                &name,
+                220.0,
+                if file.is_some() {
+                    hw::AMBER
+                } else {
+                    hw::TEXT_DIM
+                },
+            );
+            match file {
+                Some(f) => shown.on_hover_text(format!(
+                    "{}\n{} notes. It plays the selected instruments, like the on-screen keyboard.",
+                    f.path.display(),
+                    f.notes
+                )),
+                None => shown.on_hover_text(
+                    "Drop a MIDI file anywhere on the window, or open one, to play it through \
+                     the instruments that are selected",
+                ),
+            };
+            let free = st.picking.is_none() && !rendering;
+            if ui
+                .add_enabled_ui(free, |ui| hw::Cap::new("OPEN\u{2026}").show(ui))
+                .inner
+                .on_hover_text("Choose a MIDI file")
+                .clicked()
+            {
+                let start = file.and_then(|f| f.path.parent().map(|p| p.to_owned()));
+                st.picking = Some(crate::dialog::Open::start(
+                    crate::dialog::Want::MidiFile,
+                    start.as_deref(),
+                ));
+            }
+            let loaded = file.is_some();
+            let play = ui
+                .add_enabled_ui(loaded, |ui| {
+                    hw::Cap::new(if playing { "STOP" } else { "PLAY" })
+                        .min_width(64.0)
+                        .lit(playing.then_some(hw::GREEN))
+                        .show(ui)
+                })
+                .inner
+                .on_hover_text(if rendering {
+                    "Stop the render (what was recorded so far is kept)"
+                } else if playing {
+                    "Stop the MIDI file"
+                } else {
+                    "Play the MIDI file from its start through the selected instruments"
+                });
+            if play.clicked() {
+                actions.push(Action::ToggleMidiFile);
+            }
+            let render = ui
+                .add_enabled_ui(loaded && (take == TakeState::Idle || rendering), |ui| {
+                    hw::Cap::new(if rendering { "RENDERING" } else { "RENDER" })
+                        .min_width(96.0)
+                        .lit(rendering.then_some(hw::RED))
+                        .show(ui)
+                })
+                .inner
+                .on_hover_text(if take != TakeState::Idle && !rendering {
+                    "Stop the recording first"
+                } else {
+                    "Record the MIDI file played through the selected instruments: plays it from \
+                     the start and stops recording when its sound has died away"
+                });
+            if render.clicked() && !rendering {
+                actions.push(Action::RenderMidiFile);
+            }
+            if let Some(f) = file {
+                let at = if playing { s.midi_file_position() } else { 0.0 };
+                hw::display(
+                    ui,
+                    &format!(
+                        "{} / {}",
+                        crate::setlist_ui::clock(at),
+                        crate::setlist_ui::clock(f.seconds)
+                    ),
+                    104.0,
+                    if playing { hw::GREEN } else { hw::TEXT_DIM },
+                );
+                if ui
+                    .add_enabled_ui(!rendering, |ui| hw::Cap::new("EJECT").show(ui))
+                    .inner
+                    .on_hover_text("Take the MIDI file out")
+                    .clicked()
+                {
+                    actions.push(Action::UnloadMidiFile);
+                }
+            }
+        });
+    });
     ui.add_space(4.0);
 }
 

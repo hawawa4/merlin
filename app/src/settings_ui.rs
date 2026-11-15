@@ -1041,6 +1041,9 @@ fn capture(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<A
             actions.push(Action::SetCaptureDir(None));
         }
     });
+    ui.label(
+        RichText::new("Audio recordings (Record in the Perform view) are saved here too.").weak(),
+    );
     if ui
         .add_enabled(s.capture_minutes() > 0, egui::Button::new("Save now"))
         .clicked()

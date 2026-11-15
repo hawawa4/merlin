@@ -25,6 +25,7 @@ mod loader;
 mod looper;
 mod macros;
 mod outputs;
+mod recording;
 mod setlist;
 mod snapshots;
 mod surface;
@@ -197,6 +198,8 @@ impl Waker for SlotWaker {
 
 pub use backing::{TrackEdit, TrackState};
 pub use capture::{MAX_CAPTURE_MINUTES, clock};
+pub use merlin_recorder::TakeState;
+pub use recording::MidiFileInfo;
 pub use update::{Busy as UpdateBusy, CURRENT as APP_VERSION};
 
 pub struct Loaded {
@@ -381,6 +384,10 @@ pub struct Session {
     last_autosave: Instant,
     /// What the capture button last did and when (shown beside it for a few seconds).
     capture_notice: Option<(Instant, String)>,
+    /// The MIDI file that plays through the rig (one at a time), and the render that is
+    /// recording it, if one is.
+    midi_file: Option<MidiFileInfo>,
+    render: Option<recording::Render>,
     /// A change of the rig's structure wants an autosave soon (not at once: a plugin that has
     /// only just loaded should be left alone for a moment before it is asked for its state).
     autosave_after: Option<Instant>,
@@ -499,6 +506,8 @@ impl Session {
             sample_rate,
             last_autosave: Instant::now(),
             capture_notice: None,
+            midi_file: None,
+            render: None,
             autosave_after: None,
         };
         s.rebuild_dirs();
@@ -2364,6 +2373,7 @@ impl Session {
             .filter_map(|l| l.plugin.next_deadline())
             .min();
         self.service_backing();
+        let recording = self.service_recording();
         // What plugins may ask the host about time.
         let transport = &self.engine.shared.transport;
         merlin_hosting::host_time::set_tempo(transport.tempo());
@@ -2373,7 +2383,10 @@ impl Session {
         // While backing tracks are being re-armed or waited for, look again soon.
         let backing = (self.needs_rearm || self.pending_start.is_some())
             .then(|| now + Duration::from_millis(50));
-        [timers, evict, backing].into_iter().flatten().min()
+        [timers, evict, backing, recording]
+            .into_iter()
+            .flatten()
+            .min()
     }
 
     // ---- persistence -----------------------------------------------------------------

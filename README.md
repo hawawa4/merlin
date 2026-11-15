@@ -10,9 +10,16 @@ It plays CLAP, VST3, VST2 and LV2 plugins, SoundFonts (`.sf2`, `.sf3`) and, thro
 yabridge runtime it downloads on request, 64-bit Windows plugins. The aim is that a Windows
 plugin works in the rack without you setting up Wine or yabridge yourself.
 
-Merlin is **not a DAW**: no tracks, no routing matrix, no recording to arm. The one
-recording feature is a MIDI capture that is always on. It keeps the last 30 minutes you played,
-in memory, and one button saves them as a `.mid` file.
+Merlin is **not a DAW**: no tracks, no routing matrix, no recording to arm. Recording is kept
+to three simple things:
+
+- A MIDI capture that is always on. It keeps the last 30 minutes you played, in memory, and one
+  button saves them as a `.mid` file.
+- A Record button in the Perform view. It saves what the main outputs play as a WAV file, and
+  what you played meanwhile as a `.mid` beside it. Nothing is recorded until you press it.
+- One MIDI file at a time. Drop it on the window and it plays through the selected instruments
+  like the on-screen keyboard. *Render* records it into a WAV file and stops by itself once the
+  sound has died away.
 
 Screenshots and downloads: [merlin.hawawa.org](https://merlin.hawawa.org).
 
@@ -85,7 +92,7 @@ own Wine. Plugins bridged with `yabridgectl` work the same way.
 | Rigs (`.mrig`) | `~/.local/share/merlin/rigs/` |
 | Autosave, used for crash recovery | `~/.local/state/merlin/autosave.mrig` |
 | Windows runtime and Wine prefix | `~/.local/share/merlin/` |
-| MIDI captures | `~/Music/Merlin/` (changeable in Settings) |
+| MIDI captures and recordings | `~/Music/Merlin/` (changeable in Settings) |
 
 **Command line:** `merlin [--plugin-dir DIR]... [--rig FILE] [--fresh]`. `--plugin-dir` adds a
 plugin folder, `--rig` opens a rig, `--fresh` starts empty instead of restoring the autosave.
@@ -165,7 +172,7 @@ hand with `just package-runtime` (see [docs/wine.md](docs/wine.md)).
   - `sandbox`: the out-of-process plugin host: shared-memory audio, crash detection
   - `control`: turns MIDI messages into actions
   - `backing`: backing tracks streamed from disk
-  - `recorder`: the rolling MIDI capture
+  - `recorder`: the rolling MIDI capture, audio recordings (WAV), and reading MIDI files
   - `wine`: Windows plugin support: runtime download, prefix, bridges
   - `bridge`: `merlin-bridge`, the command line tool above
   - `updater`: the in-app updater

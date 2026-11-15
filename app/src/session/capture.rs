@@ -1,6 +1,7 @@
 //! The MIDI capture on the session: the audio backend always keeps the last minutes of what was
 //! played (see `merlin-recorder`); here is the button that saves them as a `.mid` file, and the
-//! settings for how long they are kept and where the files go.
+//! settings for how long they are kept and where the files go (audio recordings go there too,
+//! see `recording.rs`).
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -106,6 +107,7 @@ impl Session {
             beats_per_bar: self.rig.transport.beats_per_bar,
             title: format!("Merlin capture · {}", self.rig.name),
             input_names: self.capture_input_names(),
+            origin: None,
         };
         let bytes = capture.to_smf(&options);
         let dir = self.capture_dir();
@@ -118,7 +120,7 @@ impl Session {
     }
 
     /// Names for the tracks: the on-screen keyboard, and each device that is connected now.
-    fn capture_input_names(&self) -> Vec<String> {
+    pub(super) fn capture_input_names(&self) -> Vec<String> {
         let mut names = vec!["On-screen keyboard".to_owned()];
         for source in &self.midi_sources {
             let i = source.input as usize;
@@ -143,7 +145,7 @@ pub fn clock(d: Duration) -> String {
 }
 
 /// The local date and time, safe in a file name: `2026-10-23 14-05-33`.
-fn stamp() -> String {
+pub(super) fn stamp() -> String {
     // SAFETY: `time` takes a null pointer; `localtime_r` fills the struct we give it.
     let tm = unsafe {
         let t = libc::time(std::ptr::null_mut());
@@ -164,7 +166,7 @@ fn stamp() -> String {
 
 /// Writes `bytes` to `dir/stem.ext`, or `stem (2).ext` and on if that is taken: a capture is
 /// never written over another. The file appears whole or not at all.
-fn save_unique(dir: &Path, stem: &str, ext: &str, bytes: &[u8]) -> Result<PathBuf> {
+pub(super) fn save_unique(dir: &Path, stem: &str, ext: &str, bytes: &[u8]) -> Result<PathBuf> {
     std::fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
     let tmp = dir.join(format!(".{stem}.{ext}.partial"));
     std::fs::write(&tmp, bytes).with_context(|| format!("cannot write {}", tmp.display()))?;
@@ -195,6 +197,30 @@ fn save_unique(dir: &Path, stem: &str, ext: &str, bytes: &[u8]) -> Result<PathBu
     unreachable!()
 }
 
+/// Creates a new, empty `dir/stem.ext` (or `stem (2).ext` and on): a file being recorded into
+/// never replaces another.
+pub(super) fn create_unique(dir: &Path, stem: &str, ext: &str) -> Result<(std::fs::File, PathBuf)> {
+    std::fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
+    for n in 1.. {
+        let name = if n == 1 {
+            format!("{stem}.{ext}")
+        } else {
+            format!("{stem} ({n}).{ext}")
+        };
+        let path = dir.join(name);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(file) => return Ok((file, path)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e).with_context(|| format!("cannot write {}", path.display())),
+        }
+    }
+    unreachable!()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,6 +245,17 @@ mod tests {
         // Only the captures are left in the folder.
         let left: Vec<_> = std::fs::read_dir(&d).unwrap().flatten().collect();
         assert_eq!(left.len(), 2);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_new_recording_never_takes_an_existing_name() {
+        let d = std::env::temp_dir().join(format!("merlin-create-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let (_, a) = create_unique(&d, "take", "wav").unwrap();
+        let (_, b) = create_unique(&d, "take", "wav").unwrap();
+        assert_eq!(a.file_name().unwrap(), "take.wav");
+        assert_eq!(b.file_name().unwrap(), "take (2).wav");
         let _ = std::fs::remove_dir_all(&d);
     }
 

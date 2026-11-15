@@ -956,6 +956,7 @@ impl Running {
                         }
                     }
                     Some("sf2" | "sf3") => s.load_soundfont_file(&path),
+                    Some("mid" | "midi" | "rmi" | "kar") => s.load_midi_file(&path),
                     _ if crate::paths::is_rig_file(&path) => s.open_rig(&path),
                     _ => Err(anyhow!(
                         "don't know what to do with {}",
@@ -1121,6 +1122,14 @@ impl Running {
             }
             Action::CaptureMidi => {
                 s.capture_midi();
+                Ok(())
+            }
+            Action::ToggleRecording => s.toggle_recording(),
+            Action::LoadMidiFile(path) => s.load_midi_file(&path),
+            Action::ToggleMidiFile => s.toggle_midi_file(),
+            Action::RenderMidiFile => s.render_midi_file(),
+            Action::UnloadMidiFile => {
+                s.unload_midi_file();
                 Ok(())
             }
             Action::SetCaptureMinutes(m) => {
@@ -1918,6 +1927,13 @@ fn parse_script() -> Vec<(Duration, Action)> {
                 "off" => Action::NoteOff(words.next()?.parse().ok()?),
                 "panic" => Action::Panic,
                 "capture" => Action::CaptureMidi,
+                // record (start / stop) | midifile PATH | playfile (play / stop) | render
+                "record" => Action::ToggleRecording,
+                "midifile" => {
+                    Action::LoadMidiFile(PathBuf::from(words.collect::<Vec<_>>().join(" ")))
+                }
+                "playfile" => Action::ToggleMidiFile,
+                "render" => Action::RenderMidiFile,
                 "new" => Action::NewRig,
                 "save" => Action::SaveAs(PathBuf::from(words.collect::<Vec<_>>().join(" "))),
                 "open" => Action::OpenPath(PathBuf::from(words.collect::<Vec<_>>().join(" "))),

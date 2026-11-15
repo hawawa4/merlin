@@ -19,13 +19,15 @@ pub enum Want {
     BackingDir,
     /// Audio files (several at once) to add as backing tracks to this song.
     BackingTrack(usize),
+    /// A MIDI file to play through the rig.
+    MidiFile,
 }
 
 impl Want {
     fn folder(self) -> bool {
         !matches!(
             self,
-            Self::WineProgram | Self::Installer | Self::BackingTrack(_)
+            Self::WineProgram | Self::Installer | Self::BackingTrack(_) | Self::MidiFile
         )
     }
 
@@ -41,6 +43,7 @@ impl Want {
                 "Audio files",
                 "*.wav *.WAV *.flac *.FLAC *.mp3 *.MP3 *.ogg *.OGG *.m4a *.M4A",
             )),
+            Self::MidiFile => Some(("MIDI files", "*.mid *.MID *.midi *.MIDI *.rmi *.kar")),
             _ => None,
         }
     }
@@ -49,12 +52,13 @@ impl Want {
         match self {
             Self::PluginDir => "Choose a folder with plugins (any kind)",
             Self::SoundDir => "Choose a folder with SoundFonts",
-            Self::CaptureDir => "Choose where MIDI captures are saved",
+            Self::CaptureDir => "Choose where recordings and MIDI captures are saved",
             Self::WineProgram => "Choose the wine program",
             Self::YabridgeDir => "Choose the yabridge folder",
             Self::Installer => "Choose a Windows plugin installer",
             Self::BackingDir => "Choose the folder with your backing tracks",
             Self::BackingTrack(_) => "Choose backing tracks",
+            Self::MidiFile => "Choose a MIDI file to play through the rig",
         }
     }
 }

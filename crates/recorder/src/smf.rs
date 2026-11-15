@@ -19,6 +19,9 @@ pub struct SmfOptions {
     pub title: String,
     /// Names for the tracks, by engine input; an input without one is called "MIDI input N".
     pub input_names: Vec<String>,
+    /// The frame the file's time zero is at (an audio take's first frame, so the two line up);
+    /// `None`: the first message.
+    pub origin: Option<u64>,
 }
 
 impl Default for SmfOptions {
@@ -28,6 +31,7 @@ impl Default for SmfOptions {
             beats_per_bar: 4,
             title: "Merlin capture".into(),
             input_names: Vec::new(),
+            origin: None,
         }
     }
 }
@@ -147,13 +151,14 @@ fn chunk(file: &mut Vec<u8>, id: &[u8; 4], body: &[u8]) {
 
 pub(crate) fn write(capture: &Capture, options: &SmfOptions) -> Vec<u8> {
     let tidied = tidy(&capture.events, capture.now);
-    let start = tidied.events.first().map_or(0, |e| e.frame);
+    let first = tidied.events.first().map_or(0, |e| e.frame);
+    let start = options.origin.map_or(first, |o| o.min(first));
     // The tempo as the file stores it (microseconds per beat), so ticks and tempo agree.
     let tempo = options.tempo.clamp(10.0, 1000.0);
     let micros = (60_000_000.0 / f64::from(tempo)).round().max(1.0);
     let ticks_per_frame = f64::from(TICKS_PER_BEAT) * (60_000_000.0 / micros)
         / (60.0 * f64::from(capture.sample_rate));
-    let tick = |frame: u64| ((frame - start) as f64 * ticks_per_frame).round() as u64;
+    let tick = |frame: u64| (frame.saturating_sub(start) as f64 * ticks_per_frame).round() as u64;
 
     let mut inputs: Vec<u8> = tidied.events.iter().map(|e| e.input).collect();
     inputs.sort_unstable();

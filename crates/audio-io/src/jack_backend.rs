@@ -9,6 +9,8 @@
 //!
 //! Everything that reaches the instruments from those inputs is also handed to the rolling MIDI
 //! capture (`merlin-recorder`): the backend starts it and owns it, so it is always listening.
+//! The same recorder takes the main outputs into a WAV file while an audio take runs (and only
+//! then).
 
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -606,6 +608,8 @@ impl jack::ProcessHandler for Callback {
         };
         self.engine
             .process_with_click(&self.events, &mut l[..n], &mut r[..n], Some(&mut click));
+        // An audio take, if one runs, records what leaves the main outputs.
+        self.tap.audio(&l[..n], &r[..n]);
         for &id in self.engine.fired_markers() {
             let _ = self.control_tx.push(ControlEvent {
                 input: MARKER_INPUT,
