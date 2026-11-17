@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use egui::{Color32, RichText};
 
 use crate::dialog::Want;
+use crate::hw;
 use crate::perf::{self, Status};
 use crate::session::Session;
 use crate::ui::{Action, UiState};
@@ -187,222 +188,439 @@ impl ActionKind {
 
 fn status_color(s: Status) -> Color32 {
     match s {
-        Status::Ok => Color32::from_rgb(0x6c, 0xc9, 0x6a),
-        Status::Warn => Color32::from_rgb(0xe0, 0xb4, 0x4a),
+        Status::Ok => hw::GREEN,
+        Status::Warn => hw::AMBER,
         Status::Fail => Color32::from_rgb(0xe0, 0x6c, 0x5a),
     }
 }
 
-pub fn show(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
-    ui.add_space(4.0);
+// ---- the pieces every tab is built from ----------------------------------------------------
+
+/// How wide the settings column grows: lines of text much longer than this are hard to read.
+const COLUMN: f32 = 900.0;
+
+/// A titled group of settings on a raised plate: its name, what it is for, then its controls.
+fn section(ui: &mut egui::Ui, title: &str, blurb: &str, body: impl FnOnce(&mut egui::Ui)) {
+    hw::plate()
+        .inner_margin(egui::Margin::symmetric(14, 10))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = 6.0;
+            ui.label(
+                RichText::new(title.to_uppercase())
+                    .size(14.0)
+                    .strong()
+                    .color(hw::TEXT),
+            );
+            if !blurb.is_empty() {
+                note(ui, blurb);
+            }
+            ui.add_space(4.0);
+            body(ui);
+        });
+    ui.add_space(12.0);
+}
+
+/// A quieter heading inside a section, for a part of it.
+fn subhead(ui: &mut egui::Ui, text: &str) {
+    ui.add_space(6.0);
+    hw::engraved(ui, text);
+}
+
+/// Explanatory text: dimmer than the settings themselves, but readable.
+fn note(ui: &mut egui::Ui, text: impl Into<String>) {
+    ui.label(RichText::new(text).size(13.0).color(hw::TEXT_DIM));
+}
+
+/// A light and a line of text: how something stands.
+fn status_line(ui: &mut egui::Ui, status: Status, text: impl Into<String>) {
     ui.horizontal(|ui| {
-        ui.heading("Settings");
-        ui.separator();
-        for (tab, name) in [
-            (SettingsTab::Plugins, "Plugins"),
-            (SettingsTab::Audio, "Audio"),
-            (SettingsTab::Midi, "MIDI devices"),
-            (SettingsTab::Controls, "Controls"),
-            (SettingsTab::Windows, "Windows plugins"),
-            (SettingsTab::Updates, "Updates"),
-            (SettingsTab::Performance, "Performance check"),
-        ] {
-            ui.selectable_value(&mut st.settings_tab, tab, name);
-        }
+        hw::led(ui, true, status_color(status));
+        ui.label(RichText::new(text).color(hw::TEXT));
     });
-    ui.separator();
-    egui::ScrollArea::vertical()
-        .auto_shrink(false)
-        .show(ui, |ui| match st.settings_tab {
-            SettingsTab::Plugins => plugins(ui, s, st, actions),
-            SettingsTab::Audio => audio(ui, s, st, actions),
-            SettingsTab::Midi => midi(ui, s, st, actions),
-            SettingsTab::Controls => controls(ui, s, st, actions),
-            SettingsTab::Windows => windows(ui, s, st, actions),
-            SettingsTab::Updates => updates(ui, s, actions),
-            SettingsTab::Performance => performance(ui, s, st),
+}
+
+/// Text from a running job (an install, a download), as it comes.
+fn progress(ui: &mut egui::Ui, busy: bool, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    ui.horizontal(|ui| {
+        if busy {
+            hw::throbber(ui, hw::AMBER);
+        }
+        ui.label(RichText::new(text).color(hw::TEXT));
+    });
+}
+
+/// One entry of a list in a recessed well: an optional light, the text (selectable, so a path
+/// or an error can be copied), a dimmer second line, and keys at the right end. `keys` adds
+/// them right to left.
+fn row(
+    ui: &mut egui::Ui,
+    light: Option<Color32>,
+    text: RichText,
+    detail: Option<&str>,
+    keys: impl FnOnce(&mut egui::Ui),
+) {
+    hw::inset()
+        .inner_margin(egui::Margin::symmetric(8, 4))
+        .show(ui, |ui| {
+            egui::Sides::new().shrink_left().wrap().show(
+                ui,
+                |ui| {
+                    if let Some(c) = light {
+                        hw::led(ui, true, c);
+                    }
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 1.0;
+                        ui.label(text);
+                        if let Some(d) = detail.filter(|d| !d.is_empty()) {
+                            ui.label(RichText::new(d).size(12.5).color(hw::TEXT_DIM));
+                        }
+                    });
+                },
+                keys,
+            );
         });
 }
 
-fn plugins(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
-    ui.strong("Plugin folders");
-    ui.label(
-        RichText::new(
-            "Add any folder with plugins: CLAP, VST3, VST2, LV2, Linux or Windows, mixed or not, with subfolders. Merlin works out what each file is. Windows plugins need Windows plugin support (the Windows plugins tab).",
-        )
-        .small()
-        .weak(),
+/// A path, as a row shows it.
+fn path_text(path: &std::path::Path) -> RichText {
+    RichText::new(path.display().to_string())
+        .monospace()
+        .color(hw::TEXT)
+}
+
+/// An engraved name in a column of its own, so the things it names line up.
+fn label_cell(ui: &mut egui::Ui, text: &str, width: f32) {
+    ui.allocate_ui_with_layout(
+        egui::vec2(width, 20.0),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.set_min_width(width);
+            hw::engraved(ui, text);
+        },
     );
-    for (i, d) in s.settings.plugin_dirs.iter().enumerate() {
-        ui.horizontal(|ui| {
-            ui.label(d.display().to_string());
-            if ui.small_button("remove").clicked() {
-                actions.push(Action::RemoveDir(i));
-            }
-        });
-    }
-    crate::ui::pick_button(ui, &mut st.picking, "Add folder…", Want::PluginDir, None);
-    egui::CollapsingHeader::new("Standard folders, always searched")
-        .default_open(false)
-        .show(ui, |ui| {
-            for d in merlin_scanner::default_plugin_dirs() {
-                ui.label(RichText::new(d.display().to_string()).small().weak());
-            }
-        });
-    if !s.windows_status.is_empty() {
-        ui.label(RichText::new(&s.windows_status).small().weak());
-    }
-    ui.add_space(12.0);
-    sound_folders(ui, s, st, actions);
-    ui.add_space(8.0);
+}
+
+/// A labelled readout: an engraved name and a selectable value beside it.
+fn readout(ui: &mut egui::Ui, label: &str, value: &str, colour: Color32) {
     ui.horizontal(|ui| {
-        ui.add_enabled_ui(!s.scanning(), |ui| {
-            if ui.button("Rescan changed files").clicked() {
-                actions.push(Action::Rescan(false));
-            }
-            if ui.button("Rescan everything").clicked() {
-                actions.push(Action::Rescan(true));
-            }
-        });
-        if s.scanning() {
-            let file = s
-                .scan_current
-                .as_ref()
-                .and_then(|p| p.file_name())
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            ui.label(format!("scanning… {file}"));
-        } else {
-            ui.label(format!(
-                "{} plugins in {} files",
-                s.found.len(),
-                s.entries.len()
-            ));
+        label_cell(ui, label, 150.0);
+        ui.label(RichText::new(value).monospace().color(colour));
+    });
+}
+
+pub fn show(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
+    const TABS: [(SettingsTab, &str); 7] = [
+        (SettingsTab::Plugins, "Plugins"),
+        (SettingsTab::Audio, "Audio"),
+        (SettingsTab::Midi, "MIDI devices"),
+        (SettingsTab::Controls, "Controls"),
+        (SettingsTab::Windows, "Windows plugins"),
+        (SettingsTab::Updates, "Updates"),
+        (SettingsTab::Performance, "Performance"),
+    ];
+    ui.add_space(6.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.heading("Settings");
+        ui.add_space(12.0);
+        let names = TABS.map(|(_, n)| n);
+        let on = TABS
+            .iter()
+            .position(|(t, _)| *t == st.settings_tab)
+            .unwrap_or(0);
+        if let Some(n) = hw::selector(ui, &names, on, hw::AMBER) {
+            st.settings_tab = TABS[n].0;
         }
     });
+    ui.add_space(8.0);
+    egui::ScrollArea::vertical()
+        .auto_shrink(false)
+        .show(ui, |ui| {
+            ui.set_max_width(COLUMN.min(ui.available_width()));
+            match st.settings_tab {
+                SettingsTab::Plugins => plugins(ui, s, st, actions),
+                SettingsTab::Audio => audio(ui, s, st, actions),
+                SettingsTab::Midi => midi(ui, s, st, actions),
+                SettingsTab::Controls => controls(ui, s, st, actions),
+                SettingsTab::Windows => windows(ui, s, st, actions),
+                SettingsTab::Updates => updates(ui, s, actions),
+                SettingsTab::Performance => performance(ui, s, st),
+            }
+        });
+}
 
+// ---- Plugins ---------------------------------------------------------------------------------
+
+fn plugins(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
+    section(
+        ui,
+        "Plugin folders",
+        "Add any folder with plugins: CLAP, VST3, VST2 or LV2, Linux or Windows, mixed or not, with subfolders. Merlin works out what each file is. Windows plugins also need Windows plugin support (the Windows plugins tab).",
+        |ui| {
+            for (i, d) in s.settings.plugin_dirs.iter().enumerate() {
+                row(ui, None, path_text(d), None, |ui| {
+                    if hw::Cap::new("Remove").show(ui).clicked() {
+                        actions.push(Action::RemoveDir(i));
+                    }
+                });
+            }
+            crate::ui::pick_button(ui, &mut st.picking, "Add folder…", Want::PluginDir, None);
+            egui::CollapsingHeader::new("Standard folders, always searched")
+                .default_open(false)
+                .show(ui, |ui| {
+                    for d in merlin_scanner::default_plugin_dirs() {
+                        ui.label(
+                            RichText::new(d.display().to_string())
+                                .monospace()
+                                .color(hw::TEXT_DIM),
+                        );
+                    }
+                });
+            if !s.windows_status.is_empty() {
+                note(ui, &s.windows_status);
+            }
+        },
+    );
+    sound_folders(ui, s, st, actions);
+    library_scan(ui, s, actions);
+    problem_files(ui, s, actions);
+}
+
+/// Where SoundFonts and SFZ instruments are looked for, with how many each folder holds.
+fn sound_folders(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
+    use merlin_model::Format;
+    let count = |dir: &std::path::Path| {
+        // Files, not browser entries: a folder of SoundFonts is one entry.
+        let n = s
+            .entries
+            .iter()
+            .filter(|e| {
+                e.path.starts_with(dir)
+                    && e.plugins
+                        .iter()
+                        .any(|p| matches!(p.format, Format::SoundFont | Format::Sfz))
+            })
+            .count();
+        format!("{n} found")
+    };
+    section(
+        ui,
+        "Sound folders",
+        "Every SoundFont (.sf2, .sf3) and SFZ instrument in these folders and their subfolders shows up in the browser. A folder with several of them directly inside it becomes one instrument named like the folder, with all its sounds in one list (the standard folders excepted). To add an SFZ library, unpack it anywhere and add its folder. You can also drop a file on the window.",
+        |ui| {
+            for (i, d) in s.settings.sound_dirs.iter().enumerate() {
+                row(ui, None, path_text(d), Some(&count(d)), |ui| {
+                    if hw::Cap::new("Remove").show(ui).clicked() {
+                        actions.push(Action::RemoveSoundDir(i));
+                    }
+                });
+            }
+            crate::ui::pick_button(ui, &mut st.picking, "Add folder…", Want::SoundDir, None);
+            egui::CollapsingHeader::new("Standard folders, always searched")
+                .id_salt("standard-sound-folders")
+                .default_open(false)
+                .show(ui, |ui| {
+                    egui::Grid::new("standard-sound-folders-grid")
+                        .num_columns(2)
+                        .spacing([16.0, 2.0])
+                        .show(ui, |ui| {
+                            for d in merlin_scanner::default_sound_dirs() {
+                                ui.label(path_text(&d).color(hw::TEXT_DIM));
+                                note(ui, count(&d));
+                                ui.end_row();
+                            }
+                        });
+                });
+        },
+    );
+}
+/// What the last scan found, and keys to scan again.
+fn library_scan(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
+    section(
+        ui,
+        "Library",
+        "Merlin looks at a file again only when it changed. Rescan everything after updating a plugin that keeps its file date.",
+        |ui| {
+            ui.horizontal(|ui| {
+                ui.add_enabled_ui(!s.scanning(), |ui| {
+                    if hw::Cap::new("Rescan changed files").show(ui).clicked() {
+                        actions.push(Action::Rescan(false));
+                    }
+                    if hw::Cap::new("Rescan everything").show(ui).clicked() {
+                        actions.push(Action::Rescan(true));
+                    }
+                });
+                ui.add_space(8.0);
+                if s.scanning() {
+                    let file = s
+                        .scan_current
+                        .as_ref()
+                        .and_then(|p| p.file_name())
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    hw::throbber(ui, hw::AMBER);
+                    ui.label(format!("Scanning {file}"));
+                } else {
+                    hw::led(ui, true, hw::GREEN);
+                    ui.label(format!(
+                        "{} plugins in {} files",
+                        s.found.len(),
+                        s.entries.len()
+                    ));
+                }
+            });
+        },
+    );
+}
+
+/// Files that failed to scan, files and plugins the user put aside, and quarantined plugins:
+/// each a section only when it has something in it.
+fn problem_files(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
     let failed: Vec<_> = s.entries.iter().filter(|e| e.error.is_some()).collect();
     if !failed.is_empty() {
-        ui.add_space(8.0);
-        ui.strong(format!(
-            "Files that could not be scanned ({})",
-            failed.len()
-        ));
-        ui.label(
-            RichText::new(
-                "They are tried again when the file changes, or with Retry. Ignore a file you know is broken or not a plugin: it is never loaded or listed here again.",
-            )
-            .small()
-            .weak(),
+        section(
+            ui,
+            &format!("Files that could not be scanned ({})", failed.len()),
+            "They are tried again when the file changes, or with Retry. Ignore a file you know is broken or not a plugin: it is never loaded or listed here again.",
+            |ui| {
+                for e in failed {
+                    row(
+                        ui,
+                        Some(status_color(Status::Fail)),
+                        path_text(&e.path),
+                        e.error.as_deref(),
+                        |ui| {
+                            if hw::Cap::new("Ignore")
+                                .show(ui)
+                                .on_hover_text("Never scan this file again, and stop reporting it")
+                                .clicked()
+                            {
+                                actions.push(Action::IgnoreFile(e.path.clone()));
+                            }
+                            if hw::Cap::new("Retry").show(ui).clicked() {
+                                actions.push(Action::RetryFile(e.path.clone()));
+                            }
+                        },
+                    );
+                }
+            },
         );
-        for e in failed {
-            ui.horizontal_wrapped(|ui| {
-                if ui.small_button("Retry").clicked() {
-                    actions.push(Action::RetryFile(e.path.clone()));
-                }
-                if ui
-                    .small_button("Ignore")
-                    .on_hover_text("Never scan this file again, and stop reporting it")
-                    .clicked()
-                {
-                    actions.push(Action::IgnoreFile(e.path.clone()));
-                }
-                ui.colored_label(status_color(Status::Fail), e.path.display().to_string());
-                ui.label(e.error.as_deref().unwrap_or_default());
-            });
-        }
     }
 
     if !s.settings.ignored_files.is_empty() {
-        ui.add_space(8.0);
-        ui.strong("Ignored files");
-        for p in &s.settings.ignored_files {
-            ui.horizontal_wrapped(|ui| {
-                if ui.small_button("Stop ignoring").clicked() {
-                    actions.push(Action::UnignoreFile(p.clone()));
-                }
-                ui.label(p.display().to_string());
-            });
-        }
+        section(ui, "Ignored files", "", |ui| {
+            for p in &s.settings.ignored_files {
+                row(ui, None, path_text(p), None, |ui| {
+                    if hw::Cap::new("Stop ignoring").show(ui).clicked() {
+                        actions.push(Action::UnignoreFile(p.clone()));
+                    }
+                });
+            }
+        });
     }
 
     if !s.hidden.is_empty() {
-        ui.add_space(8.0);
-        ui.strong("Hidden plugins");
-        ui.label(
-            RichText::new(
-                "Hidden from the library with right-click > Hide. Rigs that use them still load.",
-            )
-            .small()
-            .weak(),
-        );
-        for f in &s.hidden {
-            ui.horizontal_wrapped(|ui| {
-                if ui.small_button("Show again").clicked() {
-                    actions.push(Action::UnhidePlugin(Session::favorite_key(f)));
+        section(
+            ui,
+            "Hidden plugins",
+            "Hidden from the library with right-click > Hide. Rigs that use them still load.",
+            |ui| {
+                for f in &s.hidden {
+                    let name = RichText::new(&f.info.name).strong().color(hw::TEXT);
+                    row(ui, None, name, Some(&f.info.vendor), |ui| {
+                        if hw::Cap::new("Show again").show(ui).clicked() {
+                            actions.push(Action::UnhidePlugin(Session::favorite_key(f)));
+                        }
+                    });
                 }
-                ui.label(format!("{} ({})", f.info.name, f.info.vendor));
-            });
-        }
+            },
+        );
     }
 
     let quarantined = s.quarantine.entries();
     if !quarantined.is_empty() {
-        ui.add_space(8.0);
-        ui.strong("Quarantined plugins");
-        ui.label(
-            RichText::new("These crashed the app. They are not loaded automatically.")
-                .small()
-                .weak(),
-        );
-        for q in quarantined {
-            ui.horizontal_wrapped(|ui| {
-                ui.colored_label(status_color(Status::Warn), &q.name);
-                ui.label(&q.reason);
-                if ui.small_button("Remove from quarantine").clicked() {
-                    actions.push(Action::Unquarantine(q.path.clone(), q.id.clone()));
+        section(
+            ui,
+            "Quarantined plugins",
+            "These crashed the app. They are not loaded automatically.",
+            |ui| {
+                for q in quarantined {
+                    let name = RichText::new(&q.name).strong().color(hw::TEXT);
+                    row(
+                        ui,
+                        Some(status_color(Status::Warn)),
+                        name,
+                        Some(&q.reason),
+                        |ui| {
+                            if hw::Cap::new("Release")
+                                .show(ui)
+                                .on_hover_text("Take it out of quarantine, so it loads again")
+                                .clicked()
+                            {
+                                actions.push(Action::Unquarantine(q.path.clone(), q.id.clone()));
+                            }
+                        },
+                    );
                 }
-            });
-        }
+            },
+        );
     }
 }
 
+// ---- Audio -----------------------------------------------------------------------------------
+
 fn audio(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
     let Some(b) = s.backend() else {
-        ui.label("Audio is not running.");
+        section(ui, "Audio", "", |ui| {
+            status_line(ui, Status::Fail, "Audio is not running.");
+        });
         return;
     };
     let frames = b.buffer_size();
     engine_panel(ui, s, b);
-    ui.add_space(8.0);
-    ui.strong("Buffer size");
-    ui.horizontal(|ui| {
-        for n in [64u32, 128, 256, 512, 1024] {
-            if ui.selectable_label(frames == n, format!("{n}")).clicked() && frames != n {
-                actions.push(Action::SetBuffer(n));
-            }
-        }
-        ui.label("frames");
-    });
-    ui.label(
-        RichText::new("Smaller is more responsive but needs a faster, well-set-up machine (see the performance check).")
-            .small()
-            .weak(),
+    ui.add_space(12.0);
+    section(
+        ui,
+        "Buffer size",
+        "Smaller is more responsive but needs a faster, well set up machine (see the Performance tab).",
+        |ui| {
+            const SIZES: [u32; 5] = [64, 128, 256, 512, 1024];
+            ui.horizontal(|ui| {
+                let labels = SIZES.map(|n| n.to_string());
+                let names: Vec<&str> = labels.iter().map(String::as_str).collect();
+                let on = SIZES
+                    .iter()
+                    .position(|n| *n == frames)
+                    .unwrap_or(usize::MAX);
+                if let Some(n) = hw::selector(ui, &names, on, hw::AMBER)
+                    && SIZES[n] != frames
+                {
+                    actions.push(Action::SetBuffer(SIZES[n]));
+                }
+                ui.add_space(6.0);
+                note(
+                    ui,
+                    format!(
+                        "frames · {:.1} ms per buffer",
+                        frames as f32 * 1000.0 / s.sample_rate as f32
+                    ),
+                );
+            });
+        },
     );
-    ui.add_space(8.0);
     // Listed once per frame: asking the server for its ports is not free.
     let pairs = s.output_pairs();
     main_output(ui, s, &pairs, actions);
-    ui.add_space(8.0);
     click_output(ui, s, &pairs, actions);
-    ui.add_space(8.0);
     backing_folder(ui, s, st, actions);
 }
 
 /// What the audio engine is doing, as one plate of recessed readouts: the server Merlin is
 /// connected to, the format and what it costs in delay, the load, and where the sound goes.
 fn engine_panel(ui: &mut egui::Ui, s: &Session, b: &merlin_audio_io::JackBackend) {
-    use crate::hw;
     let (frames, rate) = (b.buffer_size(), s.sample_rate);
     let one_way = frames as f32 * 1000.0 / rate as f32;
     let xruns = b.stats.xruns.load(Ordering::Relaxed);
@@ -450,28 +668,36 @@ fn engine_panel(ui: &mut egui::Ui, s: &Session, b: &merlin_audio_io::JackBackend
         })
         .fold(300.0_f32, f32::max)
         + 24.0;
-    hw::plate().show(ui, |ui| {
-        hw::engraved(ui, "Audio engine");
-        ui.add_space(2.0);
-        egui::Grid::new("audio-engine")
-            .num_columns(3)
-            .spacing([10.0, 6.0])
-            .show(ui, |ui| {
-                for (label, text, colour) in &rows {
-                    hw::engraved(ui, label);
-                    hw::display(ui, text, width, *colour);
-                    if *label == "Load" {
-                        hw::led(ui, true, if xruns == 0 { hw::GREEN } else { hw::AMBER })
-                            .on_hover_text(if xruns == 0 {
-                                "No dropouts since Merlin started."
-                            } else {
-                                "The audio dropped out at least once since Merlin started."
-                            });
+    hw::plate()
+        .inner_margin(egui::Margin::symmetric(14, 10))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(
+                RichText::new("AUDIO ENGINE")
+                    .size(14.0)
+                    .strong()
+                    .color(hw::TEXT),
+            );
+            ui.add_space(4.0);
+            egui::Grid::new("audio-engine")
+                .num_columns(3)
+                .spacing([10.0, 6.0])
+                .show(ui, |ui| {
+                    for (label, text, colour) in &rows {
+                        hw::engraved(ui, label);
+                        hw::display(ui, text, width, *colour);
+                        if *label == "Load" {
+                            hw::led(ui, true, if xruns == 0 { hw::GREEN } else { hw::AMBER })
+                                .on_hover_text(if xruns == 0 {
+                                    "No dropouts since Merlin started."
+                                } else {
+                                    "The audio dropped out at least once since Merlin started."
+                                });
+                        }
+                        ui.end_row();
                     }
-                    ui.end_row();
-                }
-            });
-    });
+                });
+        });
 }
 
 /// Where the main mix is heard.
@@ -481,39 +707,36 @@ fn main_output(
     pairs: &[merlin_audio_io::OutputPair],
     actions: &mut Vec<Action>,
 ) {
-    ui.strong("Main output");
-    ui.label(
-        RichText::new("Where the mix is heard. Automatic is the system default output: the one the other programs on your desktop use, as it is when Merlin starts (or when you pick Automatic here). Pick another interface to keep Merlin there instead, whatever the desktop does. Merlin plays through the audio server (PipeWire or JACK) and does not take the sound card over, so other programs keep their sound. A choice whose interface is unplugged is waited for; meanwhile Merlin uses the system default.")
-            .small()
-            .weak(),
-    );
-    if let Some(choice) = output_picker(
+    section(
         ui,
-        "main-output",
-        pairs,
-        &s.settings.main_output,
-        "Automatic (system default)",
-    ) {
-        actions.push(Action::SetMainOutput(choice));
-    }
-    ui.label(
-        RichText::new(match s.system_default_output() {
-            Some(name) => format!("System default output: {name}"),
-            None => "System default output: not known (it is asked of WirePlumber with wpctl), so Automatic uses the first outputs the audio server lists.".to_owned(),
-        })
-        .small()
-        .weak(),
+        "Main output",
+        "Where the mix is heard. Automatic follows the desktop's default output, as it is when Merlin starts or when you pick Automatic again. Pick an interface to stay on it whatever the desktop does: while it is unplugged, Merlin waits for it and plays through the default. Merlin goes through the audio server (PipeWire or JACK), so other programs keep their sound.",
+        |ui| {
+            if let Some(choice) = output_picker(
+                ui,
+                "main-output",
+                pairs,
+                &s.settings.main_output,
+                "Automatic (system default)",
+            ) {
+                actions.push(Action::SetMainOutput(choice));
+            }
+            ui.add_space(2.0);
+            match s.system_default_output() {
+                Some(name) => readout(ui, "System default", name, hw::TEXT),
+                None => {
+                    readout(ui, "System default", "not known", hw::TEXT_DIM);
+                    note(
+                        ui,
+                        "It is asked of WirePlumber (wpctl), which did not answer, so Automatic uses the first outputs the audio server lists.",
+                    );
+                }
+            }
+            if let Some(b) = s.backend() {
+                readout(ui, "Merlin's ports", &b.out_names.join(", "), hw::TEXT);
+            }
+        },
     );
-    if let Some(b) = s.backend() {
-        ui.label(
-            RichText::new(format!(
-                "Merlin's own ports, for a patchbay: {}",
-                b.out_names.join(", ")
-            ))
-            .small()
-            .weak(),
-        );
-    }
 }
 
 /// Choosing a pair of the interface's outputs from a dropdown. The first entry is the default
@@ -560,120 +783,151 @@ fn output_picker(
 
 /// The folder the Setlist view lists backing tracks from.
 fn backing_folder(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
-    ui.strong("Backing tracks folder");
-    ui.label(
-        RichText::new("The Setlist view shows this folder (and the folders inside it) beside the songs, so a backing track is a double-click away. Only audio files are listed.")
-            .small()
-            .weak(),
+    section(
+        ui,
+        "Backing tracks folder",
+        "The Setlist view lists the audio files in this folder (and the folders inside it) beside the songs, so a backing track is a double-click away.",
+        |ui| {
+            let text = match s.backing_dir() {
+                Some(d) => path_text(d),
+                None => RichText::new("not chosen yet").color(hw::TEXT_DIM),
+            };
+            row(ui, None, text, None, |ui| {
+                if s.backing_dir().is_some() && hw::Cap::new("Clear").show(ui).clicked() {
+                    actions.push(Action::SetBackingDir(None));
+                }
+                crate::ui::pick_button(
+                    ui,
+                    &mut st.picking,
+                    "Choose…",
+                    Want::BackingDir,
+                    s.backing_dir(),
+                );
+            });
+        },
     );
-    ui.horizontal(|ui| {
-        match s.backing_dir() {
-            Some(d) => ui.label(RichText::new(d.display().to_string()).monospace()),
-            None => ui.label(RichText::new("not chosen yet").weak()),
-        };
-        crate::ui::pick_button(
-            ui,
-            &mut st.picking,
-            "Choose…",
-            Want::BackingDir,
-            s.backing_dir(),
-        );
-        if s.backing_dir().is_some() && ui.button("Clear").clicked() {
-            actions.push(Action::SetBackingDir(None));
-        }
-    });
 }
 
-/// Where the click is heard.
+/// The metronome: its bar length and where it is heard.
 fn click_output(
     ui: &mut egui::Ui,
     s: &Session,
     pairs: &[merlin_audio_io::OutputPair],
     actions: &mut Vec<Action>,
 ) {
-    ui.strong("Click");
-    ui.horizontal(|ui| {
-        ui.label("beats per bar when no song sets it");
-        let mut beats = s.rig.transport.beats_per_bar;
-        if ui
-            .add(egui::DragValue::new(&mut beats).range(1..=16))
-            .changed()
-        {
-            actions.push(Action::SetBeatsPerBar(beats));
-        }
-    });
-    ui.strong("Click output");
-    ui.label(
-        RichText::new("The metronome. Mixed into the main outputs by default; pick two of your interface's own outputs to hear it in headphones only. The MIDI clock, and the program changes and controllers that song markers send, go out of the \"midi_out\" port (connect it in your patchbay).")
-            .small()
-            .weak(),
-    );
-    if let Some(choice) = output_picker(
+    section(
         ui,
-        "click-output",
-        pairs,
-        &s.settings.click_output,
-        "Main outputs (mixed in)",
-    ) {
-        actions.push(Action::SetClickOutput(choice));
-    }
+        "Click",
+        "The metronome is mixed into the main output unless you pick two of your interface's own outputs for it, to hear it in headphones only.",
+        |ui| {
+            ui.horizontal(|ui| {
+                let mut beats = s.rig.transport.beats_per_bar;
+                if ui
+                    .add(egui::DragValue::new(&mut beats).range(1..=16))
+                    .changed()
+                {
+                    actions.push(Action::SetBeatsPerBar(beats));
+                }
+                ui.label("beats per bar, when the song does not set it");
+            });
+            ui.horizontal(|ui| {
+                label_cell(ui, "Heard on", 150.0);
+                if let Some(choice) = output_picker(
+                    ui,
+                    "click-output",
+                    pairs,
+                    &s.settings.click_output,
+                    "Main outputs (mixed in)",
+                ) {
+                    actions.push(Action::SetClickOutput(choice));
+                }
+            });
+            note(
+                ui,
+                "The MIDI clock, and the program changes and controllers that song markers send, go out of Merlin's \"midi_out\" port: connect it in your patchbay.",
+            );
+        },
+    );
 }
 
-/// Where SoundFonts and SFZ instruments are looked for, with how many each folder holds.
-fn sound_folders(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
-    use merlin_model::Format;
-    let count = |dir: &std::path::Path| {
-        // Files, not browser entries: a folder of SoundFonts is one entry.
-        s.entries
-            .iter()
-            .filter(|e| {
-                e.path.starts_with(dir)
-                    && e.plugins
-                        .iter()
-                        .any(|p| matches!(p.format, Format::SoundFont | Format::Sfz))
-            })
-            .count()
-    };
-    ui.strong("Sound folders (SoundFonts, SFZ)");
-    ui.label(
-        RichText::new("Every .sf2, .sf3 and .sfz in these folders (and their subfolders) appears in the browser as an instrument. A folder with several SoundFonts, or several .sfz files, directly inside it (other than the standard folders below) shows up as one instrument named like the folder, with all its sounds in one list. To add an SFZ library, unpack it anywhere and add its folder here. You can also drop a SoundFont or .sfz file on the window.")
-            .small()
-            .weak(),
-    );
-    for d in merlin_scanner::default_sound_dirs() {
-        ui.label(
-            RichText::new(format!("{}  ({} found)", d.display(), count(&d)))
-                .small()
-                .weak(),
-        );
-    }
-    ui.add_space(4.0);
-    for (i, d) in s.settings.sound_dirs.iter().enumerate() {
-        ui.horizontal(|ui| {
-            ui.label(format!("{}  ({} found)", d.display(), count(d)));
-            if ui.small_button("remove").clicked() {
-                actions.push(Action::RemoveSoundDir(i));
-            }
-        });
-    }
-    crate::ui::pick_button(ui, &mut st.picking, "Add folder…", Want::SoundDir, None);
-}
+// ---- Controls --------------------------------------------------------------------------------
 
 /// What the MIDI controls do: the list of mappings, and teaching a new one by moving a control.
 fn controls(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
-    use merlin_model::Takeover;
-    ui.strong("Controls");
-    ui.label(
-        RichText::new(
-            "Teach the app what your pedals, pads, knobs and faders do: pick an action, press Learn, then press or move the control. Mappings belong to the rig and are saved with it. A control that is mapped no longer plays an instrument.",
-        )
-        .small()
-        .weak(),
+    section(
+        ui,
+        "Teach a control",
+        "Pick what a pedal, pad, knob or fader should do, press Learn, then press or move it. Mappings belong to the rig and are saved with it. A mapped control no longer plays an instrument.",
+        |ui| {
+            new_mapping(ui, s, st, actions);
+            ui.add_space(2.0);
+            match s.last_control() {
+                Some(m) => readout(ui, "Last message", m, hw::AMBER),
+                None => readout(
+                    ui,
+                    "Last message",
+                    "nothing yet: press something on your device",
+                    hw::TEXT_DIM,
+                ),
+            }
+        },
     );
-    ui.add_space(6.0);
 
-    // Composing a new mapping.
-    ui.horizontal(|ui| {
+    // What connected controllers do without any mapping of yours.
+    let built_in = s.profile_mappings();
+    if !built_in.is_empty() {
+        section(
+            ui,
+            &format!(
+                "Built-in layout of connected controllers ({})",
+                built_in.len()
+            ),
+            "These work until you map the same control yourself (below, or with MIDI map): yours then wins and the row is crossed out.",
+            |ui| {
+                egui::CollapsingHeader::new("Show the layout")
+                    .id_salt("profile-mappings-open")
+                    .show(ui, |ui| {
+                        egui::Grid::new("profile-mappings")
+                            .num_columns(3)
+                            .spacing([14.0, 4.0])
+                            .striped(true)
+                            .show(ui, |ui| {
+                                for (m, active) in &built_in {
+                                    let text = |t: String| {
+                                        let t = RichText::new(t);
+                                        if *active { t } else { t.strikethrough().weak() }
+                                    };
+                                    ui.label(text(m.label.clone().unwrap_or_default()));
+                                    ui.label(text(m.source.describe()).monospace());
+                                    ui.label(text(format!("→  {}", m.action.describe())));
+                                    ui.end_row();
+                                }
+                            });
+                    });
+            },
+        );
+    }
+
+    section(
+        ui,
+        &format!("Your mappings ({})", s.mappings().len()),
+        "",
+        |ui| {
+            if s.mappings().is_empty() {
+                note(
+                    ui,
+                    "None yet: teach one above, or use MIDI map in the rack.",
+                );
+                return;
+            }
+            mapping_list(ui, s, actions);
+        },
+    );
+}
+
+/// The action picker, its slot/scene/macro number, and the Learn key.
+fn new_mapping(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
+    ui.horizontal_wrapped(|ui| {
         egui::ComboBox::from_id_salt("new-mapping-kind")
             .width(300.0)
             .selected_text(st.new_kind.name())
@@ -682,51 +936,51 @@ fn controls(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<
                     ui.selectable_value(&mut st.new_kind, k, k.name());
                 }
             });
+        let number = |ui: &mut egui::Ui, label: &str, value: &mut usize, max: usize| {
+            ui.label(label);
+            let mut shown = *value + 1;
+            ui.add(egui::DragValue::new(&mut shown).range(1..=max));
+            *value = shown - 1;
+        };
         if st.new_kind.needs_slot() {
-            ui.label("slot");
-            let mut shown = st.new_slot + 1;
-            ui.add(egui::DragValue::new(&mut shown).range(1..=crate::session::UI_SLOTS));
-            st.new_slot = shown - 1;
+            number(ui, "slot", &mut st.new_slot, crate::session::UI_SLOTS);
         }
         if st.new_kind == ActionKind::SelectByValue {
-            ui.label("first slot");
-            let mut shown = st.new_base + 1;
-            ui.add(egui::DragValue::new(&mut shown).range(1..=crate::session::UI_SLOTS));
-            st.new_base = shown - 1;
+            number(ui, "first slot", &mut st.new_base, crate::session::UI_SLOTS);
         }
         if matches!(
             st.new_kind,
             ActionKind::SlotMacro | ActionKind::SelectedMacro
         ) {
-            ui.label("macro");
-            let mut shown = st.new_base + 1;
-            ui.add(egui::DragValue::new(&mut shown).range(1..=merlin_model::MACROS_PER_SLOT));
-            st.new_base = shown - 1;
+            number(ui, "macro", &mut st.new_base, merlin_model::MACROS_PER_SLOT);
         }
         if st.new_kind == ActionKind::RecallSnapshot {
-            ui.label("scene");
-            let mut shown = st.new_slot + 1;
-            ui.add(egui::DragValue::new(&mut shown).range(1..=merlin_model::MAX_SNAPSHOTS));
-            st.new_slot = shown - 1;
+            number(ui, "scene", &mut st.new_slot, merlin_model::MAX_SNAPSHOTS);
         }
         if st.new_kind == ActionKind::RecallSnapshotByValue {
-            ui.label("first scene");
-            let mut shown = st.new_base + 1;
-            ui.add(egui::DragValue::new(&mut shown).range(1..=merlin_model::MAX_SNAPSHOTS));
-            st.new_base = shown - 1;
+            number(
+                ui,
+                "first scene",
+                &mut st.new_base,
+                merlin_model::MAX_SNAPSHOTS,
+            );
         }
+        ui.add_space(6.0);
         match s.learning() {
             Some(_) => {
-                ui.colored_label(
-                    status_color(Status::Warn),
-                    "Press or move a control on your device…",
-                );
-                if ui.button("Cancel").clicked() {
+                if hw::Cap::new("Cancel").show(ui).clicked() {
                     actions.push(Action::CancelLearn);
                 }
+                hw::led(ui, true, hw::AMBER);
+                ui.label(RichText::new("Press or move a control on your device…").color(hw::AMBER));
             }
             None => {
-                if ui.button("Learn…").clicked() {
+                if hw::Cap::new("Learn")
+                    .flash(hw::AMBER)
+                    .min_width(80.0)
+                    .show(ui)
+                    .clicked()
+                {
                     actions.push(Action::LearnControl(
                         st.new_kind.build(st.new_slot, st.new_base),
                     ));
@@ -734,64 +988,25 @@ fn controls(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<
             }
         }
     });
-    ui.add_space(2.0);
-    ui.label(
-        RichText::new(match s.last_control() {
-            Some(m) => format!("Last message received: {m}"),
-            None => "No control messages yet: press something on your device.".to_owned(),
-        })
-        .small()
-        .weak(),
-    );
-    ui.add_space(8.0);
+}
 
-    // What connected controllers do without any mapping of yours.
-    let built_in = s.profile_mappings();
-    if !built_in.is_empty() {
-        egui::CollapsingHeader::new(format!(
-            "Built-in layout of connected controllers ({})",
-            built_in.len()
-        ))
-        .show(ui, |ui| {
-            ui.label(
-                RichText::new(
-                    "These work until you map the same control yourself (in the list below or with MIDI map): yours then wins and the row is crossed out.",
-                )
-                .small()
-                .weak(),
-            );
-            egui::Grid::new("profile-mappings")
-                .num_columns(3)
-                .spacing([14.0, 2.0])
-                .show(ui, |ui| {
-                    for (m, active) in &built_in {
-                        let text = |t: String| {
-                            let t = RichText::new(t);
-                            if *active { t } else { t.strikethrough().weak() }
-                        };
-                        ui.label(text(m.label.clone().unwrap_or_default()));
-                        ui.label(text(m.source.describe()));
-                        ui.label(text(format!("-> {}", m.action.describe())));
-                        ui.end_row();
-                    }
-                });
-        });
-        ui.add_space(8.0);
-    }
-
-    // The list.
-    if s.mappings().is_empty() {
-        ui.label("No mappings yet.");
-    }
+/// The rig's own mappings, each with how it behaves.
+fn mapping_list(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
+    use merlin_model::Takeover;
     egui::Grid::new("mappings")
         .num_columns(5)
         .spacing([14.0, 6.0])
+        .striped(true)
         .show(ui, |ui| {
             for (i, m) in s.mappings().iter().enumerate() {
-                ui.label(RichText::new(m.source.describe()).strong());
+                ui.label(
+                    RichText::new(m.source.describe())
+                        .monospace()
+                        .color(hw::AMBER),
+                );
                 ui.label(match &m.label {
-                    Some(name) => format!("-> {} ({name})", m.action.describe()),
-                    None => format!("-> {}", m.action.describe()),
+                    Some(name) => format!("→  {} ({name})", m.action.describe()),
+                    None => format!("→  {}", m.action.describe()),
                 });
                 if m.action.is_continuous() {
                     let mut t = m.takeover;
@@ -835,7 +1050,7 @@ fn controls(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<
                     ui.label("");
                     ui.label("");
                 }
-                if ui.small_button("remove").clicked() {
+                if hw::Cap::new("Remove").show(ui).clicked() {
                     actions.push(Action::RemoveMapping(i));
                 }
                 ui.end_row();
@@ -851,7 +1066,7 @@ fn glue_options(
     actions: &mut Vec<Action>,
 ) {
     use merlin_model::{Curve, Relative};
-    ui.menu_button("options", |ui| {
+    ui.menu_button("Options…", |ui| {
         let mut g = m.glue;
         ui.checkbox(&mut g.invert, "Invert (turn up = lower)");
         ui.horizontal(|ui| {
@@ -920,209 +1135,215 @@ fn glue_options(
     });
 }
 
+// ---- MIDI devices ----------------------------------------------------------------------------
+
 fn midi(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
     use crate::settings::DeviceRole;
-    ui.strong("MIDI devices");
-    ui.label(
-        RichText::new(
-            "A keyboard plays the instruments. A controller (pads, knobs, faders) never does: its messages are kept for controlling the app. Turn a device off to leave it alone completely. Velocity sets how hard you have to play for how loud. Devices are remembered by name, so plugging one in again restores its role and curve.",
-        )
-        .small()
-        .weak(),
-    );
-    ui.add_space(4.0);
     let devices = s.midi_devices();
-    if devices.is_empty() {
-        ui.label("No MIDI devices found.");
-    }
-    egui::Grid::new("midi-devices")
-        .num_columns(6)
-        .spacing([14.0, 6.0])
-        .show(ui, |ui| {
-            for d in &devices {
-                let (rect, _) =
-                    ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
-                let led = if d.active {
-                    status_color(Status::Ok)
-                } else if d.input.is_some() {
-                    Color32::from_gray(90)
-                } else {
-                    Color32::from_gray(45)
-                };
-                ui.painter().circle_filled(rect.center(), 5.0, led);
-                ui.label(RichText::new(&d.name).strong());
-                ui.label(match d.input {
-                    Some(n) => format!("input {n}"),
-                    None if !d.enabled => "off".to_owned(),
-                    None => "not connected (all inputs in use)".to_owned(),
-                });
-                let mut role = d.role;
-                egui::ComboBox::from_id_salt(("midi-role", &d.name))
-                    .selected_text(match role {
-                        DeviceRole::Keyboard => "Keyboard",
-                        DeviceRole::Controller => "Controller",
-                    })
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut role, DeviceRole::Keyboard, "Keyboard");
-                        ui.selectable_value(&mut role, DeviceRole::Controller, "Controller");
-                    });
-                let mut on = d.enabled;
-                ui.checkbox(&mut on, "use");
-                if role != d.role || on != d.enabled {
-                    actions.push(Action::SetMidiDevice(d.name.clone(), role, on));
-                }
-                let open = st.velocity_open.as_ref() == Some(&d.name);
-                let curve = crate::settings::VelocityCurve::PRESETS
-                    .iter()
-                    .find(|(c, _)| *c == d.velocity)
-                    .map_or("Drawn", |(_, n)| *n);
-                if crate::hw::Cap::new(format!("Velocity: {curve}"))
-                    .lit(open.then_some(crate::hw::AMBER))
-                    .min_width(140.0)
-                    .show(ui)
-                    .on_hover_text("How hard you have to play for how loud")
-                    .clicked()
-                {
-                    st.velocity_open = (!open).then(|| d.name.clone());
-                    st.velocity_stroke = None;
-                }
-                ui.end_row();
+    section(
+        ui,
+        "MIDI devices",
+        "A keyboard plays the instruments. A controller (pads, knobs, faders) never does: its messages only control the app. Switch a device off to leave it alone. Velocity sets how hard you play for how loud. Devices are remembered by name, so plugging one in again brings back its role and curve.",
+        |ui| {
+            if devices.is_empty() {
+                status_line(ui, Status::Warn, "No MIDI devices found.");
             }
-        });
-    // The curve of the device picked above, while it is plugged in.
-    if let Some(d) = devices
-        .iter()
-        .find(|d| st.velocity_open.as_ref() == Some(&d.name))
-    {
-        ui.add_space(8.0);
-        let last = d.input.and_then(|n| s.last_velocity(n));
-        crate::velocity_ui::editor(ui, d, last, &mut st.velocity_stroke, actions);
-    }
-    for (_, what) in s.surface_devices() {
-        ui.colored_label(
-            status_color(Status::Ok),
-            format!("{what}: built-in layout, lights and screen are on (see Controls)"),
-        );
-    }
-    ui.add_space(6.0);
-    if ui.button("Look for new devices").clicked() {
-        actions.push(Action::RefreshMidi);
-    }
-    ui.label(
-        RichText::new("New devices are looked for automatically when they are plugged in.")
-            .small()
-            .weak(),
+            egui::Grid::new("midi-devices")
+                .num_columns(5)
+                .spacing([12.0, 8.0])
+                .show(ui, |ui| {
+                    for d in &devices {
+                        hw::led(
+                            ui,
+                            d.active,
+                            if d.active { hw::GREEN } else { hw::TEXT_DIM },
+                        )
+                        .on_hover_text(if d.active {
+                            "Connected and in use"
+                        } else {
+                            "Not in use"
+                        });
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 0.0;
+                            ui.add(
+                                egui::Label::new(RichText::new(&d.name).strong().color(hw::TEXT))
+                                    .extend(),
+                            );
+                            ui.label(
+                                RichText::new(match d.input {
+                                    Some(n) => format!("input {n}"),
+                                    None if !d.enabled => "off".to_owned(),
+                                    None => "not connected (all inputs in use)".to_owned(),
+                                })
+                                .size(12.5)
+                                .color(hw::TEXT_DIM),
+                            );
+                        });
+                        let mut role = d.role;
+                        let on = match role {
+                            DeviceRole::Keyboard => 0,
+                            DeviceRole::Controller => 1,
+                        };
+                        if let Some(n) =
+                            hw::selector(ui, &["Keyboard", "Controller"], on, hw::AMBER)
+                        {
+                            role = [DeviceRole::Keyboard, DeviceRole::Controller][n];
+                        }
+                        let mut enabled = d.enabled;
+                        if hw::Cap::new(if enabled { "On" } else { "Off" })
+                            .lit(enabled.then_some(hw::GREEN))
+                            .min_width(50.0)
+                            .show(ui)
+                            .on_hover_text("Use this device, or leave it alone completely")
+                            .clicked()
+                        {
+                            enabled = !enabled;
+                        }
+                        if role != d.role || enabled != d.enabled {
+                            actions.push(Action::SetMidiDevice(d.name.clone(), role, enabled));
+                        }
+                        let open = st.velocity_open.as_ref() == Some(&d.name);
+                        let curve = crate::settings::VelocityCurve::PRESETS
+                            .iter()
+                            .find(|(c, _)| *c == d.velocity)
+                            .map_or("Drawn", |(_, n)| *n);
+                        if hw::Cap::new(format!("Velocity: {curve}"))
+                            .lit(open.then_some(hw::AMBER))
+                            .min_width(140.0)
+                            .show(ui)
+                            .on_hover_text("How hard you have to play for how loud")
+                            .clicked()
+                        {
+                            st.velocity_open = (!open).then(|| d.name.clone());
+                            st.velocity_stroke = None;
+                        }
+                        ui.end_row();
+                    }
+                });
+            // The curve of the device picked above, while it is plugged in.
+            if let Some(d) = devices
+                .iter()
+                .find(|d| st.velocity_open.as_ref() == Some(&d.name))
+            {
+                ui.add_space(8.0);
+                let last = d.input.and_then(|n| s.last_velocity(n));
+                crate::velocity_ui::editor(ui, d, last, &mut st.velocity_stroke, actions);
+            }
+            for (_, what) in s.surface_devices() {
+                status_line(
+                    ui,
+                    Status::Ok,
+                    format!("{what}: built-in layout, lights and screen are on (see Controls)"),
+                );
+            }
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if hw::Cap::new("Look for new devices").show(ui).clicked() {
+                    actions.push(Action::RefreshMidi);
+                }
+                note(ui, "Plugged-in devices are found by themselves, too.");
+            });
+        },
     );
-    ui.add_space(12.0);
     capture(ui, s, st, actions);
 }
 
 /// The MIDI capture: how much is kept, where it goes, and a button to save it now.
 fn capture(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
-    ui.strong("MIDI capture");
-    ui.label(
-        RichText::new(
-            "Merlin always keeps the last minutes of what you play from keyboards and the on-screen keys (not from controllers, and not what is mapped to an action). The \"Capture MIDI\" button, or a MIDI control mapped to it, saves them as a .mid file with a track per keyboard. Nothing is written to disk until then.",
-        )
-        .small()
-        .weak(),
+    section(
+        ui,
+        "MIDI capture",
+        "Merlin always keeps the last minutes of what you play on keyboards and the on-screen keys (not controllers, and not what is mapped to an action). Capture MIDI, or a control mapped to it, saves them as a .mid file with a track per keyboard. Nothing is written to disk until then.",
+        |ui| {
+            ui.horizontal(|ui| {
+                let mut minutes = s.capture_minutes();
+                ui.label("Keep the last");
+                let changed = ui
+                    .add(
+                        egui::DragValue::new(&mut minutes)
+                            .range(0..=crate::session::MAX_CAPTURE_MINUTES)
+                            .suffix(" min"),
+                    )
+                    .changed();
+                if changed {
+                    actions.push(Action::SetCaptureMinutes(minutes));
+                }
+                ui.add_space(8.0);
+                let (listened, kept) = s.capture_status();
+                if minutes == 0 {
+                    hw::led(ui, false, hw::GREEN);
+                    note(ui, "off");
+                } else {
+                    hw::led(ui, true, hw::GREEN);
+                    note(
+                        ui,
+                        format!(
+                            "listening for {} · {kept} messages kept",
+                            crate::session::clock(listened)
+                        ),
+                    );
+                }
+            });
+            subhead(ui, "Saved to");
+            row(ui, None, path_text(&s.capture_dir()), None, |ui| {
+                if hw::Cap::new("Default").show(ui).clicked() {
+                    actions.push(Action::SetCaptureDir(None));
+                }
+                crate::ui::pick_button(
+                    ui,
+                    &mut st.picking,
+                    "Choose…",
+                    Want::CaptureDir,
+                    Some(&s.capture_dir()),
+                );
+            });
+            note(
+                ui,
+                "Audio recordings (Record in the Perform view) are saved here too.",
+            );
+            ui.add_enabled_ui(s.capture_minutes() > 0, |ui| {
+                if hw::Cap::new("Save now").flash(hw::GREEN).show(ui).clicked() {
+                    actions.push(Action::CaptureMidi);
+                }
+            });
+        },
     );
-    ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        let mut minutes = s.capture_minutes();
-        ui.label("Keep the last");
-        let changed = ui
-            .add(
-                egui::DragValue::new(&mut minutes)
-                    .range(0..=crate::session::MAX_CAPTURE_MINUTES)
-                    .suffix(" min"),
-            )
-            .changed();
-        if changed {
-            actions.push(Action::SetCaptureMinutes(minutes));
-        }
-        ui.label(
-            RichText::new(if minutes == 0 { "(off)" } else { "" })
-                .small()
-                .weak(),
-        );
-    });
-    let (listened, kept) = s.capture_status();
-    if s.capture_minutes() > 0 {
-        ui.label(format!(
-            "Listening for {} · {kept} messages kept",
-            crate::session::clock(listened)
-        ));
-    }
-    ui.horizontal(|ui| {
-        ui.label("Save to");
-        ui.label(RichText::new(s.capture_dir().display().to_string()).monospace());
-        crate::ui::pick_button(
-            ui,
-            &mut st.picking,
-            "Choose…",
-            Want::CaptureDir,
-            Some(&s.capture_dir()),
-        );
-        if ui.button("Default").clicked() {
-            actions.push(Action::SetCaptureDir(None));
-        }
-    });
-    ui.label(
-        RichText::new("Audio recordings (Record in the Perform view) are saved here too.").weak(),
-    );
-    if ui
-        .add_enabled(s.capture_minutes() > 0, egui::Button::new("Save now"))
-        .clicked()
-    {
-        actions.push(Action::CaptureMidi);
-    }
 }
+
+// ---- Windows plugins -------------------------------------------------------------------------
 
 fn windows(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
     windows_support(ui, s, actions);
-    ui.add_space(8.0);
-    egui::CollapsingHeader::new("Advanced: use my own Wine and yabridge")
-        .default_open(false)
-        .show(ui, |ui| own_wine(ui, st, actions));
-    ui.add_space(12.0);
     windows_plugins(ui, s, st, actions);
-    ui.add_space(12.0);
-    cabinet(ui, s, actions);
-    ui.add_space(8.0);
-    ui.strong("In use right now");
-    let rt = s.windows_runtime();
-    for (what, value) in [
-        ("Wine", rt.as_ref().map(|r| r.wine.display().to_string())),
-        (
-            "yabridge",
-            rt.as_ref().map(|r| r.yabridge_dir.display().to_string()),
-        ),
-    ] {
-        ui.label(format!(
-            "{what} for the app's own bridges: {}",
-            value.as_deref().unwrap_or("(not set)")
-        ));
-    }
-    ui.label(
-        RichText::new("Bridges other tools made (Cabinet, yabridgectl) run with their own Wine.")
-            .small()
-            .weak(),
+    section(
+        ui,
+        "Plugins from vendors' store apps",
+        "Native Access (Kontakt), IK Product Manager, iZotope Product Portal, Spitfire Audio, Arturia Software Center and other store apps need fixes under Wine that this app does not have. Cabinet, a free app, installs them with those fixes; the plugins it installs show up here by themselves.",
+        |ui| cabinet_keys(ui, s, actions),
     );
-}
-
-/// Cabinet, for the vendors whose plugins come through a store app (Native Access, ...): what it
-/// is, and a key to open or install it.
-fn cabinet(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
-    ui.strong("Plugins from vendors' store apps");
-    ui.label(
-        RichText::new(
-            "Native Access (Kontakt), IK Product Manager, iZotope Product Portal, Spitfire Audio, Arturia Software Center and other store apps need fixes under Wine that this app does not have. Cabinet, a free app, installs them with those fixes; the plugins it installs show up here by themselves.",
-        )
-        .small()
-        .weak(),
+    section(
+        ui,
+        "In use right now",
+        "Bridges other tools made (Cabinet, yabridgectl) run with their own Wine.",
+        |ui| {
+            let rt = s.windows_runtime();
+            for (what, value) in [
+                ("Wine", rt.as_ref().map(|r| r.wine.display().to_string())),
+                (
+                    "yabridge",
+                    rt.as_ref().map(|r| r.yabridge_dir.display().to_string()),
+                ),
+            ] {
+                match value {
+                    Some(v) => readout(ui, what, &v, hw::TEXT),
+                    None => readout(ui, what, "not set", hw::TEXT_DIM),
+                }
+            }
+            egui::CollapsingHeader::new("Advanced: use my own Wine and yabridge")
+                .default_open(false)
+                .show(ui, |ui| own_wine(ui, st, actions));
+        },
     );
-    cabinet_keys(ui, s, actions);
 }
 
 /// "Open Cabinet", or "Install Cabinet" with what that runs; shared with the installer popup.
@@ -1130,13 +1351,15 @@ pub fn cabinet_keys(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
     use crate::cabinet;
     ui.horizontal_wrapped(|ui| {
         if cabinet::installed() {
-            ui.colored_label(status_color(Status::Ok), "Cabinet is installed");
-            if crate::hw::Cap::new("Open Cabinet").show(ui).clicked() {
+            hw::led(ui, true, hw::GREEN);
+            ui.label("Cabinet is installed");
+            ui.add_space(6.0);
+            if hw::Cap::new("Open Cabinet").show(ui).clicked() {
                 actions.push(Action::OpenCabinet);
             }
         } else if cabinet::flatpak_available() {
             ui.add_enabled_ui(!s.windows_busy(), |ui| {
-                if crate::hw::Cap::new("Install Cabinet")
+                if hw::Cap::new("Install Cabinet")
                     .show(ui)
                     .on_hover_text("Installs Cabinet from its own Flatpak repository, for you only (no password asked)")
                     .clicked()
@@ -1145,95 +1368,85 @@ pub fn cabinet_keys(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
                 }
             });
         } else {
-            ui.colored_label(
-                status_color(Status::Warn),
-                "Cabinet is a Flatpak: install Flatpak from your distribution first",
-            );
+            hw::led(ui, true, hw::AMBER);
+            ui.label("Cabinet is a Flatpak: install Flatpak from your distribution first");
         }
+        ui.add_space(6.0);
         ui.hyperlink_to("About Cabinet", cabinet::HOMEPAGE);
     });
     if !cabinet::installed() {
-        ui.label(RichText::new("Installing it runs:").small().weak());
+        note(
+            ui,
+            "Installing it runs these, which you can also run yourself:",
+        );
         for line in cabinet::install_commands() {
-            ui.label(
-                RichText::new(line)
-                    .family(egui::FontFamily::Monospace)
-                    .size(11.0)
-                    .weak(),
-            );
+            hw::command(ui, &line);
         }
     }
 }
 
 /// "Windows plugin support": the Wine + yabridge pair the app downloads and keeps itself.
 fn windows_support(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
-    ui.strong("Windows plugin support");
-    match (s.installed_runtime(), s.windows_runtime()) {
-        (Some(r), _) => {
-            ui.horizontal(|ui| {
-                ui.colored_label(status_color(Status::Ok), "installed");
-                ui.label(&r.id);
-            });
-            if !r.runs_32_bit() {
-                // An early download: it cannot start 32-bit programs, which most installers are.
-                ui.horizontal_wrapped(|ui| {
-                    ui.colored_label(
-                        status_color(Status::Fail),
+    section(
+        ui,
+        "Windows plugin support",
+        "Windows plugins run through Wine and yabridge. The app downloads a tested pair (about 70 MB) and keeps it in its own folder; your system Wine is never touched.",
+        |ui| match (s.installed_runtime(), s.windows_runtime()) {
+            (Some(r), _) => {
+                status_line(ui, Status::Ok, format!("Installed: {}", r.id));
+                if !r.runs_32_bit() {
+                    // An early download: it cannot start 32-bit programs, which most installers are.
+                    status_line(
+                        ui,
+                        Status::Fail,
                         "This version cannot run most plugin installers (they are 32-bit).",
                     );
-                    if ui
-                        .add_enabled(!s.windows_busy(), egui::Button::new("Update"))
+                    ui.add_enabled_ui(!s.windows_busy(), |ui| {
+                        if hw::Cap::new("Update").show(ui).clicked() {
+                            actions.push(Action::InstallRuntime);
+                        }
+                    });
+                    progress(ui, s.windows_busy(), &s.windows_status);
+                }
+            }
+            (None, Some(_)) => {
+                status_line(
+                    ui,
+                    Status::Ok,
+                    "Using a Wine and yabridge that were already set up on this machine.",
+                );
+            }
+            (None, None) => {
+                status_line(ui, Status::Warn, "Not installed");
+                ui.add_enabled_ui(!s.windows_busy(), |ui| {
+                    if hw::Cap::new("Download Windows plugin support")
+                        .show(ui)
                         .clicked()
                     {
                         actions.push(Action::InstallRuntime);
                     }
                 });
-                if !s.windows_status.is_empty() {
-                    ui.label(&s.windows_status);
-                }
+                progress(ui, s.windows_busy(), &s.windows_status);
             }
-        }
-        (None, Some(_)) => {
-            ui.label("Using a Wine and yabridge that were already set up on this machine.");
-        }
-        (None, None) => {
-            ui.label(
-                RichText::new(
-                    "Windows plugins need Wine and yabridge. The app downloads a tested pair (about 70 MB) and keeps it in its own folder; your system Wine is never touched.",
-                )
-                .small()
-                .weak(),
-            );
-            let busy = s.windows_busy();
-            if ui
-                .add_enabled(!busy, egui::Button::new("Download Windows plugin support"))
-                .clicked()
-            {
-                actions.push(Action::InstallRuntime);
-            }
-            if !s.windows_status.is_empty() {
-                ui.label(&s.windows_status);
-            }
-        }
-    }
+        },
+    );
 }
 
 /// The paths of a Wine and a yabridge the user set up themselves.
 fn own_wine(ui: &mut egui::Ui, st: &mut UiState, actions: &mut Vec<Action>) {
-    ui.label(
-        RichText::new("Overrides the downloaded pair. Changes apply after restarting the app.")
-            .small()
-            .weak(),
+    note(
+        ui,
+        "Overrides the downloaded pair. Changes apply after restarting the app.",
     );
-    ui.add_space(6.0);
+    ui.add_space(4.0);
     let picking = &mut st.picking;
     for (label, text, browse) in [
         ("Wine program", &mut st.wine_text, &Want::WineProgram),
         ("yabridge folder", &mut st.yab_text, &Want::YabridgeDir),
     ] {
         ui.horizontal(|ui| {
-            ui.label(label);
-            ui.add(egui::TextEdit::singleline(text).desired_width(460.0));
+            label_cell(ui, label, 130.0);
+            ui.add(egui::TextEdit::singleline(text).desired_width(420.0));
             let path = std::path::Path::new(text.as_str());
             let start = if *browse == Want::WineProgram {
                 path.parent()
@@ -1242,138 +1455,135 @@ fn own_wine(ui: &mut egui::Ui, st: &mut UiState, actions: &mut Vec<Action>) {
             };
             crate::ui::pick_button(ui, picking, "Browse…", *browse, start);
             if text.is_empty() {
-                ui.label(RichText::new("not set").weak());
+                note(ui, "not set");
             } else if path.exists() {
-                ui.colored_label(status_color(Status::Ok), "found");
+                hw::led(ui, true, hw::GREEN).on_hover_text("Found");
             } else {
-                ui.colored_label(status_color(Status::Fail), "does not exist");
+                hw::led(ui, true, status_color(Status::Fail));
+                ui.label(RichText::new("does not exist").color(status_color(Status::Fail)));
             }
         });
     }
-    if ui.button("Save").clicked() {
+    if hw::Cap::new("Save").show(ui).clicked() {
         actions.push(Action::SaveWine(st.wine_text.clone(), st.yab_text.clone()));
     }
 }
 
 /// Installing Windows plugins and what the Wine setup looks like (a small "Wine doctor").
 fn windows_plugins(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
-    ui.strong("Windows plugins");
-    let Some(rt) = s.windows_runtime() else {
-        ui.label(
-            RichText::new("Download Windows plugin support above to use Windows plugins.")
-                .small()
-                .weak(),
-        );
-        return;
-    };
-    let check = |ui: &mut egui::Ui, ok: bool, text: String| {
-        ui.horizontal(|ui| {
-            ui.colored_label(
-                status_color(if ok { Status::Ok } else { Status::Fail }),
-                if ok { "OK  " } else { "FAIL" },
-            );
-            ui.label(text);
-        });
-    };
-    check(
+    section(
         ui,
-        rt.version().is_some(),
-        format!(
-            "Wine: {}",
-            rt.version().unwrap_or_else(|| "does not run".into())
-        ),
-    );
-    check(
-        ui,
-        rt.chainloader().is_file()
-            && rt.vst3_chainloader().is_file()
-            && rt.vst2_chainloader().is_file(),
-        "yabridge: CLAP, VST3 and VST2 chainloaders".to_owned(),
-    );
-    ui.horizontal(|ui| {
-        let ready = rt.prefix_ready();
-        ui.colored_label(
-            status_color(if ready { Status::Ok } else { Status::Warn }),
-            if ready { "OK  " } else { "WAIT" },
-        );
-        ui.label(format!(
-            "Windows environment: {}{}",
-            rt.prefix.display(),
-            if ready {
-                ""
-            } else {
-                " (made when you install the first plugin, or open it here)"
-            }
-        ));
-    });
-    ui.add_space(6.0);
-    ui.add_space(6.0);
-    egui::Frame::group(ui.style()).show(ui, |ui| {
-        ui.set_width(ui.available_width().min(620.0));
-        ui.vertical_centered(|ui| {
-            ui.add_space(6.0);
-            ui.strong("Drop a Windows plugin installer (.exe or .msi) anywhere on this window");
-            ui.label(
-                RichText::new("It runs in the app's own Windows environment, and the plugins it installs show up in the browser when it finishes.")
-                    .small()
-                    .weak(),
-            );
-            ui.add_space(6.0);
-        });
-    });
-    ui.horizontal(|ui| {
-        let busy = s.windows_busy();
-        if ui
-            .add_enabled(!busy, egui::Button::new("Look for installed plugins"))
-            .on_hover_text(
-                "Use this after installing a plugin by hand into the Windows environment",
-            )
-            .clicked()
-        {
-            actions.push(Action::SyncWindows);
-        }
-        if ui
-            .add_enabled(!s.windows_busy(), egui::Button::new("Open Wine prefix"))
-            .on_hover_text(
-                "Show the Windows environment's folder in your file manager. It is made first when it does not exist yet.",
-            )
-            .clicked()
-        {
-            actions.push(Action::OpenWinePrefix);
-        }
-    });
-    installed_apps(ui, s, actions);
-    egui::CollapsingHeader::new("Install from a path instead")
-        .default_open(false)
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut st.installer_text)
-                        .hint_text("/path/to/Plugin-Setup.exe")
-                        .desired_width(460.0),
+        "Windows plugins",
+        "Windows plugins in your folders (Plugins tab) are found and bridged by themselves. Only 64-bit CLAP, VST3 and VST2 plugins are picked up. Plugins with copy protection (iLok and the like) may not run. Prefer a native Linux version when there is one.",
+        |ui| {
+            let Some(rt) = s.windows_runtime() else {
+                note(
+                    ui,
+                    "Download Windows plugin support above to use Windows plugins.",
                 );
-                crate::ui::pick_button(ui, &mut st.picking, "Browse…", Want::Installer, None);
-                if ui
-                    .add_enabled(
-                        !s.windows_busy() && !st.installer_text.trim().is_empty(),
-                        egui::Button::new("Install"),
-                    )
-                    .clicked()
-                {
-                    actions.push(Action::InstallWindows(st.installer_text.clone()));
-                }
+                return;
+            };
+            let ok = |good: bool| if good { Status::Ok } else { Status::Fail };
+            status_line(
+                ui,
+                ok(rt.version().is_some()),
+                format!(
+                    "Wine: {}",
+                    rt.version().unwrap_or_else(|| "does not run".into())
+                ),
+            );
+            status_line(
+                ui,
+                ok(rt.chainloader().is_file()
+                    && rt.vst3_chainloader().is_file()
+                    && rt.vst2_chainloader().is_file()),
+                "yabridge: CLAP, VST3 and VST2 chainloaders",
+            );
+            let ready = rt.prefix_ready();
+            status_line(
+                ui,
+                if ready { Status::Ok } else { Status::Warn },
+                if ready {
+                    "Windows environment is ready"
+                } else {
+                    "Windows environment is made when you install the first plugin, or open it here"
+                },
+            );
+            readout(
+                ui,
+                "Environment",
+                &rt.prefix.display().to_string(),
+                hw::TEXT,
+            );
+            ui.add_space(6.0);
+            hw::inset()
+                .inner_margin(egui::Margin::symmetric(12, 12))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.vertical_centered(|ui| {
+                        ui.label(
+                            RichText::new(
+                                "Drop a Windows plugin installer (.exe or .msi) anywhere on this window",
+                            )
+                            .strong()
+                            .color(hw::TEXT),
+                        );
+                        note(
+                            ui,
+                            "It runs in the app's own Windows environment, and the plugins it installs show up in the browser when it finishes.",
+                        );
+                    });
+                });
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.add_enabled_ui(!s.windows_busy(), |ui| {
+                    if hw::Cap::new("Look for installed plugins")
+                        .show(ui)
+                        .on_hover_text(
+                            "Use this after installing a plugin by hand into the Windows environment",
+                        )
+                        .clicked()
+                    {
+                        actions.push(Action::SyncWindows);
+                    }
+                    if hw::Cap::new("Open Wine prefix")
+                        .show(ui)
+                        .on_hover_text(
+                            "Show the Windows environment's folder in your file manager. It is made first when it does not exist yet.",
+                        )
+                        .clicked()
+                    {
+                        actions.push(Action::OpenWinePrefix);
+                    }
+                });
             });
-        });
-    if !s.windows_status.is_empty() {
-        ui.label(&s.windows_status);
-    }
-    ui.add_space(4.0);
-    ui.label(
-        RichText::new(
-            "Windows plugins in your folders (Plugins tab) are found and bridged by themselves. Only 64-bit CLAP, VST3 and VST2 plugins are picked up. Plugins with copy protection (iLok and the like) may not run. Prefer a native Linux version when there is one.",
-        )
-        .small()
-        .weak(),
+            installed_apps(ui, s, actions);
+            egui::CollapsingHeader::new("Install from a path instead")
+                .default_open(false)
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::TextEdit::singleline(&mut st.installer_text)
+                                .hint_text("/path/to/Plugin-Setup.exe")
+                                .desired_width(420.0),
+                        );
+                        crate::ui::pick_button(
+                            ui,
+                            &mut st.picking,
+                            "Browse…",
+                            Want::Installer,
+                            None,
+                        );
+                        let ready = !s.windows_busy() && !st.installer_text.trim().is_empty();
+                        ui.add_enabled_ui(ready, |ui| {
+                            if hw::Cap::new("Install").show(ui).clicked() {
+                                actions.push(Action::InstallWindows(st.installer_text.clone()));
+                            }
+                        });
+                    });
+                });
+            progress(ui, s.windows_busy(), &s.windows_status);
+        },
     );
 }
 
@@ -1381,38 +1591,31 @@ fn windows_plugins(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &m
 /// manager or downloader app (Native Access, Arturia Software Center, ...) rather than their
 /// plugins, so it has to be possible to open it again after installing it.
 fn installed_apps(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
-    ui.add_space(4.0);
-    crate::hw::inset().show(ui, |ui| {
-        ui.set_width(ui.available_width().min(620.0));
-        ui.horizontal_wrapped(|ui| {
-            crate::hw::engraved(ui, "Installed:");
-            if s.windows_apps.is_empty() {
-                ui.label(
-                    RichText::new(
-                        "nothing yet. A manager or downloader app you install here is listed to open again.",
-                    )
-                    .small()
-                    .weak(),
-                );
-            }
-            ui.add_enabled_ui(!s.windows_busy(), |ui| {
-                for app in &s.windows_apps {
-                    let open = crate::hw::Cap::new(&app.name)
-                        .show(ui)
-                        .on_hover_text(format!(
-                            "Open {} in the Windows environment. The plugins it installs are picked up when you close it.\n{}",
-                            app.name,
-                            app.exe.display()
-                        ));
-                    if open.clicked() {
-                        actions.push(Action::LaunchWindowsApp(app.exe.display().to_string()));
-                    }
+    subhead(ui, "Installed programs");
+    if s.windows_apps.is_empty() {
+        note(
+            ui,
+            "Nothing yet. A manager or downloader app you install here is listed, to open again.",
+        );
+        return;
+    }
+    ui.horizontal_wrapped(|ui| {
+        ui.add_enabled_ui(!s.windows_busy(), |ui| {
+            for app in &s.windows_apps {
+                let open = hw::Cap::new(&app.name).show(ui).on_hover_text(format!(
+                    "Open {} in the Windows environment. The plugins it installs are picked up when you close it.\n{}",
+                    app.name,
+                    app.exe.display()
+                ));
+                if open.clicked() {
+                    actions.push(Action::LaunchWindowsApp(app.exe.display().to_string()));
                 }
-            });
+            }
         });
     });
-    ui.add_space(4.0);
 }
+
+// ---- Updates ---------------------------------------------------------------------------------
 
 /// Looking for a newer release and installing it. Nothing here runs unless the user presses a
 /// button: there is no check at startup and no popup.
@@ -1421,110 +1624,107 @@ fn updates(ui: &mut egui::Ui, s: &Session, actions: &mut Vec<Action>) {
     use merlin_updater::Kind;
 
     let u = &s.update;
-    ui.strong("Updates");
-    ui.label(
-        RichText::new(
-            "Merlin only looks for a new version when you ask here. It never checks in the background or at startup.",
-        )
-        .small()
-        .weak(),
-    );
-    ui.add_space(6.0);
-    ui.horizontal(|ui| {
-        ui.label(format!("Version {APP_VERSION}"));
-        let checking = u.busy == UpdateBusy::Checking;
-        if ui
-            .add_enabled(
-                u.busy == UpdateBusy::No,
-                egui::Button::new(if checking {
-                    "Checking..."
-                } else {
-                    "Check for updates"
-                }),
-            )
-            .clicked()
-        {
-            actions.push(Action::CheckUpdate);
-        }
-    });
-    if !u.error.is_empty() {
-        ui.colored_label(status_color(Status::Fail), &u.error);
-    }
-    let Some(info) = &u.info else { return };
-    ui.add_space(6.0);
-
-    if u.installed {
-        ui.colored_label(
-            status_color(Status::Ok),
-            format!(
-                "Version {} is installed. Restart Merlin to start using it.",
-                info.latest
-            ),
-        );
-        ui.label(
-            RichText::new("Your rig is saved and comes back as it was.")
-                .small()
-                .weak(),
-        );
-        if ui.button("Restart now").clicked() {
-            actions.push(Action::RestartForUpdate);
-        }
-        return;
-    }
-    if !info.available {
-        ui.colored_label(status_color(Status::Ok), "You're up to date.");
-        return;
-    }
-
-    ui.colored_label(
-        status_color(Status::Warn),
-        format!("A new version is available: {}", info.latest),
-    );
-    if u.busy == UpdateBusy::Installing {
-        ui.horizontal(|ui| {
-            ui.spinner();
-            ui.label(&u.status);
-        });
-        if info.kind == Kind::Deb {
-            ui.label(
-                RichText::new("A password prompt from your desktop asks to install the package.")
-                    .small()
-                    .weak(),
-            );
-        }
-    } else if info.can_install {
-        ui.label(
-            RichText::new(match info.kind {
-                Kind::Deb => "Installs the package; your desktop asks for your password.",
-                Kind::AppImage => "Replaces this AppImage file; the running app keeps going until you restart.",
-                _ => "Replaces the Merlin programs in this folder; the running app keeps going until you restart.",
-            })
-            .small()
-            .weak(),
-        );
-        if ui.button("Download and install").clicked() {
-            actions.push(Action::InstallUpdate);
-        }
-    } else if !info.reason.is_empty() {
-        ui.label(&info.reason);
-    }
-    if ui
-        .add_enabled(
-            u.busy == UpdateBusy::No,
-            egui::Button::new("Open release page"),
-        )
-        .clicked()
-    {
-        actions.push(Action::OpenReleasePage);
-    }
-    if !info.notes.trim().is_empty() {
-        egui::CollapsingHeader::new("What's new")
-            .default_open(false)
-            .show(ui, |ui| {
-                ui.label(RichText::new(info.notes.trim()).small());
+    section(
+        ui,
+        "Updates",
+        "Merlin only looks for a new version when you ask here. It never checks in the background or at startup.",
+        |ui| {
+            readout(ui, "This version", APP_VERSION, hw::AMBER);
+            ui.horizontal(|ui| {
+                let checking = u.busy == UpdateBusy::Checking;
+                ui.add_enabled_ui(u.busy == UpdateBusy::No, |ui| {
+                    if hw::Cap::new("Check for updates").show(ui).clicked() {
+                        actions.push(Action::CheckUpdate);
+                    }
+                });
+                if checking {
+                    hw::throbber(ui, hw::AMBER);
+                    ui.label("Checking…");
+                }
             });
-    }
+            if !u.error.is_empty() {
+                status_line(ui, Status::Fail, &u.error);
+            }
+            let Some(info) = &u.info else { return };
+            ui.add_space(4.0);
+
+            if u.installed {
+                status_line(
+                    ui,
+                    Status::Ok,
+                    format!(
+                        "Version {} is installed. Restart Merlin to start using it.",
+                        info.latest
+                    ),
+                );
+                note(ui, "Your rig is saved and comes back as it was.");
+                if hw::Cap::new("Restart now").show(ui).clicked() {
+                    actions.push(Action::RestartForUpdate);
+                }
+                return;
+            }
+            if !info.available {
+                status_line(ui, Status::Ok, "You're up to date.");
+                return;
+            }
+
+            status_line(
+                ui,
+                Status::Warn,
+                format!("A new version is available: {}", info.latest),
+            );
+            if u.busy == UpdateBusy::Installing {
+                progress(ui, true, &u.status);
+                if info.kind == Kind::Deb {
+                    note(
+                        ui,
+                        "A password prompt from your desktop asks to install the package.",
+                    );
+                }
+            } else if info.can_install {
+                note(
+                    ui,
+                    match info.kind {
+                        Kind::Deb => "Installs the package; your desktop asks for your password.",
+                        Kind::AppImage => {
+                            "Replaces this AppImage file; the running app keeps going until you restart."
+                        }
+                        _ => {
+                            "Replaces the Merlin programs in this folder; the running app keeps going until you restart."
+                        }
+                    },
+                );
+            } else if !info.reason.is_empty() {
+                note(ui, &info.reason);
+            }
+            ui.horizontal(|ui| {
+                if info.can_install
+                    && u.busy != UpdateBusy::Installing
+                    && hw::Cap::new("Download and install")
+                        .lit(Some(hw::GREEN))
+                        .show(ui)
+                        .clicked()
+                {
+                    actions.push(Action::InstallUpdate);
+                }
+                ui.add_enabled_ui(u.busy == UpdateBusy::No, |ui| {
+                    if hw::Cap::new("Open release page").show(ui).clicked() {
+                        actions.push(Action::OpenReleasePage);
+                    }
+                });
+            });
+            if !info.notes.trim().is_empty() {
+                egui::CollapsingHeader::new("What's new")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        ui.label(RichText::new(info.notes.trim()).color(hw::TEXT));
+                    });
+            }
+        },
+    );
 }
+
+// ---- Performance -----------------------------------------------------------------------------
 
 fn performance(ui: &mut egui::Ui, s: &Session, st: &mut UiState) {
     let stale = st
@@ -1542,41 +1742,66 @@ fn performance(ui: &mut egui::Ui, s: &Session, st: &mut UiState) {
         st.perf = Some((Instant::now(), perf::evaluate(&inputs)));
     }
     let Some((_, checks)) = &st.perf else {
-        ui.label("Audio is not running.");
+        section(ui, "Performance check", "", |ui| {
+            status_line(ui, Status::Fail, "Audio is not running.");
+        });
         return;
     };
     let overall = perf::overall(checks);
-    ui.horizontal(|ui| {
-        ui.heading("Performance check");
-        ui.colored_label(
-            status_color(overall),
-            match overall {
-                Status::Ok => "ready for live playing",
-                Status::Warn => "usable, with warnings",
-                Status::Fail => "needs attention",
-            },
-        );
-    });
-    ui.add_space(6.0);
-    for c in checks {
-        ui.horizontal(|ui| {
-            ui.colored_label(
-                status_color(c.status),
-                match c.status {
-                    Status::Ok => "OK  ",
-                    Status::Warn => "WARN",
-                    Status::Fail => "FAIL",
-                },
-            );
-            ui.strong(c.name);
-            ui.label(&c.detail);
-        });
-        if let Some(fix) = &c.fix {
+    section(
+        ui,
+        "Performance check",
+        "Is this machine set up for glitch-free live playing? Checked again every two seconds, so a change shows here as soon as it applies.",
+        |ui| {
             ui.horizontal(|ui| {
-                ui.add_space(52.0);
-                ui.label(RichText::new(fix).color(Color32::from_gray(190)));
+                hw::led(ui, true, status_color(overall));
+                ui.label(
+                    RichText::new(match overall {
+                        Status::Ok => "Ready for live playing",
+                        Status::Warn => "Usable, with warnings",
+                        Status::Fail => "Needs attention",
+                    })
+                    .size(17.0)
+                    .strong()
+                    .color(status_color(overall)),
+                );
             });
-        }
-        ui.add_space(2.0);
-    }
+            ui.add_space(4.0);
+            for c in checks {
+                hw::inset()
+                    .inner_margin(egui::Margin::symmetric(10, 6))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.spacing_mut().item_spacing.y = 4.0;
+                        ui.horizontal(|ui| {
+                            hw::led(ui, true, status_color(c.status));
+                            ui.label(RichText::new(c.name).strong().color(hw::TEXT));
+                            ui.add_space(4.0);
+                            ui.label(
+                                RichText::new(match c.status {
+                                    Status::Ok => "OK",
+                                    Status::Warn => "WARNING",
+                                    Status::Fail => "PROBLEM",
+                                })
+                                .size(11.5)
+                                .strong()
+                                .color(status_color(c.status)),
+                            );
+                        });
+                        ui.label(RichText::new(&c.detail).color(hw::TEXT));
+                        if let Some(fix) = &c.fix {
+                            ui.label(RichText::new(format!("What to do: {fix}")).color(hw::mix(
+                                hw::TEXT,
+                                status_color(c.status),
+                                0.35,
+                            )));
+                        }
+                        for cmd in &c.commands {
+                            hw::command(ui, cmd);
+                        }
+                    });
+                ui.add_space(6.0);
+            }
+        },
+    );
 }

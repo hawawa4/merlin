@@ -752,7 +752,10 @@ pub fn pick_button(
     start: Option<&std::path::Path>,
 ) -> bool {
     let free = picking.is_none();
-    let clicked = ui.add_enabled(free, egui::Button::new(label)).clicked();
+    let clicked = ui
+        .add_enabled_ui(free, |ui| hw::Cap::new(label).show(ui))
+        .inner
+        .clicked();
     if clicked {
         *picking = Some(crate::dialog::Open::start(want, start));
     }

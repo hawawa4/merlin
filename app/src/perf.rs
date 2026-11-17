@@ -20,6 +20,8 @@ pub struct Check {
     pub detail: String,
     /// What to do about it (shown only when the status is not `Ok`).
     pub fix: Option<String>,
+    /// Shell commands that make the fix, shown one per line with a copy key.
+    pub commands: Vec<String>,
 }
 
 /// Everything the checks look at.
@@ -44,20 +46,25 @@ pub struct PerfInputs {
 
 const MIB: u64 = 1024 * 1024;
 
-fn join_group_advice(groups: &[String]) -> String {
+/// The advice, and the command that carries it out, for getting realtime priority.
+fn join_group_advice(groups: &[String]) -> (String, Vec<String>) {
     let group = ["pipewire", "audio", "realtime"]
         .into_iter()
         .find(|g| groups.iter().any(|x| x == g));
     match group {
         // In a group that normally grants realtime but the limit is still low: the login
         // session predates the group change.
-        Some(g) => format!(
-            "You are in the '{g}' group; log out and in again so its realtime limits apply."
+        Some(g) => (
+            format!(
+                "You are in the '{g}' group; log out and in again so its realtime limits apply."
+            ),
+            Vec::new(),
         ),
-        None => {
-            "Run: sudo usermod -aG pipewire $USER (or install rtkit), then log out and in again."
-                .into()
-        }
+        None => (
+            "Add yourself to the pipewire group (or install rtkit), then log out and in again."
+                .into(),
+            vec!["sudo usermod -aG pipewire $USER".into()],
+        ),
     }
 }
 
@@ -85,12 +92,18 @@ pub fn evaluate(p: &PerfInputs) -> Vec<Check> {
                 .to_string(),
         ),
     };
-    let fix = (status != Status::Ok).then(|| join_group_advice(&p.groups));
+    let (fix, commands) = if status == Status::Ok {
+        (None, Vec::new())
+    } else {
+        let (fix, commands) = join_group_advice(&p.groups);
+        (Some(fix), commands)
+    };
     checks.push(Check {
         name: "Realtime scheduling",
         status,
         detail,
         fix,
+        commands,
     });
 
     // The plugin processes: the audio thread waits for each of them every block, so each must
@@ -102,7 +115,7 @@ pub fn evaluate(p: &PerfInputs) -> Vec<Check> {
         .collect();
     if !playing.is_empty() {
         let behind = playing.iter().filter(|a| !a.is_matched()).count();
-        let (status, detail, fix) = if behind == 0 {
+        let (status, detail, (fix, commands)) = if behind == 0 {
             (
                 Status::Ok,
                 format!(
@@ -111,7 +124,7 @@ pub fn evaluate(p: &PerfInputs) -> Vec<Check> {
                     if playing.len() == 1 { "" } else { "es" },
                     if playing.len() == 1 { "s" } else { "" },
                 ),
-                None,
+                (None, Vec::new()),
             )
         } else {
             (
@@ -120,7 +133,10 @@ pub fn evaluate(p: &PerfInputs) -> Vec<Check> {
                     "{behind} of {} plugin processes play at ordinary priority while the audio thread waits for them every block: anything busy on the machine can delay them, which shows up as dropouts and a higher load.",
                     playing.len()
                 ),
-                Some(join_group_advice(&p.groups)),
+                {
+                    let (fix, commands) = join_group_advice(&p.groups);
+                    (Some(fix), commands)
+                },
             )
         };
         checks.push(Check {
@@ -128,10 +144,12 @@ pub fn evaluate(p: &PerfInputs) -> Vec<Check> {
             status,
             detail,
             fix,
+            commands,
         });
     }
 
     // Locked memory.
+    let mut commands = Vec::new();
     let (status, detail, fix) = match p.memlock_limit {
         Some(u64::MAX) => (Status::Ok, "Locked memory is unlimited.".to_string(), None),
         Some(limit) if limit >= 512 * MIB => (
@@ -145,7 +163,19 @@ pub fn evaluate(p: &PerfInputs) -> Vec<Check> {
                 "Locked memory is limited to {} MiB, so the app does not lock its memory and the audio path can page-fault under memory pressure.",
                 limit / MIB
             ),
-            Some("Set 'memlock unlimited' for your audio group in /etc/security/limits.d/.".into()),
+            {
+                let group = ["pipewire", "audio", "realtime"]
+                    .into_iter()
+                    .find(|g| p.groups.iter().any(|x| x == g))
+                    // The group the realtime advice puts the user in.
+                    .unwrap_or("pipewire");
+                commands.push(format!(
+                    "echo '@{group} - memlock unlimited' | sudo tee /etc/security/limits.d/99-merlin-memlock.conf"
+                ));
+                Some(format!(
+                    "Allow unlimited locked memory for the '{group}' group, then log out and in again."
+                ))
+            },
         ),
         None => (
             Status::Warn,
@@ -158,6 +188,7 @@ pub fn evaluate(p: &PerfInputs) -> Vec<Check> {
         status,
         detail,
         fix,
+        commands,
     });
 
     // Buffer size and the latency it implies.
@@ -185,6 +216,7 @@ pub fn evaluate(p: &PerfInputs) -> Vec<Check> {
             p.buffer_frames, p.sample_rate
         ),
         fix,
+        commands: Vec::new(),
     });
 
     // Dropouts so far.
@@ -195,6 +227,7 @@ pub fn evaluate(p: &PerfInputs) -> Vec<Check> {
         fix: (p.xruns > 0).then(|| {
             "Dropouts mean the audio thread missed its deadline: use a bigger buffer, fix realtime scheduling, or unload heavy plugins.".to_string()
         }),
+        commands: Vec::new(),
     });
 
     // Load.
@@ -214,6 +247,7 @@ pub fn evaluate(p: &PerfInputs) -> Vec<Check> {
         status,
         detail: format!("{:.0}% of the buffer time is used.", p.dsp_load_percent),
         fix,
+        commands: Vec::new(),
     });
 
     // CPU frequency scaling.
@@ -221,14 +255,20 @@ pub fn evaluate(p: &PerfInputs) -> Vec<Check> {
         Some("powersave") => checks.push(Check {
             name: "CPU frequency",
             status: Status::Warn,
-            detail: "The CPU governor is 'powersave': clock speed ramps up late and can cause dropouts.".into(),
-            fix: Some("Switch to 'performance' (for example with cpupower or your desktop's power profile).".into()),
+            detail:
+                "The CPU governor is 'powersave': clock speed ramps up late and can cause dropouts."
+                    .into(),
+            fix: Some(
+                "Switch to 'performance', with cpupower or your desktop's power profile.".into(),
+            ),
+            commands: vec!["sudo cpupower frequency-set -g performance".into()],
         }),
         Some(g) => checks.push(Check {
             name: "CPU frequency",
             status: Status::Ok,
             detail: format!("CPU governor: {g}."),
             fix: None,
+            commands: Vec::new(),
         }),
         None => {}
     }
@@ -402,7 +442,11 @@ mod tests {
         let checks = evaluate(&p);
         let rt = find(&checks, "Realtime scheduling");
         assert_eq!(rt.status, Status::Fail);
-        assert!(rt.fix.as_deref().unwrap().contains("usermod -aG pipewire"));
+        assert!(
+            rt.commands
+                .iter()
+                .any(|c| c.contains("usermod -aG pipewire"))
+        );
         let mem = find(&checks, "Locked memory");
         assert_eq!(mem.status, Status::Warn);
         assert!(mem.detail.contains("8 MiB"));
@@ -453,7 +497,11 @@ mod tests {
             "{}",
             c.detail
         );
-        assert!(c.fix.as_deref().unwrap().contains("usermod -aG pipewire"));
+        assert!(
+            c.commands
+                .iter()
+                .any(|c| c.contains("usermod -aG pipewire"))
+        );
         assert_eq!(overall(&checks), Status::Warn);
         // Raised is better than nothing, and still not the audio thread's priority.
         let p = PerfInputs {

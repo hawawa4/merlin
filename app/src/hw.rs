@@ -1169,6 +1169,43 @@ pub fn display(ui: &mut Ui, text: &str, width: f32, colour: Color32) -> Response
     r
 }
 
+/// A shell command in a recessed well: selectable, and with a COPY key at its end that puts it
+/// on the clipboard, for the advice that says "run this".
+pub fn command(ui: &mut Ui, text: &str) {
+    let id = ui.make_persistent_id(("command", text));
+    let now = ui.input(|i| i.time);
+    let copied = ui
+        .data(|d| d.get_temp::<f64>(id))
+        .is_some_and(|at| now - at < 1.5);
+    inset()
+        .inner_margin(Margin::symmetric(8, 4))
+        .show(ui, |ui| {
+            egui::Sides::new().shrink_left().wrap().show(
+                ui,
+                |ui| {
+                    ui.add(
+                        egui::Label::new(egui::RichText::new("$").monospace().color(TEXT_DIM))
+                            .selectable(false),
+                    );
+                    ui.label(egui::RichText::new(text).monospace().color(AMBER));
+                },
+                |ui| {
+                    let key = Cap::new(if copied { "COPIED" } else { "COPY" })
+                        .lit(copied.then_some(GREEN))
+                        .min_width(74.0)
+                        .show(ui)
+                        .on_hover_text("Copy the command, to paste it into a terminal");
+                    if key.clicked() {
+                        ui.ctx().copy_text(text.to_owned());
+                        ui.data_mut(|d| d.insert_temp(id, now));
+                        ui.ctx()
+                            .request_repaint_after(std::time::Duration::from_millis(1600));
+                    }
+                },
+            );
+        });
+}
+
 /// The stomp button of a pedal.
 pub fn footswitch(ui: &mut Ui) -> Response {
     let (rect, r) = ui.allocate_exact_size(vec2(46.0, 46.0), Sense::click());

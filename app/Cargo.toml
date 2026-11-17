@@ -48,7 +48,7 @@ serde_json.workspace = true
 toml.workspace = true
 libc = "0.2"
 egui = { version = "0.37", features = ["default_fonts"] }
-egui-winit = { version = "0.37", default-features = false, features = ["x11"] }
+egui-winit = { version = "0.37", default-features = false, features = ["x11", "clipboard", "links"] }
 egui-wgpu = { version = "0.37", default-features = false, features = ["winit"] }
 winit = { version = "0.30", default-features = false, features = ["x11", "rwh_06"] }
 wgpu = { version = "*", default-features = false, features = ["vulkan", "wgsl"] }
