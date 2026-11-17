@@ -37,6 +37,7 @@ mod system_audio;
 mod tags;
 mod touch;
 mod ui;
+mod velocity_ui;
 mod zone_view;
 
 use std::num::NonZeroU32;
@@ -546,6 +547,13 @@ impl Running {
                 self.ui.settings_tab = tab;
                 Ok(())
             }
+            Action::ShowVelocityCurve(device) => {
+                self.ui.settings_open = true;
+                self.ui.settings_tab = settings_ui::SettingsTab::Midi;
+                self.ui.velocity_open = Some(device);
+                self.ui.velocity_stroke = None;
+                Ok(())
+            }
             Action::AddDir(text) => {
                 s.add_plugin_dir(PathBuf::from(text.trim()));
                 Ok(())
@@ -880,6 +888,10 @@ impl Running {
             }
             Action::SetMidiDevice(name, role, on) => {
                 s.set_midi_device(&name, role, on);
+                Ok(())
+            }
+            Action::SetVelocityCurve(name, curve) => {
+                s.set_velocity_curve(&name, curve);
                 Ok(())
             }
             Action::RefreshMidi => {
@@ -1242,7 +1254,7 @@ impl Running {
                     .iter()
                     .map(|d| {
                         format!(
-                            "{}[{}{}]",
+                            "{}[{}{}{}]",
                             d.name,
                             match (d.input, d.enabled) {
                                 (Some(n), _) => format!("in{n} "),
@@ -1252,6 +1264,11 @@ impl Running {
                             match d.role {
                                 settings::DeviceRole::Keyboard => "keyboard",
                                 settings::DeviceRole::Controller => "controller",
+                            },
+                            match &d.velocity {
+                                settings::VelocityCurve::Medium => String::new(),
+                                settings::VelocityCurve::Drawn(_) => " velocity drawn".to_owned(),
+                                c => format!(" velocity {c:?}").to_lowercase(),
                             }
                         )
                     })
@@ -1617,6 +1634,10 @@ fn parse_script() -> Vec<(Duration, Action)> {
                 }
                 "settings" => match words.next() {
                     None => Action::ToggleSettings,
+                    // settings velocity <device name>: the device's velocity curve
+                    Some("velocity") => {
+                        Action::ShowVelocityCurve(words.collect::<Vec<_>>().join(" "))
+                    }
                     Some(t) => Action::ShowSettingsTab(match t {
                         "audio" => settings_ui::SettingsTab::Audio,
                         "midi" => settings_ui::SettingsTab::Midi,
@@ -1762,6 +1783,17 @@ fn parse_script() -> Vec<(Duration, Action)> {
                         _ => return None,
                     };
                     Action::SetMidiDevice(name, role, on)
+                }
+                // velocity <soft|medium|hard|constant> <device name>
+                "velocity" => {
+                    let curve = match words.next()? {
+                        "soft" => settings::VelocityCurve::Soft,
+                        "medium" => settings::VelocityCurve::Medium,
+                        "hard" => settings::VelocityCurve::Hard,
+                        "constant" => settings::VelocityCurve::Constant,
+                        _ => return None,
+                    };
+                    Action::SetVelocityCurve(words.collect::<Vec<_>>().join(" "), curve)
                 }
                 "drop" => Action::DropFile(PathBuf::from(words.collect::<Vec<_>>().join(" "))),
                 "runtime" => Action::InstallRuntime,

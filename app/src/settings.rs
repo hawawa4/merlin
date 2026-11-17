@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+pub use merlin_control::velocity::VelocityCurve;
+
 use crate::tags::Tag;
 
 /// What a MIDI device is for (the setting; `InputRole` is the audio side of it).
@@ -38,6 +40,21 @@ pub struct MidiDevicePref {
     /// Off: the device is left unconnected.
     #[serde(default = "yes")]
     pub enabled: bool,
+    /// How hard its keys must be struck for what velocity; as played when unset.
+    #[serde(default, skip_serializing_if = "VelocityCurve::is_medium")]
+    pub velocity: VelocityCurve,
+}
+
+impl MidiDevicePref {
+    /// What a device is set to before the user says anything: on, with this role, as played.
+    pub fn new(name: &str, role: DeviceRole) -> Self {
+        Self {
+            name: name.to_owned(),
+            role,
+            enabled: true,
+            velocity: VelocityCurve::default(),
+        }
+    }
 }
 
 fn yes() -> bool {
@@ -55,7 +72,7 @@ pub struct Settings {
     /// Extra folders to look for SoundFonts (`.sf2`, `.sf3`) and SFZ instruments (`.sfz`); the
     /// standard ones are always searched.
     pub sound_dirs: Vec<PathBuf>,
-    /// Per-device MIDI choices (role, on or off), by device name.
+    /// Per-device MIDI choices (role, on or off, velocity curve), by device name.
     pub midi_devices: Vec<MidiDevicePref>,
     /// Audio buffer size asked of PipeWire.
     pub frames: u32,

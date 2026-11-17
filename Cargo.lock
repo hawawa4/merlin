@@ -1251,6 +1251,7 @@ name = "merlin-control"
 version = "0.0.0"
 dependencies = [
  "merlin-model",
+ "serde",
  "surface-api",
 ]
 

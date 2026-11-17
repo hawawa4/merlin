@@ -8,3 +8,4 @@ publish.workspace = true
 [dependencies]
 merlin-model.workspace = true
 surface-api.workspace = true
+serde.workspace = true

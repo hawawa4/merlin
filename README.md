@@ -83,6 +83,9 @@ own Wine. Plugins bridged with `yabridgectl` work the same way.
   macros, a lockable Perform view with big scene buttons and a PANIC button, and MIDI mapping:
   press MIDI MAP, click any control, move a knob or press a pad. There is a driver for the
   Novation Launchkey MK3 (DAW mode, pad lights, screen).
+- **Velocity curves:** per MIDI device (Settings > MIDI devices), Soft, Medium, Hard, Constant
+  or drawn by hand on a graph. Kept in the settings by device name, so every rig plays a
+  keyboard the same way.
 - **Songs:** setlists made of songs and parts. A part recalls a scene and can change the
   tempo. Backing tracks, a click, MIDI clock and timeline markers.
 - **Looper:** records MIDI per instrument over 1 to 8 bars, with A/B parts, overdub and undo.

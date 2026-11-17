@@ -5,6 +5,7 @@
 //! The app turns those into the same actions the buttons on screen perform.
 
 pub mod surface;
+pub mod velocity;
 
 use std::collections::HashMap;
 

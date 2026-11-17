@@ -925,7 +925,7 @@ fn midi(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Acti
     ui.strong("MIDI devices");
     ui.label(
         RichText::new(
-            "A keyboard plays the instruments. A controller (pads, knobs, faders) never does: its messages are kept for controlling the app. Turn a device off to leave it alone completely. Devices are remembered by name, so plugging one in again restores its role.",
+            "A keyboard plays the instruments. A controller (pads, knobs, faders) never does: its messages are kept for controlling the app. Turn a device off to leave it alone completely. Velocity sets how hard you have to play for how loud. Devices are remembered by name, so plugging one in again restores its role and curve.",
         )
         .small()
         .weak(),
@@ -936,7 +936,7 @@ fn midi(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Acti
         ui.label("No MIDI devices found.");
     }
     egui::Grid::new("midi-devices")
-        .num_columns(5)
+        .num_columns(6)
         .spacing([14.0, 6.0])
         .show(ui, |ui| {
             for d in &devices {
@@ -971,9 +971,33 @@ fn midi(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Acti
                 if role != d.role || on != d.enabled {
                     actions.push(Action::SetMidiDevice(d.name.clone(), role, on));
                 }
+                let open = st.velocity_open.as_ref() == Some(&d.name);
+                let curve = crate::settings::VelocityCurve::PRESETS
+                    .iter()
+                    .find(|(c, _)| *c == d.velocity)
+                    .map_or("Drawn", |(_, n)| *n);
+                if crate::hw::Cap::new(format!("Velocity: {curve}"))
+                    .lit(open.then_some(crate::hw::AMBER))
+                    .min_width(140.0)
+                    .show(ui)
+                    .on_hover_text("How hard you have to play for how loud")
+                    .clicked()
+                {
+                    st.velocity_open = (!open).then(|| d.name.clone());
+                    st.velocity_stroke = None;
+                }
                 ui.end_row();
             }
         });
+    // The curve of the device picked above, while it is plugged in.
+    if let Some(d) = devices
+        .iter()
+        .find(|d| st.velocity_open.as_ref() == Some(&d.name))
+    {
+        ui.add_space(8.0);
+        let last = d.input.and_then(|n| s.last_velocity(n));
+        crate::velocity_ui::editor(ui, d, last, &mut st.velocity_stroke, actions);
+    }
     for (_, what) in s.surface_devices() {
         ui.colored_label(
             status_color(Status::Ok),

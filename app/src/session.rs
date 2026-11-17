@@ -106,6 +106,7 @@ pub struct MidiDeviceRow {
     pub input: Option<u8>,
     pub role: crate::settings::DeviceRole,
     pub enabled: bool,
+    pub velocity: crate::settings::VelocityCurve,
     /// Sent something in the last moment.
     pub active: bool,
 }
@@ -317,6 +318,9 @@ pub struct Session {
     /// MIDI activity: the message count last seen per input, and until when its light stays on.
     midi_seen: [u32; merlin_engine::MAX_INPUTS],
     midi_lit: [Option<Instant>; merlin_engine::MAX_INPUTS],
+    /// The latest note-on per engine input and when the app first saw it, for the velocity
+    /// curve's dot.
+    velocity_seen: [Option<(merlin_audio_io::LastVelocity, Instant)>; merlin_engine::MAX_INPUTS],
     /// What each slot costs, refreshed by [`Session::update_loads`].
     pub slot_cpu: [SlotCpu; UI_SLOTS],
     /// Wine host CPU readings: pid -> (ticks, when), for the delta.
@@ -466,6 +470,7 @@ impl Session {
             param_cache: Default::default(),
             midi_seen: Default::default(),
             midi_lit: Default::default(),
+            velocity_seen: Default::default(),
             slot_cpu: [SlotCpu::default(); UI_SLOTS],
             host_cpu: Default::default(),
             last_load_update: Instant::now(),
@@ -533,6 +538,7 @@ impl Session {
                 .map(|m| m.device.as_str())
                 .collect::<Vec<_>>()
         ));
+        s.apply_velocity_curves();
         s.sync_transport();
         s.apply_click_output();
         s.apply_capture_window();
@@ -1179,6 +1185,7 @@ impl Session {
         if let Some(b) = self.backend.as_ref() {
             self.midi_sources = b.connect_midi_sources(&policy);
         }
+        self.apply_velocity_curves();
         self.sync_surfaces();
         self.refresh_interest();
     }
@@ -1202,6 +1209,7 @@ impl Session {
                     input: connected.map(|m| m.input),
                     role: pref.role,
                     enabled: pref.enabled,
+                    velocity: pref.velocity,
                     name,
                     port,
                 }
@@ -1215,11 +1223,61 @@ impl Session {
             .iter()
             .find(|p| p.name == name)
             .cloned()
-            .unwrap_or(crate::settings::MidiDevicePref {
-                name: name.to_owned(),
-                role: default_role(name),
-                enabled: true,
-            })
+            .unwrap_or_else(|| crate::settings::MidiDevicePref::new(name, default_role(name)))
+    }
+
+    /// Gives every engine input the velocity curve of the device on it (inputs without one
+    /// play as played).
+    fn apply_velocity_curves(&self) {
+        let Some(b) = self.backend.as_ref() else {
+            return;
+        };
+        for input in 1..=merlin_audio_io::HARDWARE_INPUTS as u8 {
+            let curve = self
+                .midi_sources
+                .iter()
+                .find(|m| m.input == input)
+                .map(|m| self.midi_pref(&friendly_name(&m.device)).velocity)
+                .unwrap_or_default();
+            b.set_velocity_curve(input, &curve.table());
+        }
+    }
+
+    /// Remembers a device's velocity curve and plays its notes through it from now on.
+    pub fn set_velocity_curve(&mut self, name: &str, curve: crate::settings::VelocityCurve) {
+        let curve = curve.simplified();
+        let mut pref = self.midi_pref(name);
+        if pref.velocity == curve {
+            return;
+        }
+        let said = match &curve {
+            crate::settings::VelocityCurve::Drawn(_) => "drawn".to_owned(),
+            c => format!("{c:?}").to_lowercase(),
+        };
+        pref.velocity = curve;
+        self.put_midi_pref(pref);
+        self.save_settings();
+        self.apply_velocity_curves();
+        self.say(format!("MIDI device {name}: velocity {said}"));
+    }
+
+    fn put_midi_pref(&mut self, pref: crate::settings::MidiDevicePref) {
+        match self
+            .settings
+            .midi_devices
+            .iter_mut()
+            .find(|p| p.name == pref.name)
+        {
+            Some(p) => *p = pref,
+            None => self.settings.midi_devices.push(pref),
+        }
+    }
+
+    /// The latest note played on the device on this engine input, and how long ago it came
+    /// (as far as the app has looked: it checks every frame it draws).
+    pub fn last_velocity(&self, input: u8) -> Option<(merlin_audio_io::LastVelocity, Duration)> {
+        let (last, at) = self.velocity_seen.get(input as usize)?.as_ref()?;
+        Some((*last, at.elapsed()))
     }
 
     /// Remembers what a device is for (or that it is off) and applies it now.
@@ -1229,20 +1287,13 @@ impl Session {
         role: crate::settings::DeviceRole,
         enabled: bool,
     ) {
+        // The rest of what is remembered about the device (its velocity curve) stays.
         let pref = crate::settings::MidiDevicePref {
-            name: name.to_owned(),
             role,
             enabled,
+            ..self.midi_pref(name)
         };
-        match self
-            .settings
-            .midi_devices
-            .iter_mut()
-            .find(|p| p.name == name)
-        {
-            Some(p) => *p = pref,
-            None => self.settings.midi_devices.push(pref),
-        }
+        self.put_midi_pref(pref);
         self.save_settings();
         self.refresh_midi();
         self.say(format!(
@@ -1274,6 +1325,15 @@ impl Session {
             if count != *seen {
                 *seen = count;
                 self.midi_lit[i] = Some(now + Duration::from_millis(150));
+            }
+        }
+        for (i, seen) in self.velocity_seen.iter_mut().enumerate() {
+            let word = b.stats.last_velocity[i].load(Ordering::Relaxed);
+            let Some(last) = merlin_audio_io::LastVelocity::unpack(word) else {
+                continue;
+            };
+            if seen.as_ref().is_none_or(|(l, _)| *l != last) {
+                *seen = Some((last, now));
             }
         }
     }
@@ -3103,9 +3163,8 @@ mod tests {
 
     fn pref(name: &str, role: DeviceRole, enabled: bool) -> MidiDevicePref {
         MidiDevicePref {
-            name: name.into(),
-            role,
             enabled,
+            ..MidiDevicePref::new(name, role)
         }
     }
 
@@ -3147,5 +3206,35 @@ mod tests {
             sparse.midi_devices,
             vec![pref("X", DeviceRole::Keyboard, true)]
         );
+    }
+
+    #[test]
+    fn velocity_curves_survive_the_settings_file() {
+        use crate::settings::VelocityCurve;
+        let mut drawn = VelocityCurve::Medium.to_drawn();
+        drawn[64] = 100;
+        let s = Settings {
+            midi_devices: vec![
+                MidiDevicePref {
+                    velocity: VelocityCurve::Hard,
+                    ..pref("Heavy Keys", DeviceRole::Keyboard, true)
+                },
+                MidiDevicePref {
+                    velocity: VelocityCurve::Drawn(drawn),
+                    ..pref("Pads", DeviceRole::Controller, true)
+                },
+                pref("Plain", DeviceRole::Keyboard, true),
+            ],
+            ..Settings::default()
+        };
+        let text = toml::to_string_pretty(&s).unwrap();
+        assert!(text.contains("velocity = \"hard\""), "{text}");
+        assert_eq!(
+            text.matches("velocity").count(),
+            2,
+            "as played is not written: {text}"
+        );
+        let back: Settings = toml::from_str(&text).unwrap();
+        assert_eq!(back.midi_devices, s.midi_devices);
     }
 }

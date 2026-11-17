@@ -361,6 +361,77 @@ pub struct Stats {
     pub ports_changed: AtomicBool,
     /// Channel messages received per engine input (index = input), for the activity lights.
     pub midi_activity: [AtomicU32; merlin_engine::MAX_INPUTS],
+    /// The latest note-on that played, per engine input (index = input), for showing it on the
+    /// velocity curve: see [`LastVelocity`].
+    pub last_velocity: [AtomicU32; merlin_engine::MAX_INPUTS],
+}
+
+/// A note-on as [`Stats::last_velocity`] keeps it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LastVelocity {
+    /// How hard the key was struck.
+    pub played: u8,
+    /// What the instruments got, after the curve.
+    pub sent: u8,
+    /// Counts note-ons (wrapping), so a repeat of the same velocity is still news.
+    pub count: u16,
+}
+
+impl LastVelocity {
+    fn pack(self) -> u32 {
+        (self.count as u32) << 16 | (self.played as u32) << 8 | self.sent as u32
+    }
+
+    /// `None` until a note has played on the input.
+    pub fn unpack(word: u32) -> Option<Self> {
+        (word != 0).then_some(Self {
+            played: (word >> 8) as u8,
+            sent: word as u8,
+            count: (word >> 16) as u16,
+        })
+    }
+}
+
+/// The velocity curve of each hardware input, as a table of 128 velocities: the main thread
+/// writes one when a device is connected or its curve changes, the audio thread looks note-ons
+/// up in it. Unset inputs play as played. A table written while a note arrives may be half old,
+/// half new for that one note, which is harmless.
+pub struct VelocityTables([[AtomicU8; 128]; HARDWARE_INPUTS]);
+
+impl Default for VelocityTables {
+    fn default() -> Self {
+        Self(std::array::from_fn(|_| {
+            std::array::from_fn(|v| AtomicU8::new(v as u8))
+        }))
+    }
+}
+
+impl VelocityTables {
+    /// Sets the curve of hardware input `index` (engine input - 1). Entry 0 is kept at 0 and
+    /// the others at 1 or more, whatever `table` says, so a note-on stays a note-on.
+    pub fn set(&self, index: usize, table: &[u8; 128]) {
+        let Some(slots) = self.0.get(index) else {
+            return;
+        };
+        for (v, (slot, out)) in slots.iter().zip(table).enumerate() {
+            let out = if v == 0 { 0 } else { (*out).clamp(1, 127) };
+            slot.store(out, Ordering::Relaxed);
+        }
+    }
+
+    /// Applies hardware input `index`'s curve to a message: a note-on gets its velocity looked
+    /// up and is returned as (played, sent); everything else is left alone.
+    fn apply(&self, index: usize, data: &mut [u8; 3]) -> Option<(u8, u8)> {
+        if data[0] & 0xF0 != 0x90 || data[2] == 0 {
+            return None;
+        }
+        let played = data[2] & 0x7F;
+        let sent = self.0[index][played as usize]
+            .load(Ordering::Relaxed)
+            .max(1);
+        data[2] = sent;
+        Some((played, sent))
+    }
 }
 
 struct Notifications(Arc<Stats>);
@@ -429,6 +500,7 @@ impl JackClient {
 
         let (virtual_midi, virtual_rx) = rtrb::RingBuffer::new(VIRTUAL_QUEUE);
         let roles: Arc<[AtomicU8; HARDWARE_INPUTS]> = Arc::default();
+        let velocity: Arc<VelocityTables> = Arc::default();
         let interest: Arc<Interest> = Arc::default();
         let (control_tx, control_rx) = rtrb::RingBuffer::new(CONTROL_QUEUE);
         let stats = Arc::new(Stats::default());
@@ -446,6 +518,7 @@ impl JackClient {
             device_rx,
             virtual_rx,
             roles: roles.clone(),
+            velocity: velocity.clone(),
             interest: interest.clone(),
             control_tx,
             events: Vec::with_capacity(MAX_MIDI_PER_CYCLE),
@@ -462,6 +535,7 @@ impl JackClient {
             virtual_midi,
             midi_names,
             roles,
+            velocity,
             interest,
             control_rx: Some(control_rx),
             device_tx,
@@ -488,6 +562,7 @@ struct Callback {
     virtual_rx: rtrb::Consumer<MidiEvent>,
     /// [`InputRole`] bits per hardware input, set from the main thread.
     roles: Arc<[AtomicU8; HARDWARE_INPUTS]>,
+    velocity: Arc<VelocityTables>,
     interest: Arc<Interest>,
     control_tx: rtrb::Producer<ControlEvent>,
     events: Vec<MidiEvent>,
@@ -573,6 +648,20 @@ impl jack::ProcessHandler for Callback {
                 if consumed {
                     continue;
                 }
+                // The device's velocity curve, for what plays (a mapped pad or key reports the
+                // velocity as played, above). The capture keeps what the instruments got.
+                if let Some((played, sent)) = self.velocity.apply(i, &mut data) {
+                    let slot = &self.stats.last_velocity[i + 1];
+                    let count = LastVelocity::unpack(slot.load(Ordering::Relaxed))
+                        .map_or(0, |l| l.count)
+                        .wrapping_add(1);
+                    let last = LastVelocity {
+                        played,
+                        sent,
+                        count,
+                    };
+                    slot.store(last.pack(), Ordering::Relaxed);
+                }
                 self.tap.record(raw.time, i as u8 + 1, data);
                 push_sorted(
                     &mut self.events,
@@ -655,6 +744,8 @@ pub struct JackBackend {
     /// JACK port names of our MIDI inputs, index = engine input - 1.
     pub midi_names: Vec<String>,
     roles: Arc<[AtomicU8; HARDWARE_INPUTS]>,
+    /// The velocity curve of each hardware input; see [`JackBackend::set_velocity_curve`].
+    velocity: Arc<VelocityTables>,
     /// What keyboards should report; the main thread fills it from the mappings.
     pub interest: Arc<Interest>,
     control_rx: Option<rtrb::Consumer<ControlEvent>>,
@@ -815,6 +906,14 @@ impl JackBackend {
         }
     }
 
+    /// Sets the velocity curve of an engine input (1 and up) from now on: `table[v]` is what a
+    /// note-on played at `v` reaches the instruments with.
+    pub fn set_velocity_curve(&self, input: u8, table: &[u8; 128]) {
+        if let Some(index) = (input as usize).checked_sub(1) {
+            self.velocity.set(index, table);
+        }
+    }
+
     /// Queues a message for a controller; false if the queue is full.
     pub fn send_to_device(&mut self, message: DeviceMessage) -> bool {
         self.device_tx.push(message).is_ok()
@@ -898,6 +997,51 @@ impl JackBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn note_ons_follow_the_inputs_curve_and_nothing_else_changes() {
+        let t = VelocityTables::default();
+        let mut on = [0x91, 60, 100];
+        assert_eq!(t.apply(0, &mut on), Some((100, 100)), "unset: as played");
+        let mut hard = [0u8; 128];
+        for (v, out) in hard.iter_mut().enumerate() {
+            *out = (v / 2) as u8;
+        }
+        hard[0] = 9; // must stay a note-off
+        t.set(1, &hard);
+        assert_eq!(t.apply(1, &mut on), Some((100, 50)));
+        assert_eq!(on, [0x91, 60, 50]);
+        // Played at 1, the table says 0: still a note-on, at 1.
+        let mut soft_key = [0x90, 60, 1];
+        assert_eq!(t.apply(1, &mut soft_key), Some((1, 1)));
+        // A note-on at 0 is a note-off, and offs, CCs and aftertouch keep their values.
+        for msg in [
+            [0x90, 60, 0],
+            [0x80, 60, 100],
+            [0xB0, 7, 100],
+            [0xA0, 60, 100],
+        ] {
+            let mut m = msg;
+            assert_eq!(t.apply(1, &mut m), None);
+            assert_eq!(m, msg);
+        }
+        // Other inputs are untouched.
+        let mut other = [0x90, 60, 100];
+        assert_eq!(t.apply(0, &mut other), Some((100, 100)));
+        // Out of range is ignored.
+        t.set(HARDWARE_INPUTS, &hard);
+    }
+
+    #[test]
+    fn the_last_velocity_packs_and_none_until_a_note() {
+        assert_eq!(LastVelocity::unpack(0), None);
+        let l = LastVelocity {
+            played: 127,
+            sent: 1,
+            count: 65535,
+        };
+        assert_eq!(LastVelocity::unpack(l.pack()), Some(l));
+    }
 
     #[test]
     fn port_names_become_device_names() {

@@ -177,6 +177,8 @@ pub enum Action {
     Loop(crate::looper_ui::LoopAct),
     /// Script-only: show a settings tab.
     ShowSettingsTab(SettingsTab),
+    /// Settings, MIDI devices, with this device's velocity curve open.
+    ShowVelocityCurve(String),
     AddDir(String),
     RemoveDir(usize),
     AddSoundDir(String),
@@ -203,6 +205,8 @@ pub enum Action {
     AddMapping(merlin_model::Mapping),
     /// What a MIDI device is for, and whether it is used (device name, role, on).
     SetMidiDevice(String, crate::settings::DeviceRole, bool),
+    /// A device's velocity curve, by device name.
+    SetVelocityCurve(String, crate::settings::VelocityCurve),
     SaveWine(String, String),
     /// A file was dropped on the window (or the script's `drop`): install, load or open it.
     DropFile(PathBuf),
@@ -430,6 +434,9 @@ pub struct UiState {
     /// The file dialog that is open, if one is.
     pub picking: Option<crate::dialog::Open>,
     pub status: StatusInfo,
+    /// The MIDI device whose velocity curve is open in Settings, and a stroke being drawn on it.
+    pub velocity_open: Option<String>,
+    pub velocity_stroke: Option<crate::velocity_ui::CurveStroke>,
 }
 
 /// Numbers the app measures and the status line shows.
@@ -507,6 +514,8 @@ impl UiState {
             library: Default::default(),
             picking: None,
             status: StatusInfo::default(),
+            velocity_open: None,
+            velocity_stroke: None,
         }
     }
 }
