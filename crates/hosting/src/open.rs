@@ -1,4 +1,4 @@
-//! Opening a plugin file of any format. Shared by the app (in-process loading, SoundFonts) and
+//! Opening a plugin file of any format. Shared by the app (in-process loading, SoundFonts, SFZ) and
 //! by the plugin host process.
 
 use std::path::Path;
@@ -10,10 +10,10 @@ use crate::clap::ClapLibrary;
 use crate::lv2::Lv2Library;
 use crate::vst2::Vst2Library;
 use crate::vst3::Vst3Library;
-use crate::{PluginHandle, Waker, soundfont};
+use crate::{PluginHandle, Waker, sfz, soundfont};
 
 /// Loads the plugin `id` from `path` and creates an instance (main thread, not activated). The
-/// format follows the file: `.vst3`, `.so` (VST2), `.lv2`, SoundFonts, anything else is CLAP.
+/// format follows the file: `.vst3`, `.so` (VST2), `.lv2`, SFZ, SoundFonts, anything else is CLAP.
 /// LV2 needs the audio setup up front.
 pub fn open_plugin(
     path: &Path,
@@ -23,7 +23,9 @@ pub fn open_plugin(
     max_block: u32,
 ) -> Result<Box<dyn PluginHandle>> {
     let ext = path.extension();
-    Ok(if soundfont::is_source(path) {
+    Ok(if sfz::is_source(path, id) {
+        Box::new(sfz::SfzPlugin::open(path)?)
+    } else if soundfont::is_source(path) {
         Box::new(soundfont::SoundFontPlugin::open(path)?)
     } else if ext.is_some_and(|e| e == "vst3") {
         Box::new(Vst3Library::load(path)?.create(id, waker)?)

@@ -66,7 +66,7 @@ section = "sound"
 priority = "optional"
 depends = "$auto"
 recommends = "pipewire-jack | libjack-jackd2-0, libvulkan1, libxcb1"
-extended-description = "Merlin is a Linux-first live instrument host: a rack of instruments (CLAP, VST3, VST2, LV2, SoundFonts, and Windows plugins through a Wine + yabridge runtime the app downloads on request), each with simple built-in effects, switched from MIDI controllers."
+extended-description = "Merlin is a Linux-first live instrument host: a rack of instruments (CLAP, VST3, VST2, LV2, SoundFonts, SFZ, and Windows plugins through a Wine + yabridge runtime the app downloads on request), each with simple built-in effects, switched from MIDI controllers."
 assets = [
     ["target/release/merlin", "usr/bin/", "755"],
     ["target/release/merlin-scan", "usr/bin/", "755"],

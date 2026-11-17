@@ -20,6 +20,7 @@ use anyhow::{Context, Result};
 use merlin_hosting::PluginInfo;
 use merlin_hosting::clap::ClapLibrary;
 use merlin_hosting::lv2::Lv2Library;
+use merlin_hosting::sfz::is_sfz;
 use merlin_hosting::soundfont::is_soundfont;
 use merlin_hosting::vst2::Vst2Library;
 use merlin_hosting::vst3::Vst3Library;
@@ -119,17 +120,22 @@ pub fn default_plugin_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-/// Where SoundFonts usually live.
+/// Where SoundFonts and SFZ instruments usually live.
 pub fn default_sound_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Some(home) = std::env::var_os("HOME") {
         dirs.push(Path::new(&home).join(".local/share/sounds/sf2"));
         dirs.push(Path::new(&home).join(".local/share/soundfonts"));
+        dirs.push(Path::new(&home).join(".local/share/sounds/sfz"));
     }
     dirs.extend(
-        ["/usr/share/sounds/sf2", "/usr/share/soundfonts"]
-            .into_iter()
-            .map(PathBuf::from),
+        [
+            "/usr/share/sounds/sf2",
+            "/usr/share/soundfonts",
+            "/usr/share/sounds/sfz",
+        ]
+        .into_iter()
+        .map(PathBuf::from),
     );
     dirs
 }
@@ -189,7 +195,7 @@ pub fn find_clap_files(dirs: &[PathBuf]) -> Vec<(PathBuf, bool)> {
             } else if p.extension().is_some_and(|e| e == "lv2") && p.is_dir() {
                 // An LV2 bundle: a folder with a manifest, not a folder to search.
                 out.push((p, false));
-            } else if is_soundfont(&p) {
+            } else if is_soundfont(&p) || (is_sfz(&p) && p.is_file()) {
                 out.push((p, false));
             } else if p.extension().is_some_and(|e| e == "so") && p.is_file() {
                 let windows = p.with_extension("dll").exists();
@@ -256,6 +262,10 @@ pub fn load_any(path: &Path, windows: bool) -> Result<Vec<PluginInfo>> {
         // A SoundFont is a file, not code: it is listed without being decoded.
         std::fs::metadata(path).with_context(|| format!("scanning {}", path.display()))?;
         Ok(vec![merlin_hosting::soundfont::info_for(path)])
+    } else if is_sfz(path) {
+        // So is an SFZ file; sfizz reads it (and its samples) when it is played.
+        std::fs::metadata(path).with_context(|| format!("scanning {}", path.display()))?;
+        Ok(vec![merlin_hosting::sfz::info_for(path)])
     } else if path.extension().is_some_and(|e| e == "vst3") {
         load_vst3(path)
     } else if path.extension().is_some_and(|e| e == "so") {
@@ -426,35 +436,45 @@ pub fn with_feature(entries: &[Entry], feature: &str) -> Vec<Found> {
     v
 }
 
-/// Folders full of SoundFonts become one instrument each, named like the folder: a folder with
-/// two or more SoundFont files directly inside it replaces them in the list. Files in
-/// `loose_dirs` (the standard system folders, which hold unrelated fonts side by side) stay
-/// instruments of their own, and so does a lone file in its folder.
-pub fn group_soundfonts(found: Vec<Found>, loose_dirs: &[PathBuf]) -> Vec<Found> {
-    use merlin_hosting::soundfont::collection_info;
-    let is_font =
-        |f: &Found| f.info.format == merlin_model::Format::SoundFont && is_soundfont(&f.path);
-    let mut count: std::collections::HashMap<PathBuf, usize> = Default::default();
-    for f in found.iter().filter(|f| is_font(f)) {
-        if let Some(dir) = f.path.parent() {
-            *count.entry(dir.to_owned()).or_default() += 1;
+/// Folders full of SoundFonts, or of SFZ files, become one instrument each, named like the
+/// folder: a folder with two or more files of one kind directly inside it replaces them in the
+/// list. Files in `loose_dirs` (the standard system folders, which hold unrelated fonts side by
+/// side) stay instruments of their own, and so does a lone file in its folder.
+pub fn group_sound_folders(found: Vec<Found>, loose_dirs: &[PathBuf]) -> Vec<Found> {
+    use merlin_model::Format;
+    // Which kind of sound file this is, if it is one.
+    let kind = |f: &Found| match f.info.format {
+        Format::SoundFont if is_soundfont(&f.path) => Some(Format::SoundFont),
+        Format::Sfz if is_sfz(&f.path) => Some(Format::Sfz),
+        _ => None,
+    };
+    let mut count: HashMap<(PathBuf, Format), usize> = HashMap::new();
+    for f in &found {
+        if let (Some(k), Some(dir)) = (kind(f), f.path.parent()) {
+            *count.entry((dir.to_owned(), k)).or_default() += 1;
         }
     }
-    let grouped = |dir: &Path| {
-        count.get(dir).is_some_and(|&n| n >= 2) && !loose_dirs.iter().any(|d| d == dir)
+    let grouped = |dir: &Path, k: Format| {
+        count.get(&(dir.to_owned(), k)).is_some_and(|&n| n >= 2)
+            && !loose_dirs.iter().any(|d| d == dir)
     };
     let mut out = Vec::new();
-    let mut made: Vec<PathBuf> = Vec::new();
+    let mut made: Vec<(PathBuf, Format)> = Vec::new();
     for f in found {
-        match f.path.parent().filter(|d| is_font(&f) && grouped(d)) {
-            Some(dir) => {
-                if !made.iter().any(|d| d == dir) {
-                    made.push(dir.to_owned());
+        let group = kind(&f).and_then(|k| Some((f.path.parent()?.to_owned(), k)));
+        match group.filter(|(dir, k)| grouped(dir, *k)) {
+            Some((dir, k)) => {
+                if !made.iter().any(|m| m.0 == dir && m.1 == k) {
+                    let info = match k {
+                        Format::Sfz => merlin_hosting::sfz::collection_info(&dir),
+                        _ => merlin_hosting::soundfont::collection_info(&dir),
+                    };
                     out.push(Found {
-                        path: dir.to_owned(),
+                        path: dir.clone(),
                         windows: false,
-                        info: collection_info(dir),
+                        info,
                     });
+                    made.push((dir, k));
                 }
             }
             None => out.push(f),
@@ -824,7 +844,7 @@ mod tests {
             font("/sf/Brass/x.sf2"),
             font("/sf/Brass/y.sf2"),
         ];
-        let out = group_soundfonts(found, &[]);
+        let out = group_sound_folders(found, &[]);
         let names: Vec<_> = out.iter().map(|f| f.info.name.as_str()).collect();
         assert_eq!(names, ["Brass", "lone", "Pianos"]);
         let pianos = out.iter().find(|f| f.info.name == "Pianos").unwrap();
@@ -833,13 +853,70 @@ mod tests {
         assert!(pianos.info.is_instrument());
     }
 
+    fn sfz(path: &str) -> Found {
+        Found {
+            path: path.into(),
+            windows: false,
+            info: merlin_hosting::sfz::info_for(Path::new(path)),
+        }
+    }
+
+    #[test]
+    fn sfz_files_are_found_and_listed_without_reading_them() {
+        let d = tempdir("sfz");
+        let touch = |p: &str| {
+            let path = d.join(p);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, b"<region> sample=x.wav").unwrap();
+        };
+        touch("Rhodes/Rhodes stereo.sfz");
+        touch("Rhodes/samples/a.wav");
+        touch("Organ/Programs/Full.sfz");
+        let found: Vec<_> = find_clap_files(std::slice::from_ref(&d))
+            .into_iter()
+            .map(|(p, _)| p.strip_prefix(&d).unwrap().to_owned())
+            .collect();
+        assert_eq!(
+            found,
+            [
+                PathBuf::from("Organ/Programs/Full.sfz"),
+                PathBuf::from("Rhodes/Rhodes stereo.sfz")
+            ]
+        );
+        let plugins = load_any(&d.join("Rhodes/Rhodes stereo.sfz"), false).unwrap();
+        assert_eq!(plugins[0].format, Format::Sfz);
+        assert_eq!(plugins[0].name, "Rhodes stereo");
+        assert_eq!(plugins[0].id, "Rhodes/Rhodes stereo.sfz");
+        assert!(plugins[0].is_instrument());
+        assert!(load_any(&d.join("missing.sfz"), false).is_err());
+    }
+
+    #[test]
+    fn a_folder_of_sfz_files_is_one_instrument_apart_from_soundfonts_beside_them() {
+        let found = vec![
+            sfz("/sfz/Rhodes/both.sfz"),
+            sfz("/sfz/Rhodes/mono.sfz"),
+            sfz("/sfz/Rhodes/stereo.sfz"),
+            font("/sfz/Rhodes/extra.sf2"),
+            sfz("/sfz/Cello/Cello.sfz"),
+        ];
+        let out = group_sound_folders(found, &[]);
+        let ids: Vec<_> = out.iter().map(|f| f.info.id.as_str()).collect();
+        // The lone font and the lone file stay themselves; the three files are one instrument.
+        assert_eq!(ids, ["Cello/Cello.sfz", "extra.sf2", "sfz-folder:Rhodes"]);
+        let rhodes = &out[2];
+        assert_eq!(rhodes.path, Path::new("/sfz/Rhodes"));
+        assert_eq!(rhodes.info.format, Format::Sfz);
+        assert_eq!(rhodes.info.name, "Rhodes");
+    }
+
     #[test]
     fn the_system_folders_keep_their_fonts_apart() {
         let found = vec![
             font("/usr/share/sounds/sf2/a.sf2"),
             font("/usr/share/sounds/sf2/b.sf2"),
         ];
-        let out = group_soundfonts(found.clone(), &[PathBuf::from("/usr/share/sounds/sf2")]);
+        let out = group_sound_folders(found.clone(), &[PathBuf::from("/usr/share/sounds/sf2")]);
         assert_eq!(out, found);
     }
 
@@ -853,7 +930,7 @@ mod tests {
                 ..info("synth")
             },
         };
-        let out = group_soundfonts(vec![plugin.clone(), plugin.clone()], &[]);
+        let out = group_sound_folders(vec![plugin.clone(), plugin.clone()], &[]);
         assert_eq!(out.len(), 2);
     }
 }

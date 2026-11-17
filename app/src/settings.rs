@@ -52,7 +52,8 @@ pub struct Settings {
     /// Extra folders of plugins of any kind (CLAP, VST3, VST2, LV2, Linux or Windows); the
     /// standard ones are always searched.
     pub plugin_dirs: Vec<PathBuf>,
-    /// Extra folders to look for SoundFonts (`.sf2`, `.sf3`); the standard ones are always searched.
+    /// Extra folders to look for SoundFonts (`.sf2`, `.sf3`) and SFZ instruments (`.sfz`); the
+    /// standard ones are always searched.
     pub sound_dirs: Vec<PathBuf>,
     /// Per-device MIDI choices (role, on or off), by device name.
     pub midi_devices: Vec<MidiDevicePref>,

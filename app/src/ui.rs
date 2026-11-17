@@ -28,6 +28,10 @@ pub fn drop_hint(path: &std::path::Path) -> (String, bool) {
     match ext.as_deref() {
         Some("exe" | "msi") => ("Drop to install this Windows plugin".into(), true),
         Some("sf2" | "sf3") => ("Drop to load this SoundFont into a free slot".into(), true),
+        Some("sfz") => (
+            "Drop to load this SFZ instrument into a free slot".into(),
+            true,
+        ),
         Some("mid" | "midi" | "rmi" | "kar") => (
             "Drop to load this MIDI file (Perform view: play it or render it)".into(),
             true,
@@ -57,6 +61,15 @@ pub fn found_label(f: &merlin_scanner::Found) -> String {
         } else {
             " (SoundFont)"
         });
+    }
+    if f.info.format == Format::Sfz {
+        label.push_str(
+            if f.info.id.starts_with(merlin_hosting::sfz::FOLDER_PREFIX) {
+                " (SFZ folder)"
+            } else {
+                " (SFZ)"
+            },
+        );
     }
     if f.windows {
         label.push_str(" (Windows)");
@@ -749,13 +762,18 @@ fn sound_readout(field: SamplerField, v: f32) -> String {
     }
 }
 
-/// A SoundFont slot's "Shape the sound" rack unit: one knob per field, each mappable to MIDI.
+/// A sampler slot's "Shape the sound" rack unit: one knob per field the sampler has (an SFZ
+/// slot has only the level), each mappable to MIDI.
 fn sound_rack(ui: &mut egui::Ui, s: &Session, i: usize, actions: &mut Vec<Action>) {
     let rest = merlin_hosting::SamplerTone::default();
     hw::rack(ui, "Shape the sound", &format!("slot {}", i + 1), |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
             for (n, field) in SamplerField::ALL.into_iter().enumerate() {
+                // The field's number stays its place in ALL: MIDI mappings are saved by it.
+                let Some(now) = s.sampler_field(i, field) else {
+                    continue;
+                };
                 let (lo, hi) = field.range();
                 let at = |v: f32| ((v - lo) / (hi - lo)).clamp(0.0, 1.0);
                 let default = match field {
@@ -767,7 +785,7 @@ fn sound_rack(ui: &mut egui::Ui, s: &Session, i: usize, actions: &mut Vec<Action
                     SamplerField::Tuning => rest.fine_tune,
                     SamplerField::Voices => f32::from(rest.polyphony),
                 };
-                let mut position = at(s.sampler_field(i, field).unwrap_or(default));
+                let mut position = at(now);
                 // Fields that go both ways around their resting point light up from there.
                 let origin = if lo < 0.0 { at(0.0) } else { 0.0 };
                 let r = hw::knob(
@@ -795,19 +813,22 @@ fn sound_rack(ui: &mut egui::Ui, s: &Session, i: usize, actions: &mut Vec<Action
                     actions,
                 );
             }
-            ui.add_space(8.0);
-            if hw::Cap::new("RESET")
-                .show(ui)
-                .on_hover_text("Put the attack, release, brightness, resonance, tuning and voices back as the SoundFont made them")
-                .clicked()
-            {
-                actions.push(Action::SamplerTone(i, rest));
+            if s.sampler_tone(i).is_some() {
+                ui.add_space(8.0);
+                if hw::Cap::new("RESET")
+                    .show(ui)
+                    .on_hover_text("Put the attack, release, brightness, resonance, tuning and voices back as the SoundFont made them")
+                    .clicked()
+                {
+                    actions.push(Action::SamplerTone(i, rest));
+                }
             }
         });
     });
 }
 
-/// A SoundFont slot's panel: the preset list (bank and program), a search box, the level.
+/// A SoundFont or SFZ slot's panel: the preset list (bank and program; an SFZ folder's files),
+/// a search box, the level.
 fn sampler_panel(
     ui: &mut egui::Ui,
     s: &Session,
@@ -831,7 +852,7 @@ fn sampler_panel(
         ui.add_space(12.0);
         ui.colored_label(COLORS[i], format!("now: {now}"));
     });
-    if s.sampler_tone(i).is_some() {
+    if s.sampler_tone(i).is_some() || s.sampler_gain(i).is_some() {
         sound_rack(ui, s, i, actions);
     }
     ui.separator();
@@ -1645,6 +1666,7 @@ fn unit(ui: &mut egui::Ui, s: &mut Session, st: &mut UiState, i: usize, actions:
                 Format::Vst2 => "VST2",
                 Format::Lv2 => "LV2",
                 Format::SoundFont => "SF",
+                Format::Sfz => "SFZ",
                 _ => "CLAP",
             },
             if r.windows { "·WIN" } else { "" }

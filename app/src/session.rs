@@ -1057,6 +1057,7 @@ impl Session {
                 Format::Vst3 => "vst3",
                 Format::Vst2 => "vst2",
                 Format::Lv2 => "lv2",
+                Format::Sfz => "sfz",
                 _ => "clap",
             },
             f.info.id,
@@ -1135,16 +1136,20 @@ impl Session {
         self.load(free, &found)
     }
 
-    /// Loads a SoundFont file (dropped on the window) into the viewed slot if empty, else the
-    /// first empty slot. It does not need to be in a scanned folder.
-    pub fn load_soundfont_file(&mut self, path: &Path) -> Result<()> {
-        if !merlin_hosting::soundfont::is_soundfont(path) {
-            return Err(anyhow!("{} is not a SoundFont", path.display()));
-        }
+    /// Loads a SoundFont or SFZ file (dropped on the window) into the viewed slot if empty, else
+    /// the first empty slot. It does not need to be in a scanned folder.
+    pub fn load_sound_file(&mut self, path: &Path) -> Result<()> {
+        let info = if merlin_hosting::soundfont::is_soundfont(path) {
+            merlin_hosting::soundfont::info_for(path)
+        } else if merlin_hosting::sfz::is_sfz(path) {
+            merlin_hosting::sfz::info_for(path)
+        } else {
+            return Err(anyhow!("{} is not a SoundFont or SFZ file", path.display()));
+        };
         let found = Found {
             path: path.to_owned(),
             windows: false,
-            info: merlin_hosting::soundfont::info_for(path),
+            info,
         };
         let free = self
             .viewing
@@ -1302,8 +1307,9 @@ impl Session {
     }
 
     fn refresh_found(&mut self) {
-        // Folders full of SoundFonts are one instrument each; the system folders keep theirs apart.
-        let all = merlin_scanner::group_soundfonts(
+        // Folders full of SoundFonts or SFZ files are one instrument each; the system folders
+        // keep theirs apart.
+        let all = merlin_scanner::group_sound_folders(
             merlin_scanner::with_feature(&self.entries, "instrument"),
             &merlin_scanner::default_sound_dirs(),
         );
@@ -1519,7 +1525,10 @@ impl Session {
             },
         );
         // Plugins in our own process (`MERLIN_NO_SANDBOX`) are made on this thread.
-        if crate::sandbox::disabled() && !merlin_hosting::soundfont::is_source(&path) {
+        if crate::sandbox::disabled()
+            && !merlin_hosting::soundfont::is_source(&path)
+            && !merlin_hosting::sfz::is_source(&path, &plugin_id)
+        {
             let t = Instant::now();
             let result = self.create_in_process(id, &path, &plugin_id, windows, state.as_deref());
             self.finish_load(loader::Done {
@@ -2033,7 +2042,7 @@ impl Session {
         }
     }
 
-    /// Does this slot hold a sampler with a preset list (a SoundFont) instead of an editor?
+    /// Does this slot hold a sampler with a preset list (a SoundFont, SFZ) instead of an editor?
     pub fn is_sampler(&self, i: usize) -> bool {
         self.plugins[i]
             .as_ref()

@@ -619,7 +619,7 @@ fn click_output(
     }
 }
 
-/// Where SoundFonts are looked for, with how many each folder holds.
+/// Where SoundFonts and SFZ instruments are looked for, with how many each folder holds.
 fn sound_folders(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut Vec<Action>) {
     use merlin_model::Format;
     let count = |dir: &std::path::Path| {
@@ -627,13 +627,16 @@ fn sound_folders(ui: &mut egui::Ui, s: &Session, st: &mut UiState, actions: &mut
         s.entries
             .iter()
             .filter(|e| {
-                e.path.starts_with(dir) && e.plugins.iter().any(|p| p.format == Format::SoundFont)
+                e.path.starts_with(dir)
+                    && e.plugins
+                        .iter()
+                        .any(|p| matches!(p.format, Format::SoundFont | Format::Sfz))
             })
             .count()
     };
-    ui.strong("Sound folders (SoundFonts)");
+    ui.strong("Sound folders (SoundFonts, SFZ)");
     ui.label(
-        RichText::new("Every .sf2 and .sf3 in these folders appears in the browser as an instrument. A folder with several SoundFonts directly inside it (other than the standard folders below) shows up as one instrument named like the folder, with all its sounds in one list. You can also drop a SoundFont file on the window.")
+        RichText::new("Every .sf2, .sf3 and .sfz in these folders (and their subfolders) appears in the browser as an instrument. A folder with several SoundFonts, or several .sfz files, directly inside it (other than the standard folders below) shows up as one instrument named like the folder, with all its sounds in one list. To add an SFZ library, unpack it anywhere and add its folder here. You can also drop a SoundFont or .sfz file on the window.")
             .small()
             .weak(),
     );

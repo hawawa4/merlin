@@ -68,7 +68,7 @@ pub fn show(
         .collect();
     if params.is_empty() {
         ui.label(if q.is_empty() {
-            "This plugin lists no parameters (a SoundFont's sound shaping is under Macros)."
+            "This plugin lists no parameters (a SoundFont's or SFZ's sound shaping is under Macros)."
         } else {
             "nothing matches"
         });

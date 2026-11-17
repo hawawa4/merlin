@@ -5,6 +5,11 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 assets := "test-assets"
 surge_clap := assets / "dl/surge-linux/Surge XT.clap"
 sf3 := assets / "MuseScore_General.sf3"
+# An SFZ instrument (a 1977 Rhodes Mark I, 18 MB): free to play; its samples are CC BY-NC-SA, so
+# it is downloaded from its authors, not shipped. Three .sfz files in one folder: one instrument
+# with three sounds in the browser.
+rhodes_sfz := assets / "sfz/jRhodes3c"
+rhodes_rev := "ba6000f633d0a1d405049d877851ff7cc43f108b"
 
 # List recipes
 default:
@@ -19,7 +24,8 @@ dev *args:
     PATH="{{yabridge_dir}}:$PATH" WINELOADER={{patched_wine}} \
         WINEPREFIX="{{justfile_directory()}}/{{assets}}/wine/prefix-vblank" \
         target/release/merlin \
-        --plugin-dir {{assets}}/dl/surge-linux --plugin-dir {{assets}}/sf {{args}}
+        --plugin-dir {{assets}}/dl/surge-linux --plugin-dir {{assets}}/sf \
+        --plugin-dir {{assets}}/sfz {{args}}
 
 # Plays a short song with two stems and markers over and over (default 100 passes, about 8 minutes): every pass
 # must end stopped by its marker with no underruns or xruns. Needs PipeWire running.
@@ -77,12 +83,18 @@ soak secs="180" seed="1" *args:
         --plugin-dir {{assets}}/dl/surge-linux --plugin-dir {{assets}}/bridges-vblank/clap \
         2>&1 | grep -E "state:|error|crash|quarantin|panick" || true
 
-# Download test plugins and SoundFonts into test-assets/ (skips what's already there)
+# Download test plugins, SoundFonts and an SFZ instrument into test-assets/ (skips what's already there)
 setup:
     mkdir -p {{assets}}/dl/surge-linux
     [ -f "{{sf3}}" ] || curl -fL -o "{{sf3}}" \
         https://ftp.osuosl.org/pub/musescore/soundfont/MuseScore_General/MuseScore_General.sf3
     mkdir -p {{assets}}/sf && ln -sf ../MuseScore_General.sf3 {{assets}}/sf/MuseScore_General.sf3
+    [ -d "{{rhodes_sfz}}" ] || { \
+        mkdir -p {{assets}}/dl/rhodes "{{rhodes_sfz}}"; \
+        curl -fL -o {{assets}}/dl/rhodes.tar.gz \
+            https://github.com/sfzinstruments/jlearman.jRhodes3c/archive/{{rhodes_rev}}.tar.gz; \
+        tar -xzf {{assets}}/dl/rhodes.tar.gz -C {{assets}}/dl/rhodes --strip-components=1; \
+        cp -r {{assets}}/dl/rhodes/jRhodes3c-looped-flac-sfz/. {{assets}}/dl/rhodes/LICENSE "{{rhodes_sfz}}/"; }
     [ -d "{{surge_clap}}" ] || [ -f "{{surge_clap}}" ] || { \
         curl -fL -o {{assets}}/dl/surge-linux.tar.gz \
             https://github.com/surge-synthesizer/releases-xt/releases/download/1.3.4/surge-xt-linux-1.3.4-pluginsonly.tar.gz; \

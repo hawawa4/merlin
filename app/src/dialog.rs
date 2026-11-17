@@ -51,7 +51,7 @@ impl Want {
     fn title(self) -> &'static str {
         match self {
             Self::PluginDir => "Choose a folder with plugins (any kind)",
-            Self::SoundDir => "Choose a folder with SoundFonts",
+            Self::SoundDir => "Choose a folder with SoundFonts or SFZ instruments",
             Self::CaptureDir => "Choose where recordings and MIDI captures are saved",
             Self::WineProgram => "Choose the wine program",
             Self::YabridgeDir => "Choose the yabridge folder",

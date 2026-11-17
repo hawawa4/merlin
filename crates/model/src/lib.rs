@@ -57,7 +57,7 @@ mod base64_opt {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Format {
     Clap,
@@ -69,6 +69,8 @@ pub enum Format {
     /// An instrument or effect that ships inside the app.
     Builtin,
     SoundFont,
+    /// An SFZ instrument (a `.sfz` file and its samples), played by sfizz.
+    Sfz,
 }
 
 /// Enough to find a plugin again after a rescan.

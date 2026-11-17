@@ -34,6 +34,7 @@ merlin-updater = { path = "crates/updater" }
 merlin-control = { path = "crates/control" }
 merlin-backing = { path = "crates/backing" }
 merlin-recorder = { path = "crates/recorder" }
+merlin-sfizz = { path = "crates/sfizz" }
 
 # Device support: independent of the app (see devices/README.md).
 surface-api = { path = "devices/surface-api" }

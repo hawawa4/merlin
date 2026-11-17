@@ -6,3 +6,6 @@
 /runtime/
 /dist/
 __pycache__/
+# sfizz source, downloaded by crates/sfizz/build.rs on the first build.
+/vendor/sfizz-*/
+/vendor/.sfizz-*/

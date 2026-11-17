@@ -1,6 +1,7 @@
 //! Creating plugins off the main thread, so the window keeps drawing (and the rest of the rig
 //! keeps answering) while a heavy plugin starts: a cold Wine start, a big sample library, an
-//! SF3 to decode. A worker spawns the plugin's host process (or decodes the SoundFont), restores
+//! SF3 to decode. A worker spawns the plugin's host process (or decodes the SoundFont, or loads
+//! the SFZ instrument's samples), restores
 //! its saved state and activates it; the main thread only installs the finished plugin. Several
 //! plugins load side by side, a few at a time.
 //!
@@ -182,6 +183,7 @@ pub(super) fn close(mut plugin: Box<dyn PluginHandle>) -> Option<JoinHandle<()>>
 /// Creates, restores and activates one plugin (worker thread).
 #[allow(clippy::type_complexity)]
 fn create(job: Job) -> Result<(Box<dyn PluginHandle + Send>, Box<dyn PluginProcessor>)> {
+    use merlin_hosting::sfz::{self, SfzPlugin};
     use merlin_hosting::soundfont::{Font, SoundFontPlugin, files_of, is_source};
     let cancelled = job.cancelled.clone();
     let check = || match cancelled.load(Ordering::Relaxed) {
@@ -189,7 +191,10 @@ fn create(job: Job) -> Result<(Box<dyn PluginHandle + Send>, Box<dyn PluginProce
         false => Ok(()),
     };
     check()?;
-    let mut plugin: Box<dyn PluginHandle + Send> = if is_source(&job.path) {
+    let mut plugin: Box<dyn PluginHandle + Send> = if sfz::is_source(&job.path, &job.plugin_id) {
+        // Played in our own process like a SoundFont; activating it below reads the samples.
+        Box::new(SfzPlugin::open(&job.path)?)
+    } else if is_source(&job.path) {
         // A folder's fonts decode side by side; the plugin then finds them decoded. They stay
         // alive until the plugin holds its own copies.
         let files = files_of(&job.path);

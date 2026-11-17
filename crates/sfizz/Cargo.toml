@@ -1,0 +1,15 @@
+[package]
+name = "merlin-sfizz"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "sfizz (the SFZ sampler, BSD-2-Clause), downloaded and built at build time, with a small safe wrapper"
+build = "build.rs"
+links = "sfizz"
+
+[dependencies]
+
+[build-dependencies]
+cc = { version = "1.2", features = ["parallel"] }
+sha2 = "0.11"

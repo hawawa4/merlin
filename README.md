@@ -6,7 +6,8 @@
 A live instrument host for Linux. You load up to eight instruments into a rack, give each a few
 simple effects, and switch between them from a MIDI keyboard or controller while you play.
 
-It plays CLAP, VST3, VST2 and LV2 plugins, SoundFonts (`.sf2`, `.sf3`) and, through a Wine and
+It plays CLAP, VST3, VST2 and LV2 plugins, SoundFonts (`.sf2`, `.sf3`), SFZ instruments (`.sfz`,
+through a built-in copy of [sfizz](https://sfz.tools/sfizz/)) and, through a Wine and
 yabridge runtime it downloads on request, 64-bit Windows plugins. The aim is that a Windows
 plugin works in the rack without you setting up Wine or yabridge yourself.
 
@@ -48,10 +49,18 @@ never update.
 
 On first start Merlin scans for plugins in the standard places: `~/.clap`, `~/.vst3`, `~/.vst`,
 `~/.lxvst`, `~/.lv2` (plus `$LV2_PATH`) and the matching folders under `/usr/lib`,
-`/usr/lib64` and `/usr/local/lib`. SoundFonts are looked for in `~/.local/share/sounds/sf2`,
-`~/.local/share/soundfonts`, `/usr/share/sounds/sf2` and `/usr/share/soundfonts`. Add other
+`/usr/lib64` and `/usr/local/lib`. SoundFonts and SFZ instruments are looked for in
+`~/.local/share/sounds/sf2`, `~/.local/share/soundfonts`, `~/.local/share/sounds/sfz`,
+`/usr/share/sounds/sf2`, `/usr/share/soundfonts` and `/usr/share/sounds/sfz`. Add other
 folders in Settings. The scan runs in a separate process and caches its result, so a plugin
 that crashes the scanner is set aside instead of taking the app down.
+
+**SFZ instruments.** Unpack an SFZ library into one of those folders (or add its folder in
+Settings) and it shows up in the browser. A folder with several `.sfz` files directly inside it
+is one instrument, and each file is one of its sounds in the slot's list (a MIDI program change
+picks one too). Free ones to try: [sfzinstruments](https://sfzinstruments.github.io/) (the
+Salamander Grand Piano, Karoryfer's libraries, and `just setup`'s Rhodes). You can also drop a
+`.sfz` file on the window.
 
 **Windows plugins.** Settings > Windows plugins downloads the Wine + yabridge runtime (about
 70 MB) and can run a plugin installer inside Merlin's own Wine prefix. Plugins that show up are
@@ -118,11 +127,11 @@ then `merlin-bridge sync`. See `merlin-bridge --help` and [docs/wine.md](docs/wi
 
 You need a recent stable Rust toolchain (edition 2024; developed on 1.99),
 [`just`](https://github.com/casey/just), and the libxcb development headers (`libxcb1-dev` on
-Debian and Ubuntu). JACK headers are not needed: libjack is loaded at runtime, and
+Debian and Ubuntu), plus a C++17 compiler (`g++`), `curl` and `tar`: the first build downloads sfizz's source (about 19 MB) and builds it. JACK headers are not needed: libjack is loaded at runtime, and
 `build-support/pkgconfig/jack.pc` stubs it for the build.
 
 ```
-just setup     # optional: downloads Surge XT and a SoundFont into test-assets/
+just setup     # optional: downloads Surge XT, a SoundFont and an SFZ Rhodes into test-assets/
 just dev       # builds a release binary and runs it against test-assets/
 just check     # fmt, clippy (warnings are errors) and tests; run before committing
 just           # lists everything else
@@ -164,7 +173,8 @@ hand with `just package-runtime` (see [docs/wine.md](docs/wine.md)).
   (runs one plugin in its own process). The app looks for both next to its own binary.
 - [crates/](crates/): the product, one crate per concern.
   - `model`: rig, slots, scenes, mappings and their file formats
-  - `hosting`: the plugin API, the CLAP, VST3, VST2 and LV2 hosts, SoundFont and built-in instruments
+  - `hosting`: the plugin API, the CLAP, VST3, VST2 and LV2 hosts, SoundFont, SFZ and built-in instruments
+  - `sfizz`: the SFZ sampler sfizz, downloaded on the first build (pinned release, checked by SHA-256) and built with the `cc` crate, and a safe wrapper
   - `dsp`: the built-in effects
   - `engine`: router, note ownership, slot mixer, looper, transport and the realtime queues
   - `audio-io`: JACK and offline backends
@@ -179,7 +189,7 @@ hand with `just package-runtime` (see [docs/wine.md](docs/wine.md)).
   - `updater`: the in-app updater
 - [devices/](devices/): controller drivers that know nothing about the app
   ([devices/README.md](devices/README.md) explains how to write one).
-- [vendor/](vendor/): yabridge and oxisynth with our patches. Each has a `PATCHES.md` that
+- [vendor/](vendor/): yabridge and oxisynth with our patches (sfizz is downloaded into `vendor/sfizz-VERSION/` by the build, not kept here). Each has a `PATCHES.md` that
   says what we changed and what could go upstream.
 - [build-support/](build-support/) and [tools/](tools/): the Wine patches and Dockerfiles, and
   the scripts behind the `just` recipes.

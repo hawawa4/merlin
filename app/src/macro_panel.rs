@@ -164,7 +164,11 @@ fn picker(
             .max_height(320.0)
             .show(ui, |ui| {
                 if s.is_sampler(slot) {
-                    for field in SamplerField::ALL {
+                    // Only what this sampler has (an SFZ slot: the level).
+                    for field in SamplerField::ALL
+                        .into_iter()
+                        .filter(|&f| s.sampler_field(slot, f).is_some())
+                    {
                         if q.is_empty() || field.name().to_lowercase().contains(&q) {
                             if ui
                                 .button(format!("{}  (sound shaping)", field.name()))

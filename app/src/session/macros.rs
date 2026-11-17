@@ -28,10 +28,11 @@ impl Session {
             .is_some_and(|m| !m.targets.is_empty())
     }
 
-    /// The default knob `k` stands for on this slot: none for a SoundFont-only control on a plugin.
+    /// The default knob `k` stands for on this slot: none for a SoundFont-only control on a
+    /// plugin (or on an SFZ instrument, which has no brightness control).
     pub fn default_knob(&self, slot: usize, k: usize) -> Option<DefaultKnob> {
         let knob = DefaultKnob::for_index(k)?;
-        (knob != DefaultKnob::Brightness || self.is_sampler(slot)).then_some(knob)
+        (knob != DefaultKnob::Brightness || self.sampler_tone(slot).is_some()).then_some(knob)
     }
 
     /// Where controller knob `k` of `slot` sits: its macro, or the default control's position.

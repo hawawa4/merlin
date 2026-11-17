@@ -11,6 +11,7 @@ pub mod lv2;
 mod midi;
 mod open;
 mod plugin;
+pub mod sfz;
 pub mod slice;
 pub mod soundfont;
 pub mod vst2;

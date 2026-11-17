@@ -962,7 +962,7 @@ impl Running {
                             s.install_windows_plugin(path)
                         }
                     }
-                    Some("sf2" | "sf3") => s.load_soundfont_file(&path),
+                    Some("sf2" | "sf3" | "sfz") => s.load_sound_file(&path),
                     Some("mid" | "midi" | "rmi" | "kar") => s.load_midi_file(&path),
                     _ if crate::paths::is_rig_file(&path) => s.open_rig(&path),
                     _ => Err(anyhow!(
