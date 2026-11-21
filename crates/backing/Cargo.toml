@@ -10,4 +10,4 @@ description = "Backing tracks: files decoded and streamed from disk, ready for t
 anyhow.workspace = true
 rtrb.workspace = true
 symphonia = { version = "0.5", default-features = false, features = ["wav", "flac", "mp3", "ogg", "vorbis", "pcm", "aac", "isomp4", "alac", "mkv", "adpcm"] }
-rubato = "0.16"
+rubato = "5.0"
