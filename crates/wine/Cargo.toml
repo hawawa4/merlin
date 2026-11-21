@@ -9,6 +9,6 @@ publish.workspace = true
 anyhow.workspace = true
 sha2 = "0.11"
 tar = "0.4"
-ruzstd = "0.8"
+ruzstd = "0.9"
 serde.workspace = true
 serde_json.workspace = true
